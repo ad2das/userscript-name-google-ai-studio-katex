@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.32-direction-switch-fling
+// @version      1.0.33-restore-math-x-pan
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -140,7 +140,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.75em 0!important;',
@@ -189,7 +189,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'scroll-behavior:auto!important;',
@@ -220,7 +220,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:auto!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'margin:0.55em 0!important;',
     'padding:0.12em 0 0.38em 0!important;',
@@ -233,7 +233,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:auto!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.55em 0!important;',
