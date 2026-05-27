@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.24-mobile-scroll-momentum
+// @version      1.0.25-mobile-scroll-momentum
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -863,11 +863,11 @@
       var lastTime;
       var startTime;
 
-      if (!scroller || Math.abs(velocity) < 0.18) return;
+      if (!scroller || Math.abs(velocity) < 0.08) return;
 
       cancelMomentum();
 
-      velocity = Math.max(-3.2, Math.min(3.2, velocity));
+      velocity = Math.max(-5.5, Math.min(5.5, velocity * 1.85));
       lastTime = Date.now();
       startTime = lastTime;
 
@@ -879,15 +879,15 @@
 
         scroller.scrollTop = next;
 
-        if (next === before || now - startTime > 1300) {
+        if (next === before || now - startTime > 1800) {
           momentumFrame = 0;
           return;
         }
 
-        velocity *= Math.pow(0.94, elapsed / 16);
+        velocity *= Math.pow(0.965, elapsed / 16);
         lastTime = now;
 
-        if (Math.abs(velocity) < 0.04) {
+        if (Math.abs(velocity) < 0.025) {
           momentumFrame = 0;
           return;
         }
