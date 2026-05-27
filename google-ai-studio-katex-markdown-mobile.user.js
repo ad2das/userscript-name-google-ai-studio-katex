@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.33-restore-math-x-pan
+// @version      1.0.34-vertical-priority-math-pan
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -1038,9 +1038,10 @@
 
       if (Math.max(absX, absY) < 6 && Math.max(absStepX, absStepY) < 4) return;
 
-      if (absStepY >= absStepX * 1.05 && absStepY >= 3) {
+      if ((absStepY >= absStepX * 0.65 && absStepY >= 2) ||
+          (absY >= absX * 0.55 && absY >= 8)) {
         active.mode = 'vertical';
-      } else if (!active.mode && absX > absY * 1.2 && absX >= 8) {
+      } else if (!active.mode && absStepX > absStepY * 1.45 && absX > absY * 1.45 && absX >= 10) {
         active.mode = 'horizontal';
       } else if (!active.mode && absY >= 8) {
         active.mode = 'vertical';
