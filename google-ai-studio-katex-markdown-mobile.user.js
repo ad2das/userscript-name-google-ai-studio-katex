@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.37-horizontal-only-island-pan
-// @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
+// @version      1.0.38-deterministic-vertical-fling
+// @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, deterministic vertical fling, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -16,7 +16,7 @@
   var STYLE_ID = 'aistudio-mobile-katex-md-fix-style';
   var KATEX_CSS_ID = 'aistudio-mobile-katex-css';
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
-  var ENABLE_TOUCH_SCROLL_RESCUE = false;
+  var ENABLE_TOUCH_SCROLL_RESCUE = true;
   var ENABLE_HORIZONTAL_SCROLL_PAN = true;
   var SCROLL_ISLAND_SELECTOR = [
     '.aistudio-table-scroll',
@@ -1024,7 +1024,7 @@
 
       cancelMomentum();
 
-      velocity = Math.max(-3.2, Math.min(3.2, velocity * 1.15));
+      velocity = Math.max(-9, Math.min(9, velocity * 1.9));
       lastTime = Date.now();
       startTime = lastTime;
 
@@ -1036,15 +1036,15 @@
 
         setScrollTop(scroller, next);
 
-        if (next === before || now - startTime > 900) {
+        if (next === before || now - startTime > 1200) {
           momentumFrame = 0;
           return;
         }
 
-        velocity *= Math.pow(0.93, elapsed / 16);
+        velocity *= Math.pow(0.91, elapsed / 16);
         lastTime = now;
 
-        if (Math.abs(velocity) < 0.045) {
+        if (Math.abs(velocity) < 0.06) {
           momentumFrame = 0;
           return;
         }
@@ -1083,12 +1083,7 @@
         return;
       }
 
-      target = elementClosest(event.target, TOUCH_RESCUE_SELECTOR);
-      if (!target) {
-        reset();
-        return;
-      }
-
+      target = getElementFromNode(event.target);
       island = elementClosest(event.target, SCROLL_ISLAND_SELECTOR);
       scroller = findVerticalScroller(target.parentElement || target, 0);
       touch = event.touches[0];
