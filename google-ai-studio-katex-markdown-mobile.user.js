@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.28-native-scroll-css
+// @version      1.0.30-katex-scroll-lock-fix
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -219,7 +219,7 @@
     'box-sizing:border-box!important;',
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
-    '-webkit-overflow-scrolling:touch!important;',
+    '-webkit-overflow-scrolling:auto!important;',
     'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'margin:0.55em 0!important;',
@@ -232,7 +232,7 @@
     'max-width:100%!important;',
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
-    '-webkit-overflow-scrolling:touch!important;',
+    '-webkit-overflow-scrolling:auto!important;',
     'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
