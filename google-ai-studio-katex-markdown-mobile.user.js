@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.38-deterministic-vertical-fling
-// @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, deterministic vertical fling, split Markdown bold, wrapping, and Samsung/Google-like font fix.
+// @version      1.0.41-island-vertical-rescue
+// @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, native page scroll with island-only vertical rescue and inertial horizontal math/table pan, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -926,9 +926,59 @@
 
   function installHorizontalScrollPan() {
     var active = null;
+    var momentumFrame = 0;
+
+    function cancelMomentum() {
+      if (momentumFrame) {
+        window.cancelAnimationFrame(momentumFrame);
+        momentumFrame = 0;
+      }
+    }
+
+    function runHorizontalMomentum(island, velocity) {
+      var lastTime;
+
+      if (!island || Math.abs(velocity) < 0.08) return;
+
+      cancelMomentum();
+      velocity = Math.max(-4.8, Math.min(4.8, velocity * 1.25));
+      lastTime = Date.now();
+
+      function step() {
+        var now = Date.now();
+        var elapsed = Math.max(1, now - lastTime);
+        var before = island.scrollLeft || 0;
+        var next = clampScrollLeft(island, before + velocity * elapsed);
+
+        island.scrollLeft = next;
+
+        if (next === before) {
+          momentumFrame = 0;
+          return;
+        }
+
+        velocity *= Math.pow(0.93, elapsed / 16);
+        lastTime = now;
+
+        if (Math.abs(velocity) < 0.04) {
+          momentumFrame = 0;
+          return;
+        }
+
+        momentumFrame = window.requestAnimationFrame(step);
+      }
+
+      momentumFrame = window.requestAnimationFrame(step);
+    }
 
     function reset() {
+      var finished = active;
+
       active = null;
+
+      if (finished && finished.mode === 'horizontal') {
+        runHorizontalMomentum(finished.island, finished.velocity || 0);
+      }
     }
 
     document.addEventListener('touchstart', function (event) {
@@ -939,6 +989,8 @@
         reset();
         return;
       }
+
+      cancelMomentum();
 
       if (elementClosest(event.target, 'textarea,input,select,button,[contenteditable="true"],[role="textbox"]')) {
         reset();
@@ -957,7 +1009,10 @@
         startX: touch.clientX,
         startY: touch.clientY,
         lastX: touch.clientX,
+        lastY: touch.clientY,
+        lastMoveTime: Date.now(),
         scrollLeft: island.scrollLeft || 0,
+        velocity: 0,
         mode: ''
       };
     }, { capture: true, passive: true });
@@ -968,6 +1023,11 @@
       var dy;
       var absX;
       var absY;
+      var stepX;
+      var stepY;
+      var deltaX;
+      var now;
+      var elapsed;
       var clearHorizontal;
       var clearVertical;
 
@@ -976,13 +1036,15 @@
       touch = event.touches[0];
       dx = touch.clientX - active.startX;
       dy = touch.clientY - active.startY;
+      stepX = touch.clientX - active.lastX;
+      stepY = touch.clientY - active.lastY;
       absX = Math.abs(dx);
       absY = Math.abs(dy);
 
       if (!active.mode && Math.max(absX, absY) < 8) return;
 
-      clearHorizontal = absX >= 24 && absX > absY * 2.6 && absY < 14;
-      clearVertical = absY >= 8 && absY >= absX * 0.7;
+      clearHorizontal = absX >= 16 && absX > absY * 1.45 && Math.abs(stepX) > Math.abs(stepY) * 1.15;
+      clearVertical = absY >= 8 && absY >= absX * 0.75;
 
       if (!active.mode && clearVertical) {
         active.mode = 'vertical';
@@ -995,8 +1057,14 @@
 
       if (active.mode !== 'horizontal') return;
 
-      active.island.scrollLeft = clampScrollLeft(active.island, active.scrollLeft - dx);
+      deltaX = active.lastX - touch.clientX;
+      now = Date.now();
+      elapsed = Math.max(1, now - active.lastMoveTime);
+      active.island.scrollLeft = clampScrollLeft(active.island, (active.island.scrollLeft || 0) + deltaX);
       active.lastX = touch.clientX;
+      active.lastY = touch.clientY;
+      active.lastMoveTime = now;
+      active.velocity = deltaX / elapsed;
       event.preventDefault();
       event.stopPropagation();
     }, { capture: true, passive: false });
@@ -1024,7 +1092,7 @@
 
       cancelMomentum();
 
-      velocity = Math.max(-9, Math.min(9, velocity * 1.9));
+      velocity = Math.max(-11, Math.min(11, velocity * 2.2));
       lastTime = Date.now();
       startTime = lastTime;
 
@@ -1036,12 +1104,12 @@
 
         setScrollTop(scroller, next);
 
-        if (next === before || now - startTime > 1200) {
+        if (next === before || now - startTime > 1500) {
           momentumFrame = 0;
           return;
         }
 
-        velocity *= Math.pow(0.91, elapsed / 16);
+        velocity *= Math.pow(0.94, elapsed / 16);
         lastTime = now;
 
         if (Math.abs(velocity) < 0.06) {
@@ -1085,6 +1153,10 @@
 
       target = getElementFromNode(event.target);
       island = elementClosest(event.target, SCROLL_ISLAND_SELECTOR);
+      if (!island) {
+        reset();
+        return;
+      }
       scroller = findVerticalScroller(target.parentElement || target, 0);
       touch = event.touches[0];
 
