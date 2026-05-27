@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.36-native-vertical-scroll
+// @version      1.0.37-horizontal-only-island-pan
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -17,6 +17,7 @@
   var KATEX_CSS_ID = 'aistudio-mobile-katex-css';
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
   var ENABLE_TOUCH_SCROLL_RESCUE = false;
+  var ENABLE_HORIZONTAL_SCROLL_PAN = true;
   var SCROLL_ISLAND_SELECTOR = [
     '.aistudio-table-scroll',
     'ms-katex.display',
@@ -140,7 +141,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.75em 0!important;',
@@ -189,7 +190,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'scroll-behavior:auto!important;',
@@ -220,7 +221,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:auto!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'margin:0.55em 0!important;',
     'padding:0.12em 0 0.38em 0!important;',
@@ -233,7 +234,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:auto!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.55em 0!important;',
@@ -904,6 +905,106 @@
     return Math.max(0, Math.min(max, value));
   }
 
+  function getMaxScrollLeft(scroller) {
+    if (!scroller) return 0;
+    return Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  }
+
+  function canScrollHorizontally(scroller) {
+    return !!scroller && getMaxScrollLeft(scroller) > 1;
+  }
+
+  function clampScrollLeft(scroller, value) {
+    var max;
+
+    if (!scroller) return 0;
+
+    max = getMaxScrollLeft(scroller);
+
+    return Math.max(0, Math.min(max, value));
+  }
+
+  function installHorizontalScrollPan() {
+    var active = null;
+
+    function reset() {
+      active = null;
+    }
+
+    document.addEventListener('touchstart', function (event) {
+      var touch;
+      var island;
+
+      if (!event || !event.touches || event.touches.length !== 1) {
+        reset();
+        return;
+      }
+
+      if (elementClosest(event.target, 'textarea,input,select,button,[contenteditable="true"],[role="textbox"]')) {
+        reset();
+        return;
+      }
+
+      island = elementClosest(event.target, SCROLL_ISLAND_SELECTOR);
+      if (!island || !canScrollHorizontally(island)) {
+        reset();
+        return;
+      }
+
+      touch = event.touches[0];
+      active = {
+        island: island,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        lastX: touch.clientX,
+        scrollLeft: island.scrollLeft || 0,
+        mode: ''
+      };
+    }, { capture: true, passive: true });
+
+    document.addEventListener('touchmove', function (event) {
+      var touch;
+      var dx;
+      var dy;
+      var absX;
+      var absY;
+      var clearHorizontal;
+      var clearVertical;
+
+      if (!active || !event || !event.touches || event.touches.length !== 1) return;
+
+      touch = event.touches[0];
+      dx = touch.clientX - active.startX;
+      dy = touch.clientY - active.startY;
+      absX = Math.abs(dx);
+      absY = Math.abs(dy);
+
+      if (!active.mode && Math.max(absX, absY) < 8) return;
+
+      clearHorizontal = absX >= 24 && absX > absY * 2.6 && absY < 14;
+      clearVertical = absY >= 8 && absY >= absX * 0.7;
+
+      if (!active.mode && clearVertical) {
+        active.mode = 'vertical';
+        return;
+      }
+
+      if (!active.mode && clearHorizontal) {
+        active.mode = 'horizontal';
+      }
+
+      if (active.mode !== 'horizontal') return;
+
+      active.island.scrollLeft = clampScrollLeft(active.island, active.scrollLeft - dx);
+      active.lastX = touch.clientX;
+      event.preventDefault();
+      event.stopPropagation();
+    }, { capture: true, passive: false });
+
+    document.addEventListener('touchend', reset, { capture: true, passive: true });
+    document.addEventListener('touchcancel', reset, { capture: true, passive: true });
+  }
+
   function installVerticalScrollRescue() {
     var active = null;
     var momentumFrame = 0;
@@ -1142,6 +1243,9 @@
 
   function boot() {
     injectStyles();
+    if (ENABLE_HORIZONTAL_SCROLL_PAN) {
+      installHorizontalScrollPan();
+    }
     if (ENABLE_TOUCH_SCROLL_RESCUE) {
       installVerticalScrollRescue();
     }
