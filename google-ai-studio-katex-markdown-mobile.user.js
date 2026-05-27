@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.34-vertical-priority-math-pan
+// @version      1.0.36-native-vertical-scroll
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -16,7 +16,7 @@
   var STYLE_ID = 'aistudio-mobile-katex-md-fix-style';
   var KATEX_CSS_ID = 'aistudio-mobile-katex-css';
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
-  var ENABLE_TOUCH_SCROLL_RESCUE = true;
+  var ENABLE_TOUCH_SCROLL_RESCUE = false;
   var SCROLL_ISLAND_SELECTOR = [
     '.aistudio-table-scroll',
     'ms-katex.display',
@@ -1017,6 +1017,7 @@
       var absY;
       var absStepX;
       var absStepY;
+      var clearHorizontal;
       var deltaY;
       var scroller;
       var before;
@@ -1038,11 +1039,15 @@
 
       if (Math.max(absX, absY) < 6 && Math.max(absStepX, absStepY) < 4) return;
 
-      if ((absStepY >= absStepX * 0.65 && absStepY >= 2) ||
-          (absY >= absX * 0.55 && absY >= 8)) {
-        active.mode = 'vertical';
-      } else if (!active.mode && absStepX > absStepY * 1.45 && absX > absY * 1.45 && absX >= 10) {
+      clearHorizontal = absStepX > absStepY * 2.2 &&
+        absX > absY * 2.2 &&
+        absX >= 18 &&
+        absY < 12;
+
+      if (!active.mode && clearHorizontal) {
         active.mode = 'horizontal';
+      } else if (!clearHorizontal && (absStepY >= 1 || absY >= 6)) {
+        active.mode = 'vertical';
       } else if (!active.mode && absY >= 8) {
         active.mode = 'vertical';
       }
