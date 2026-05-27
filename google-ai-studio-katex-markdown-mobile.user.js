@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.25-mobile-scroll-momentum
+// @version      1.0.26-mobile-scroll-rescue-wide
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -39,6 +39,11 @@
     'message-content',
     '.markdown',
     '.markdown-body'
+  ].join(',');
+
+  var TOUCH_RESCUE_SELECTOR = [
+    SCROLL_ISLAND_SELECTOR,
+    RESPONSE_SELECTOR
   ].join(',');
 
   var SKIP_SELECTOR = [
@@ -823,19 +828,72 @@
     return /auto|scroll|overlay/i.test(style.overflowY || style.overflow || '');
   }
 
-  function findVerticalScroller(start) {
+  function getScrollTop(scroller) {
+    if (!scroller) return 0;
+    if (scroller === document.scrollingElement || scroller === document.documentElement || scroller === document.body) {
+      return window.pageYOffset ||
+        (document.scrollingElement && document.scrollingElement.scrollTop) ||
+        document.documentElement.scrollTop ||
+        document.body.scrollTop ||
+        0;
+    }
+
+    return scroller.scrollTop || 0;
+  }
+
+  function setScrollTop(scroller, value) {
+    if (!scroller) return;
+    if (scroller === document.scrollingElement || scroller === document.documentElement || scroller === document.body) {
+      window.scrollTo(window.pageXOffset || 0, value);
+      if (document.scrollingElement) document.scrollingElement.scrollTop = value;
+      document.documentElement.scrollTop = value;
+      document.body.scrollTop = value;
+      return;
+    }
+
+    scroller.scrollTop = value;
+  }
+
+  function getMaxScrollTop(scroller) {
+    if (!scroller) return 0;
+    if (scroller === document.scrollingElement || scroller === document.documentElement || scroller === document.body) {
+      return Math.max(
+        0,
+        (document.scrollingElement || document.documentElement).scrollHeight - window.innerHeight
+      );
+    }
+
+    return Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  }
+
+  function canScrollInDirection(scroller, deltaY) {
+    var top;
+    var max;
+
+    if (!scroller) return false;
+    if (!deltaY) return canScrollVertically(scroller);
+
+    top = getScrollTop(scroller);
+    max = getMaxScrollTop(scroller);
+
+    return deltaY > 0 ? top < max - 1 : top > 1;
+  }
+
+  function findVerticalScroller(start, deltaY) {
     var el = start;
     var scrollingElement = document.scrollingElement || document.documentElement;
 
     while (el && el !== document.body && el !== document.documentElement) {
-      if (!elementMatches(el, SCROLL_ISLAND_SELECTOR) && canScrollVertically(el)) {
+      if (!elementMatches(el, SCROLL_ISLAND_SELECTOR) &&
+          canScrollVertically(el) &&
+          canScrollInDirection(el, deltaY)) {
         return el;
       }
 
       el = el.parentElement;
     }
 
-    return scrollingElement;
+    return canScrollInDirection(scrollingElement, deltaY) ? scrollingElement : null;
   }
 
   function clampScrollTop(scroller, value) {
@@ -843,7 +901,7 @@
 
     if (!scroller) return 0;
 
-    max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    max = getMaxScrollTop(scroller);
 
     return Math.max(0, Math.min(max, value));
   }
@@ -874,10 +932,10 @@
       function step() {
         var now = Date.now();
         var elapsed = Math.max(1, now - lastTime);
-        var before = scroller.scrollTop || 0;
+        var before = getScrollTop(scroller);
         var next = clampScrollTop(scroller, before + velocity * elapsed);
 
-        scroller.scrollTop = next;
+        setScrollTop(scroller, next);
 
         if (next === before || now - startTime > 1800) {
           momentumFrame = 0;
@@ -910,6 +968,7 @@
 
     document.addEventListener('touchstart', function (event) {
       var touch;
+      var target;
       var island;
       var scroller;
 
@@ -920,16 +979,23 @@
 
       cancelMomentum();
 
-      island = elementClosest(event.target, SCROLL_ISLAND_SELECTOR);
-      if (!island) {
+      if (elementClosest(event.target, 'textarea,input,select,button,[contenteditable="true"],[role="textbox"]')) {
         reset();
         return;
       }
 
-      scroller = findVerticalScroller(island.parentElement || island);
+      target = elementClosest(event.target, TOUCH_RESCUE_SELECTOR);
+      if (!target) {
+        reset();
+        return;
+      }
+
+      island = elementClosest(event.target, SCROLL_ISLAND_SELECTOR);
+      scroller = findVerticalScroller(target.parentElement || target, 0);
       touch = event.touches[0];
 
       active = {
+        target: target,
         island: island,
         scroller: scroller,
         startX: touch.clientX,
@@ -938,7 +1004,7 @@
         lastMoveTime: Date.now(),
         velocity: 0,
         mode: '',
-        islandScrollLeft: island.scrollLeft || 0
+        islandScrollLeft: island ? (island.scrollLeft || 0) : 0
       };
     }, { capture: true, passive: true });
 
@@ -965,26 +1031,27 @@
 
       if (!active.mode) {
         if (Math.max(absX, absY) < 8) return;
-        active.mode = absY > absX * 1.15 ? 'vertical' : 'horizontal';
+        active.mode = absY >= absX * 0.75 ? 'vertical' : 'horizontal';
       }
 
       if (active.mode !== 'vertical') return;
 
-      scroller = active.scroller || findVerticalScroller(active.island);
-      if (!scroller) return;
-
       deltaY = active.lastY - touch.clientY;
-      before = scroller.scrollTop || 0;
+      scroller = findVerticalScroller(active.target || active.island, deltaY) || active.scroller;
+      if (!scroller || !canScrollInDirection(scroller, deltaY)) return;
+
+      before = getScrollTop(scroller);
       next = clampScrollTop(scroller, before + deltaY);
 
       if (next !== before) {
         now = Date.now();
         elapsed = Math.max(1, now - active.lastMoveTime);
-        scroller.scrollTop = next;
+        setScrollTop(scroller, next);
+        active.scroller = scroller;
         active.lastY = touch.clientY;
         active.lastMoveTime = now;
         active.velocity = (next - before) / elapsed;
-        active.island.scrollLeft = active.islandScrollLeft;
+        if (active.island) active.island.scrollLeft = active.islandScrollLeft;
         event.preventDefault();
         event.stopPropagation();
       }
