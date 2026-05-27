@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.26-mobile-scroll-rescue-wide
+// @version      1.0.28-native-scroll-css
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -16,6 +16,7 @@
   var STYLE_ID = 'aistudio-mobile-katex-md-fix-style';
   var KATEX_CSS_ID = 'aistudio-mobile-katex-css';
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
+  var ENABLE_TOUCH_SCROLL_RESCUE = false;
   var SCROLL_ISLAND_SELECTOR = [
     '.aistudio-table-scroll',
     'ms-katex.display',
@@ -42,8 +43,7 @@
   ].join(',');
 
   var TOUCH_RESCUE_SELECTOR = [
-    SCROLL_ISLAND_SELECTOR,
-    RESPONSE_SELECTOR
+    SCROLL_ISLAND_SELECTOR
   ].join(',');
 
   var SKIP_SELECTOR = [
@@ -117,6 +117,8 @@
     'min-width:0!important;',
     'box-sizing:border-box!important;',
     'overflow-x:hidden!important;',
+    'touch-action:pan-y pinch-zoom!important;',
+    'overscroll-behavior:auto!important;',
     'overflow-wrap:break-word!important;',
     'word-break:normal!important;',
     '}',
@@ -138,9 +140,8 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
-    'overscroll-behavior-x:contain!important;',
-    'overscroll-behavior-y:auto!important;',
+    'touch-action:pan-y pinch-zoom!important;',
+    'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.75em 0!important;',
     'padding-bottom:0.35em!important;',
@@ -188,9 +189,8 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
-    'overscroll-behavior-x:contain!important;',
-    'overscroll-behavior-y:auto!important;',
+    'touch-action:pan-y pinch-zoom!important;',
+    'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'scroll-behavior:auto!important;',
     '}',
@@ -220,9 +220,8 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
-    'overscroll-behavior-x:contain!important;',
-    'overscroll-behavior-y:auto!important;',
+    'touch-action:pan-y pinch-zoom!important;',
+    'overscroll-behavior:auto!important;',
     'margin:0.55em 0!important;',
     'padding:0.12em 0 0.38em 0!important;',
     'scroll-behavior:auto!important;',
@@ -234,9 +233,8 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-x pan-y pinch-zoom!important;',
-    'overscroll-behavior-x:contain!important;',
-    'overscroll-behavior-y:auto!important;',
+    'touch-action:pan-y pinch-zoom!important;',
+    'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.55em 0!important;',
     'padding-bottom:0.25em!important;',
@@ -1113,7 +1111,9 @@
 
   function boot() {
     injectStyles();
-    installVerticalScrollRescue();
+    if (ENABLE_TOUCH_SCROLL_RESCUE) {
+      installVerticalScrollRescue();
+    }
     startObserver();
     schedule(document.body || document.documentElement);
   }
