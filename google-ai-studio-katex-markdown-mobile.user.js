@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.30-katex-scroll-lock-fix
+// @version      1.0.32-direction-switch-fling
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -16,7 +16,7 @@
   var STYLE_ID = 'aistudio-mobile-katex-md-fix-style';
   var KATEX_CSS_ID = 'aistudio-mobile-katex-css';
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
-  var ENABLE_TOUCH_SCROLL_RESCUE = false;
+  var ENABLE_TOUCH_SCROLL_RESCUE = true;
   var SCROLL_ISLAND_SELECTOR = [
     '.aistudio-table-scroll',
     'ms-katex.display',
@@ -919,11 +919,11 @@
       var lastTime;
       var startTime;
 
-      if (!scroller || Math.abs(velocity) < 0.08) return;
+      if (!scroller || Math.abs(velocity) < 0.12) return;
 
       cancelMomentum();
 
-      velocity = Math.max(-5.5, Math.min(5.5, velocity * 1.85));
+      velocity = Math.max(-3.2, Math.min(3.2, velocity * 1.15));
       lastTime = Date.now();
       startTime = lastTime;
 
@@ -935,15 +935,15 @@
 
         setScrollTop(scroller, next);
 
-        if (next === before || now - startTime > 1800) {
+        if (next === before || now - startTime > 900) {
           momentumFrame = 0;
           return;
         }
 
-        velocity *= Math.pow(0.965, elapsed / 16);
+        velocity *= Math.pow(0.93, elapsed / 16);
         lastTime = now;
 
-        if (Math.abs(velocity) < 0.025) {
+        if (Math.abs(velocity) < 0.045) {
           momentumFrame = 0;
           return;
         }
@@ -998,6 +998,7 @@
         scroller: scroller,
         startX: touch.clientX,
         startY: touch.clientY,
+        lastX: touch.clientX,
         lastY: touch.clientY,
         lastMoveTime: Date.now(),
         velocity: 0,
@@ -1010,8 +1011,12 @@
       var touch;
       var dx;
       var dy;
+      var stepX;
+      var stepY;
       var absX;
       var absY;
+      var absStepX;
+      var absStepY;
       var deltaY;
       var scroller;
       var before;
@@ -1024,19 +1029,38 @@
       touch = event.touches[0];
       dx = touch.clientX - active.startX;
       dy = touch.clientY - active.startY;
+      stepX = touch.clientX - active.lastX;
+      stepY = touch.clientY - active.lastY;
       absX = Math.abs(dx);
       absY = Math.abs(dy);
+      absStepX = Math.abs(stepX);
+      absStepY = Math.abs(stepY);
 
-      if (!active.mode) {
-        if (Math.max(absX, absY) < 8) return;
-        active.mode = absY >= absX * 0.75 ? 'vertical' : 'horizontal';
+      if (Math.max(absX, absY) < 6 && Math.max(absStepX, absStepY) < 4) return;
+
+      if (absStepY >= absStepX * 1.05 && absStepY >= 3) {
+        active.mode = 'vertical';
+      } else if (!active.mode && absX > absY * 1.2 && absX >= 8) {
+        active.mode = 'horizontal';
+      } else if (!active.mode && absY >= 8) {
+        active.mode = 'vertical';
       }
 
-      if (active.mode !== 'vertical') return;
+      if (active.mode !== 'vertical') {
+        active.lastX = touch.clientX;
+        active.lastY = touch.clientY;
+        active.lastMoveTime = Date.now();
+        return;
+      }
 
       deltaY = active.lastY - touch.clientY;
       scroller = findVerticalScroller(active.target || active.island, deltaY) || active.scroller;
-      if (!scroller || !canScrollInDirection(scroller, deltaY)) return;
+      if (!scroller || !canScrollInDirection(scroller, deltaY)) {
+        active.lastX = touch.clientX;
+        active.lastY = touch.clientY;
+        active.lastMoveTime = Date.now();
+        return;
+      }
 
       before = getScrollTop(scroller);
       next = clampScrollTop(scroller, before + deltaY);
@@ -1046,6 +1070,7 @@
         elapsed = Math.max(1, now - active.lastMoveTime);
         setScrollTop(scroller, next);
         active.scroller = scroller;
+        active.lastX = touch.clientX;
         active.lastY = touch.clientY;
         active.lastMoveTime = now;
         active.velocity = (next - before) / elapsed;
