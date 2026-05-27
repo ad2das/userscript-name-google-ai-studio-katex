@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.22-mobile-native-scroll
+// @version      1.0.24-mobile-scroll-momentum
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, table-scroll, native vertical scroll, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -16,6 +16,12 @@
   var STYLE_ID = 'aistudio-mobile-katex-md-fix-style';
   var KATEX_CSS_ID = 'aistudio-mobile-katex-css';
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
+  var SCROLL_ISLAND_SELECTOR = [
+    '.aistudio-table-scroll',
+    'ms-katex.display',
+    '.katex-display',
+    'pre'
+  ].join(',');
 
   var LEGACY_STYLE_IDS = [
     'codex-aistudio-katex-display-fix',
@@ -127,7 +133,9 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:auto!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'overscroll-behavior-x:contain!important;',
+    'overscroll-behavior-y:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.75em 0!important;',
     'padding-bottom:0.35em!important;',
@@ -175,7 +183,9 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:auto!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'overscroll-behavior-x:contain!important;',
+    'overscroll-behavior-y:auto!important;',
     'box-sizing:border-box!important;',
     'scroll-behavior:auto!important;',
     '}',
@@ -205,7 +215,9 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:auto!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'overscroll-behavior-x:contain!important;',
+    'overscroll-behavior-y:auto!important;',
     'margin:0.55em 0!important;',
     'padding:0.12em 0 0.38em 0!important;',
     'scroll-behavior:auto!important;',
@@ -217,7 +229,9 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:auto!important;',
+    'touch-action:pan-x pan-y pinch-zoom!important;',
+    'overscroll-behavior-x:contain!important;',
+    'overscroll-behavior-y:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.55em 0!important;',
     'padding-bottom:0.25em!important;',
@@ -791,6 +805,195 @@
     window.setTimeout(flush, 25);
   }
 
+  function canScrollVertically(el) {
+    var style;
+
+    if (!el) return false;
+
+    if (el === document.scrollingElement || el === document.documentElement || el === document.body) {
+      return (document.scrollingElement || document.documentElement).scrollHeight >
+        window.innerHeight + 2;
+    }
+
+    if (el.scrollHeight <= el.clientHeight + 2) return false;
+
+    style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (!style) return true;
+
+    return /auto|scroll|overlay/i.test(style.overflowY || style.overflow || '');
+  }
+
+  function findVerticalScroller(start) {
+    var el = start;
+    var scrollingElement = document.scrollingElement || document.documentElement;
+
+    while (el && el !== document.body && el !== document.documentElement) {
+      if (!elementMatches(el, SCROLL_ISLAND_SELECTOR) && canScrollVertically(el)) {
+        return el;
+      }
+
+      el = el.parentElement;
+    }
+
+    return scrollingElement;
+  }
+
+  function clampScrollTop(scroller, value) {
+    var max;
+
+    if (!scroller) return 0;
+
+    max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+
+    return Math.max(0, Math.min(max, value));
+  }
+
+  function installVerticalScrollRescue() {
+    var active = null;
+    var momentumFrame = 0;
+
+    function cancelMomentum() {
+      if (momentumFrame) {
+        window.cancelAnimationFrame(momentumFrame);
+        momentumFrame = 0;
+      }
+    }
+
+    function runMomentum(scroller, velocity) {
+      var lastTime;
+      var startTime;
+
+      if (!scroller || Math.abs(velocity) < 0.18) return;
+
+      cancelMomentum();
+
+      velocity = Math.max(-3.2, Math.min(3.2, velocity));
+      lastTime = Date.now();
+      startTime = lastTime;
+
+      function step() {
+        var now = Date.now();
+        var elapsed = Math.max(1, now - lastTime);
+        var before = scroller.scrollTop || 0;
+        var next = clampScrollTop(scroller, before + velocity * elapsed);
+
+        scroller.scrollTop = next;
+
+        if (next === before || now - startTime > 1300) {
+          momentumFrame = 0;
+          return;
+        }
+
+        velocity *= Math.pow(0.94, elapsed / 16);
+        lastTime = now;
+
+        if (Math.abs(velocity) < 0.04) {
+          momentumFrame = 0;
+          return;
+        }
+
+        momentumFrame = window.requestAnimationFrame(step);
+      }
+
+      momentumFrame = window.requestAnimationFrame(step);
+    }
+
+    function reset() {
+      var finished = active;
+
+      active = null;
+
+      if (finished && finished.mode === 'vertical') {
+        runMomentum(finished.scroller, finished.velocity || 0);
+      }
+    }
+
+    document.addEventListener('touchstart', function (event) {
+      var touch;
+      var island;
+      var scroller;
+
+      if (!event.touches || event.touches.length !== 1) {
+        reset();
+        return;
+      }
+
+      cancelMomentum();
+
+      island = elementClosest(event.target, SCROLL_ISLAND_SELECTOR);
+      if (!island) {
+        reset();
+        return;
+      }
+
+      scroller = findVerticalScroller(island.parentElement || island);
+      touch = event.touches[0];
+
+      active = {
+        island: island,
+        scroller: scroller,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        lastY: touch.clientY,
+        lastMoveTime: Date.now(),
+        velocity: 0,
+        mode: '',
+        islandScrollLeft: island.scrollLeft || 0
+      };
+    }, { capture: true, passive: true });
+
+    document.addEventListener('touchmove', function (event) {
+      var touch;
+      var dx;
+      var dy;
+      var absX;
+      var absY;
+      var deltaY;
+      var scroller;
+      var before;
+      var next;
+      var now;
+      var elapsed;
+
+      if (!active || !event.touches || event.touches.length !== 1) return;
+
+      touch = event.touches[0];
+      dx = touch.clientX - active.startX;
+      dy = touch.clientY - active.startY;
+      absX = Math.abs(dx);
+      absY = Math.abs(dy);
+
+      if (!active.mode) {
+        if (Math.max(absX, absY) < 8) return;
+        active.mode = absY > absX * 1.15 ? 'vertical' : 'horizontal';
+      }
+
+      if (active.mode !== 'vertical') return;
+
+      scroller = active.scroller || findVerticalScroller(active.island);
+      if (!scroller) return;
+
+      deltaY = active.lastY - touch.clientY;
+      before = scroller.scrollTop || 0;
+      next = clampScrollTop(scroller, before + deltaY);
+
+      if (next !== before) {
+        now = Date.now();
+        elapsed = Math.max(1, now - active.lastMoveTime);
+        scroller.scrollTop = next;
+        active.lastY = touch.clientY;
+        active.lastMoveTime = now;
+        active.velocity = (next - before) / elapsed;
+        active.island.scrollLeft = active.islandScrollLeft;
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, { capture: true, passive: false });
+
+    document.addEventListener('touchend', reset, { capture: true, passive: true });
+    document.addEventListener('touchcancel', reset, { capture: true, passive: true });
+  }
+
   function startObserver() {
     var target = document.documentElement || document.body;
     var observer;
@@ -843,6 +1046,7 @@
 
   function boot() {
     injectStyles();
+    installVerticalScrollRescue();
     startObserver();
     schedule(document.body || document.documentElement);
   }
