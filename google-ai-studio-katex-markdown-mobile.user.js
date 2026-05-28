@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.45-exclusive-island-axis
+// @version      1.0.46-exclusive-island-axis
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, native page scroll with island-only vertical rescue and inertial horizontal math/table pan, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -119,7 +119,7 @@
     'min-width:0!important;',
     'box-sizing:border-box!important;',
     'overflow-x:hidden!important;',
-    'touch-action:none!important;',
+    'touch-action:pan-y pinch-zoom!important;',
     'overscroll-behavior:auto!important;',
     'overflow-wrap:break-word!important;',
     'word-break:normal!important;',
