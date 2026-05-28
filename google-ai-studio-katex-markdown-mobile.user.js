@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.43-island-momentum-cancel
+// @version      1.0.45-exclusive-island-axis
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, native page scroll with island-only vertical rescue and inertial horizontal math/table pan, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -18,6 +18,7 @@
   var KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
   var ENABLE_TOUCH_SCROLL_RESCUE = true;
   var ENABLE_HORIZONTAL_SCROLL_PAN = true;
+  var activeIslandAxis = '';
   var SCROLL_ISLAND_SELECTOR = [
     '.aistudio-table-scroll',
     'ms-katex.display',
@@ -118,7 +119,7 @@
     'min-width:0!important;',
     'box-sizing:border-box!important;',
     'overflow-x:hidden!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:none!important;',
     'overscroll-behavior:auto!important;',
     'overflow-wrap:break-word!important;',
     'word-break:normal!important;',
@@ -141,7 +142,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:none!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.75em 0!important;',
@@ -190,7 +191,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:touch!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:none!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'scroll-behavior:auto!important;',
@@ -221,7 +222,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:auto!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:none!important;',
     'overscroll-behavior:auto!important;',
     'margin:0.55em 0!important;',
     'padding:0.12em 0 0.38em 0!important;',
@@ -234,7 +235,7 @@
     'overflow-x:auto!important;',
     'overflow-y:visible!important;',
     '-webkit-overflow-scrolling:auto!important;',
-    'touch-action:pan-y pinch-zoom!important;',
+    'touch-action:none!important;',
     'overscroll-behavior:auto!important;',
     'box-sizing:border-box!important;',
     'margin:0.55em 0!important;',
@@ -988,6 +989,7 @@
       var finished = active;
 
       active = null;
+      if (activeIslandAxis === 'horizontal') activeIslandAxis = '';
 
       if (finished && finished.mode === 'horizontal') {
         runHorizontalMomentum(finished.island, finished.velocity || 0);
@@ -1061,11 +1063,13 @@
 
       if (!active.mode && clearVertical) {
         active.mode = 'vertical';
+        activeIslandAxis = 'vertical';
         return;
       }
 
       if (!active.mode && clearHorizontal) {
         active.mode = 'horizontal';
+        activeIslandAxis = 'horizontal';
       }
 
       if (active.mode !== 'horizontal') return;
@@ -1079,7 +1083,7 @@
       active.lastMoveTime = now;
       active.velocity = deltaX / elapsed;
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
     }, { capture: true, passive: false });
 
     document.addEventListener('touchend', reset, { capture: true, passive: true });
@@ -1140,6 +1144,7 @@
       var finished = active;
 
       active = null;
+      if (activeIslandAxis === 'vertical') activeIslandAxis = '';
 
       if (finished && finished.mode === 'vertical') {
         runMomentum(finished.scroller, finished.velocity || 0);
@@ -1218,6 +1223,13 @@
       absStepX = Math.abs(stepX);
       absStepY = Math.abs(stepY);
 
+      if (activeIslandAxis === 'horizontal') {
+        active.lastX = touch.clientX;
+        active.lastY = touch.clientY;
+        active.lastMoveTime = Date.now();
+        return;
+      }
+
       if (Math.max(absX, absY) < 6 && Math.max(absStepX, absStepY) < 4) return;
 
       clearHorizontal = absStepX > absStepY * 2.2 &&
@@ -1227,10 +1239,13 @@
 
       if (!active.mode && clearHorizontal) {
         active.mode = 'horizontal';
+        activeIslandAxis = 'horizontal';
       } else if (!clearHorizontal && (absStepY >= 1 || absY >= 4)) {
         active.mode = 'vertical';
+        activeIslandAxis = 'vertical';
       } else if (!active.mode && absY >= 5) {
         active.mode = 'vertical';
+        activeIslandAxis = 'vertical';
       }
 
       if (active.mode !== 'vertical') {
@@ -1262,7 +1277,7 @@
         active.lastMoveTime = now;
         active.velocity = (next - before) / elapsed;
         event.preventDefault();
-        event.stopPropagation();
+        event.stopImmediatePropagation();
       }
     }, { capture: true, passive: false });
 
