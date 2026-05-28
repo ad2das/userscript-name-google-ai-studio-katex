@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.41-island-vertical-rescue
+// @version      1.0.43-island-momentum-cancel
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, native page scroll with island-only vertical rescue and inertial horizontal math/table pan, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -905,6 +905,19 @@
     return Math.max(0, Math.min(max, value));
   }
 
+  function stopNativeVerticalMomentum(scroller) {
+    var top;
+
+    if (!scroller) return;
+
+    top = getScrollTop(scroller);
+    setScrollTop(scroller, top);
+
+    window.requestAnimationFrame(function () {
+      setScrollTop(scroller, top);
+    });
+  }
+
   function getMaxScrollLeft(scroller) {
     if (!scroller) return 0;
     return Math.max(0, scroller.scrollWidth - scroller.clientWidth);
@@ -1092,7 +1105,7 @@
 
       cancelMomentum();
 
-      velocity = Math.max(-11, Math.min(11, velocity * 2.2));
+      velocity = Math.max(-8, Math.min(8, velocity * 1.55));
       lastTime = Date.now();
       startTime = lastTime;
 
@@ -1104,12 +1117,12 @@
 
         setScrollTop(scroller, next);
 
-        if (next === before || now - startTime > 1500) {
+        if (next === before || now - startTime > 950) {
           momentumFrame = 0;
           return;
         }
 
-        velocity *= Math.pow(0.94, elapsed / 16);
+        velocity *= Math.pow(0.9, elapsed / 16);
         lastTime = now;
 
         if (Math.abs(velocity) < 0.06) {
@@ -1158,6 +1171,7 @@
         return;
       }
       scroller = findVerticalScroller(target.parentElement || target, 0);
+      stopNativeVerticalMomentum(scroller);
       touch = event.touches[0];
 
       active = {
@@ -1170,8 +1184,7 @@
         lastY: touch.clientY,
         lastMoveTime: Date.now(),
         velocity: 0,
-        mode: '',
-        islandScrollLeft: island ? (island.scrollLeft || 0) : 0
+        mode: ''
       };
     }, { capture: true, passive: true });
 
@@ -1214,9 +1227,9 @@
 
       if (!active.mode && clearHorizontal) {
         active.mode = 'horizontal';
-      } else if (!clearHorizontal && (absStepY >= 1 || absY >= 6)) {
+      } else if (!clearHorizontal && (absStepY >= 1 || absY >= 4)) {
         active.mode = 'vertical';
-      } else if (!active.mode && absY >= 8) {
+      } else if (!active.mode && absY >= 5) {
         active.mode = 'vertical';
       }
 
@@ -1248,7 +1261,6 @@
         active.lastY = touch.clientY;
         active.lastMoveTime = now;
         active.velocity = (next - before) / elapsed;
-        if (active.island) active.island.scrollLeft = active.islandScrollLeft;
         event.preventDefault();
         event.stopPropagation();
       }
