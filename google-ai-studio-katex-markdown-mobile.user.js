@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile
 // @namespace    https://aistudio.google.com/
-// @version      1.0.46-exclusive-island-axis
+// @version      1.0.47-safe-bold-node-local
 // @description  Mobile Firefox/Violentmonkey friendly KaTeX-safe, native page scroll with island-only vertical rescue and inertial horizontal math/table pan, split Markdown bold, wrapping, and Samsung/Google-like font fix.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -535,15 +535,98 @@
     return candidates;
   }
 
-  function collectTextMap(element) {
-    var segments = [];
-    var text = '';
+  function findBoldMatches(text) {
+    var re = /(\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
+    var matches = [];
+    var match;
+    var inner;
+    var full;
 
-    var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+    while ((match = re.exec(text))) {
+      inner = match[2] || '';
+      full = match[0] || '';
+
+      if (!inner.replace(/\s/g, '')) continue;
+      if (inner.length > 2000) continue;
+      if (full.indexOf('\n\n\n') !== -1) continue;
+
+      matches.push({
+        start: match.index,
+        end: match.index + full.length,
+        marker: match[1]
+      });
+    }
+
+    return matches;
+  }
+
+  function wrapBoldMatchesInTextNode(textNode, matches) {
+    var value = textNode.nodeValue || '';
+    var fragment;
+    var cursor = 0;
+    var i;
+    var match;
+    var markerLength;
+    var inner;
+    var strong;
+
+    if (!textNode.parentNode || !matches.length) return false;
+
+    fragment = document.createDocumentFragment();
+
+    for (i = 0; i < matches.length; i += 1) {
+      match = matches[i];
+      markerLength = match.marker.length;
+      inner = value.slice(match.start + markerLength, match.end - markerLength);
+
+      if (match.start > cursor) {
+        fragment.appendChild(document.createTextNode(value.slice(cursor, match.start)));
+      }
+
+      strong = document.createElement('strong');
+      strong.className = 'codex-md-strong';
+      strong.textContent = inner;
+      fragment.appendChild(strong);
+
+      cursor = match.end;
+    }
+
+    if (cursor < value.length) {
+      fragment.appendChild(document.createTextNode(value.slice(cursor)));
+    }
+
+    textNode.parentNode.replaceChild(fragment, textNode);
+
+    return true;
+  }
+
+  function processBoldInTextNode(textNode) {
+    var matches;
+
+    if (!textNode || isSkipped(textNode)) return 0;
+
+    if (!hasBoldPair(textNode.nodeValue || '')) return 0;
+
+    matches = findBoldMatches(textNode.nodeValue || '');
+
+    if (!wrapBoldMatchesInTextNode(textNode, matches)) return 0;
+
+    return matches.length;
+  }
+
+  function processBoldInElement(element) {
+    var changed = 0;
+    var walker;
+    var textNodes = [];
+    var i;
+
+    if (!element || isSkipped(element)) return 0;
+
+    walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
       acceptNode: function (textNode) {
         var value = textNode.nodeValue || '';
 
-        if (!value) {
+        if (!hasBoldPair(value)) {
           return NodeFilter.FILTER_SKIP;
         }
 
@@ -556,194 +639,11 @@
     });
 
     while (walker.nextNode()) {
-      var node = walker.currentNode;
-      var value = node.nodeValue || '';
-      var start;
-
-      if (!value) continue;
-
-      start = text.length;
-      text += value;
-
-      segments.push({
-        node: node,
-        start: start,
-        end: text.length
-      });
+      textNodes.push(walker.currentNode);
     }
 
-    return {
-      text: text,
-      segments: segments
-    };
-  }
-
-  function findPosition(segments, index, bias) {
-    var i;
-    var seg;
-    var prev;
-    var next;
-    var last;
-
-    if (!segments.length) return null;
-
-    for (i = 0; i < segments.length; i += 1) {
-      seg = segments[i];
-
-      if (index > seg.start && index < seg.end) {
-        return {
-          node: seg.node,
-          offset: index - seg.start
-        };
-      }
-
-      if (index === seg.start) {
-        if (bias === 'end' && i > 0) {
-          prev = segments[i - 1];
-
-          return {
-            node: prev.node,
-            offset: prev.node.nodeValue.length
-          };
-        }
-
-        return {
-          node: seg.node,
-          offset: 0
-        };
-      }
-
-      if (index === seg.end) {
-        if (bias === 'start' && i + 1 < segments.length) {
-          next = segments[i + 1];
-
-          return {
-            node: next.node,
-            offset: 0
-          };
-        }
-
-        return {
-          node: seg.node,
-          offset: seg.node.nodeValue.length
-        };
-      }
-    }
-
-    last = segments[segments.length - 1];
-
-    if (index >= last.end) {
-      return {
-        node: last.node,
-        offset: last.node.nodeValue.length
-      };
-    }
-
-    return null;
-  }
-
-  function makeRange(segments, startIndex, endIndex) {
-    var start = findPosition(segments, startIndex, 'start');
-    var end = findPosition(segments, endIndex, 'end');
-    var range;
-
-    if (!start || !end) return null;
-
-    range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
-
-    return range;
-  }
-
-  function findLastBoldMatch(text) {
-    var re = /(\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
-    var match;
-    var last = null;
-    var marker;
-    var inner;
-    var full;
-
-    while ((match = re.exec(text))) {
-      marker = match[1];
-      inner = match[2] || '';
-      full = match[0] || '';
-
-      if (!inner.replace(/\s/g, '')) continue;
-      if (inner.length > 2000) continue;
-      if (full.indexOf('\n\n\n') !== -1) continue;
-
-      last = {
-        start: match.index,
-        end: match.index + full.length,
-        marker: marker
-      };
-    }
-
-    return last;
-  }
-
-  function wrapBoldMatch(segments, match) {
-    var markerLength = match.marker.length;
-
-    var startMarkerStart = match.start;
-    var startMarkerEnd = match.start + markerLength;
-    var innerStart = startMarkerEnd;
-    var innerEnd = match.end - markerLength;
-    var endMarkerStart = innerEnd;
-    var endMarkerEnd = match.end;
-
-    var endMarkerRange;
-    var innerRange;
-    var startMarkerRange;
-    var content;
-    var strong;
-
-    if (innerEnd <= innerStart) return false;
-
-    endMarkerRange = makeRange(segments, endMarkerStart, endMarkerEnd);
-    innerRange = makeRange(segments, innerStart, innerEnd);
-    startMarkerRange = makeRange(segments, startMarkerStart, startMarkerEnd);
-
-    if (!startMarkerRange || !innerRange || !endMarkerRange) return false;
-
-    try {
-      endMarkerRange.deleteContents();
-
-      content = innerRange.extractContents();
-
-      strong = document.createElement('strong');
-      strong.className = 'codex-md-strong';
-      strong.appendChild(content);
-
-      innerRange.insertNode(strong);
-      startMarkerRange.deleteContents();
-
-      return true;
-    } catch (err) {
-      return false;
-    }
-  }
-
-  function processBoldInElement(element) {
-    var changed = 0;
-    var i;
-    var map;
-    var match;
-
-    if (!element || isSkipped(element)) return 0;
-
-    for (i = 0; i < 20; i += 1) {
-      map = collectTextMap(element);
-
-      if (!hasBoldPair(map.text) || !map.segments.length) break;
-
-      match = findLastBoldMatch(map.text);
-
-      if (!match) break;
-      if (!wrapBoldMatch(map.segments, match)) break;
-
-      changed += 1;
+    for (i = textNodes.length - 1; i >= 0; i -= 1) {
+      changed += processBoldInTextNode(textNodes[i]);
     }
 
     return changed;
