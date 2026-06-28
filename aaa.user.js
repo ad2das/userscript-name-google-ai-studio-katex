@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Safe)
+// @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (CSS Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.4.4
-// @description  Mobile-safe font/wrapping fix and delayed repair of raw **bold** in completed model output.
+// @version      1.5.0
+// @description  CSS-only mobile-safe font/wrapping/display fix for Google AI Studio model output. Does not edit completed DOM.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,17 +15,24 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.4.4';
-  const STYLE_ID = 'aistudio-mobile-safe-144-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-144';
+  const VERSION = '1.5.0';
+  const STYLE_ID = 'aistudio-mobile-safe-150-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-150';
 
   /*
-   * 생성 중에는 DOM을 건드리지 않는다.
-   * 최신 답변은 텍스트가 멈춘 뒤 4.5초 후 처리한다.
+   * 이 버전은 DOM을 고치지 않는다.
+   *
+   * 목적:
+   * - 모바일에서 모델 답변 폰트/줄바꿈 개선
+   * - 코드블록 가로 스크롤 유지
+   * - 표 셀 내부 줄바꿈 개선
+   * - KaTeX / MathJax 수식이 잘리거나 깨지는 것을 최대한 방지
+   *
+   * 하지 않는 것:
+   * - raw **bold** 를 <strong>으로 변환하지 않음
+   * - raw TeX를 직접 KaTeX로 렌더링하지 않음
+   * - 모델 출력 DOM을 split / wrap / replace 하지 않음
    */
-  const SCAN_MS = 1800;
-  const OLD_TURN_WAIT_MS = 1800;
-  const LAST_TURN_WAIT_MS = 4500;
 
   const STYLE_ROOT_SELECTOR = [
     'ms-chat-turn .chat-turn-container.model ms-cmark-node',
@@ -35,113 +42,25 @@
     '[data-message-author-role="assistant"] ms-cmark-node',
     '.model-prompt-container ms-cmark-node',
     '.chat-turn-container.model .markdown',
-    '.chat-turn-container.model .markdown-body'
-  ].join(',');
-
-  const MODEL_TURN_SELECTOR = [
-    'ms-chat-turn .chat-turn-container.model',
-    'ms-chat-turn [data-turn-role="Model"]',
-    '[data-message-author-role="assistant"]',
-    '.model-prompt-container',
-    '.chat-turn-container.model'
-  ].join(',');
-
-  const REPAIR_ROOT_SELECTOR = [
-    STYLE_ROOT_SELECTOR,
-    MODEL_TURN_SELECTOR
-  ].join(',');
-
-  const USER_SELECTOR = [
-    '[data-turn-role="User"]',
-    '[data-message-author-role="user"]',
-    '.user-prompt-container',
-    '.chat-turn-container.user',
-    'ms-prompt-input',
-    'ms-autosize-textarea',
-    'ms-chat-input'
-  ].join(',');
-
-  const SKIP_SELECTOR = [
-    'textarea',
-    'input',
-    'select',
-    'button',
-    '[contenteditable="true"]',
-    '[role="textbox"]',
-
-    'code',
-    'pre',
-    'kbd',
-    'samp',
-    'script',
-    'style',
-    'noscript',
-
-    'svg',
-    'math',
-    '.cm-editor',
-    '.monaco-editor',
-
-    '.katex',
-    'ms-katex',
-    '.MathJax',
-    'mjx-container',
-
-    'strong',
-    'b',
-    '.aistudio-md-repaired'
-  ].join(',');
-
-  const SPLIT_BLOCK_SELECTOR = [
-    'textarea',
-    'input',
-    'select',
-    'button',
-    '[contenteditable="true"]',
-    '[role="textbox"]',
-
-    'code',
-    'pre',
-    'kbd',
-    'samp',
-    'script',
-    'style',
-    'noscript',
-
-    'svg',
-    'math',
-    '.cm-editor',
-    '.monaco-editor',
-
-    '.katex',
-    'ms-katex',
-    '.MathJax',
-    'mjx-container'
-  ].join(',');
-
-  const INLINE_REPAIR_CONTAINER_SELECTOR = [
-    'p',
-    'li',
-    'dd',
-    'dt',
-    'figcaption',
-    'blockquote',
-    'h1',
-    'h2',
-    'h3',
-    'h4',
-    'h5',
-    'h6',
-    'th',
-    'td'
+    '.chat-turn-container.model .markdown-body',
+    '[data-message-author-role="assistant"] .markdown',
+    '[data-message-author-role="assistant"] .markdown-body'
   ].join(',');
 
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
 
-  const MAX_MATCH_INNER_LENGTH = 2000;
-  const MAX_INLINE_TEXT_LENGTH = 12000;
-  const RETRY_BASE_MS = 2000;
-  const RETRY_MAX_MS = 30000;
+  const LEGACY_STYLE_IDS = [
+    'codex-aistudio-katex-display-fix',
+    'tm-aistudio-katex-display-fix',
+    'aistudio-mobile-readable-font-css',
+    'aistudio-mobile-katex-md-fix-style',
+    'aistudio-mobile-display-fix-style',
+    'aistudio-mobile-safe-fix-style',
+    'aistudio-mobile-safe-display-fix-style',
+    'aistudio-mobile-safe-143-style',
+    'aistudio-mobile-safe-144-style',
+    'aistudio-mobile-safe-145-style'
+  ];
 
   const CSS_TEXT = `
 :root {
@@ -152,7 +71,10 @@
     "SamsungOne UI",
     "Roboto",
     "Noto Sans KR",
+    "Apple SD Gothic Neo",
     system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
     sans-serif;
 
   --as-mono:
@@ -161,6 +83,7 @@
     "Droid Sans Mono",
     "Cascadia Mono",
     "Consolas",
+    "SFMono-Regular",
     monospace;
 
   --as-size: 16px;
@@ -168,6 +91,10 @@
   --as-bold: 600;
 }
 
+/*
+ * 기본 UI 폰트 정리.
+ * 모델 출력뿐 아니라 입력창/버튼의 모바일 가독성도 같이 맞춘다.
+ */
 html,
 body,
 button,
@@ -179,6 +106,9 @@ select {
   text-rendering: optimizeLegibility !important;
 }
 
+/*
+ * 모델 답변 본문 기본값.
+ */
 ${SCOPE} {
   max-width: 100% !important;
   min-width: 0 !important;
@@ -189,10 +119,14 @@ ${SCOPE} {
   line-height: var(--as-line) !important;
   letter-spacing: 0 !important;
 
+  white-space: normal !important;
   overflow-wrap: break-word !important;
   word-break: normal !important;
 }
 
+/*
+ * 일반 문단/목록/제목은 모바일 폭 안에서 자연스럽게 줄바꿈.
+ */
 ${SCOPE} :where(
   p,
   li,
@@ -200,6 +134,7 @@ ${SCOPE} :where(
   dd,
   dt,
   figcaption,
+  summary,
   h1,
   h2,
   h3,
@@ -216,39 +151,77 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-strong,
-b,
-.aistudio-md-repaired {
+/*
+ * 굵게 표시는 모델 답변 영역 안에서만 보정한다.
+ * 전역 strong/b를 건드리지 않는다.
+ */
+${SCOPE} :where(strong, b) {
   font-family: inherit !important;
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
 }
 
-pre,
-code,
-kbd,
-samp,
-.cm-editor,
-.monaco-editor {
+/*
+ * 링크나 긴 URL은 화면 밖으로 밀려나지 않게 한다.
+ */
+${SCOPE} :where(a) {
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}
+
+/*
+ * 코드 계열 폰트.
+ */
+${SCOPE} :where(code, pre, kbd, samp) {
   font-family: var(--as-mono) !important;
   letter-spacing: 0 !important;
 }
 
+/*
+ * 코드블록은 줄을 강제로 꺾지 않고 가로 스크롤한다.
+ * 코드 가독성과 복사 안정성을 우선한다.
+ */
 ${SCOPE} pre {
   max-width: 100% !important;
+  min-width: 0 !important;
 
   overflow-x: auto !important;
-  overflow-y: hidden !important;
+  overflow-y: visible !important;
 
   box-sizing: border-box !important;
   -webkit-overflow-scrolling: touch !important;
   overscroll-behavior-x: contain !important;
+
+  white-space: pre !important;
+}
+
+${SCOPE} pre code {
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
 }
 
 /*
- * 표를 block으로 바꾸지 않는다.
- * 셀 내부 내용만 모바일 폭에 맞춰 줄바꿈한다.
+ * 인라인 코드는 너무 긴 토큰일 때만 화면을 밀지 않게 한다.
+ */
+${SCOPE} :where(
+  p code,
+  li code,
+  dd code,
+  dt code,
+  th code,
+  td code,
+  blockquote code
+) {
+  white-space: break-spaces !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}
+
+/*
+ * 표는 block으로 바꾸지 않는다.
+ * 표 구조는 유지하고, 셀 내부 텍스트만 모바일 폭에 맞춰 줄바꿈한다.
  */
 ${SCOPE} table {
   width: 100% !important;
@@ -261,6 +234,7 @@ ${SCOPE} table {
 
 ${SCOPE} :where(th, td) {
   min-width: 0 !important;
+  box-sizing: border-box !important;
 
   white-space: normal !important;
   overflow-wrap: anywhere !important;
@@ -270,50 +244,130 @@ ${SCOPE} :where(th, td) {
 }
 
 /*
- * KaTeX 내부의 display, width, line-height는 건드리지 않는다.
- * 진짜 블록 수식 바깥쪽에만 가로 스크롤을 허용한다.
+ * 이미지/영상은 모델 답변 폭을 넘지 않게 한다.
+ * svg는 KaTeX 내부에서 쓰일 수 있으므로 여기서 건드리지 않는다.
  */
-${SCOPE} ms-katex.display {
+${SCOPE} :where(img, video, canvas) {
+  max-width: 100% !important;
+  height: auto !important;
+  box-sizing: border-box !important;
+}
+
+/*
+ * KaTeX / MathJax 안전 처리.
+ *
+ * 핵심:
+ * - 수식 내부 구조는 건드리지 않는다.
+ * - display 수식 바깥 래퍼에만 가로 스크롤을 허용한다.
+ * - overflow-y: hidden 을 쓰지 않는다.
+ *   분수, 적분, 행렬, 위첨자/아래첨자가 잘릴 수 있기 때문이다.
+ */
+${SCOPE} :where(
+  ms-katex.display,
+  .katex-display,
+  mjx-container[display="true"]
+) {
+  display: block !important;
   max-width: 100% !important;
 
   overflow-x: auto !important;
-  overflow-y: hidden !important;
+  overflow-y: visible !important;
 
   box-sizing: border-box !important;
   -webkit-overflow-scrolling: touch !important;
   overscroll-behavior-x: contain !important;
+
+  padding-top: 0.05em !important;
+  padding-bottom: 0.05em !important;
+}
+
+/*
+ * 수식 내부는 일반 텍스트 줄바꿈 규칙의 영향을 받지 않게 한다.
+ */
+${SCOPE} :where(
+  ms-katex,
+  .katex,
+  .katex *,
+  mjx-container,
+  mjx-container *
+) {
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+/*
+ * 인라인 수식은 중간에서 부서지지 않게 한다.
+ */
+${SCOPE} :where(
+  ms-katex:not(.display),
+  .katex,
+  mjx-container:not([display="true"])
+) {
+  white-space: nowrap !important;
+}
+
+/*
+ * display 수식은 래퍼가 스크롤을 담당한다.
+ */
+${SCOPE} :where(.katex-display > .katex) {
+  max-width: none !important;
+}
+
+/*
+ * details/summary, blockquote 같은 Markdown 부가 요소도 모바일에서 폭을 넘지 않게 한다.
+ */
+${SCOPE} :where(details, blockquote) {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/*
+ * 긴 단어가 있는 제목이 모바일에서 화면을 밀지 않게 한다.
+ */
+${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
 }
 `;
 
-  const states = new WeakMap();
+  let cleanedLegacy = false;
 
-  let pending = false;
-  let observer = null;
-
-  function elementOf(node) {
-    if (!node) {
-      return null;
+  function cleanupLegacy() {
+    if (cleanedLegacy) {
+      return;
     }
 
-    return node.nodeType === Node.ELEMENT_NODE
-      ? node
-      : node.parentElement;
-  }
+    cleanedLegacy = true;
 
-  function closest(node, selector) {
-    const element = elementOf(node);
+    /*
+     * 이전 버전 userscript가 삽입한 style만 제거한다.
+     * KaTeX 자체 CSS일 수 있는 aistudio-mobile-katex-css 같은 link는 제거하지 않는다.
+     */
+    for (const id of LEGACY_STYLE_IDS) {
+      const oldStyle = document.getElementById(id);
 
-    if (
-      !element ||
-      typeof element.closest !== 'function'
-    ) {
-      return null;
+      if (oldStyle) {
+        oldStyle.remove();
+      }
     }
 
+    /*
+     * 이전 버전에서 Custom Highlight를 사용했다면 잔여 등록을 제거한다.
+     * DOM 자체는 건드리지 않는다.
+     */
     try {
-      return element.closest(selector);
+      if (
+        window.CSS &&
+        CSS.highlights
+      ) {
+        CSS.highlights.delete('aistudio-raw-bold-markers');
+        CSS.highlights.delete('aistudio-raw-bold-content');
+      }
     } catch (_) {
-      return null;
+      /*
+       * 구형 브라우저 또는 격리 환경에서는 무시한다.
+       */
     }
   }
 
@@ -326,57 +380,7 @@ ${SCOPE} ms-katex.display {
       return;
     }
 
-    /*
-     * 이전 버전이 삽입한 CSS를 제거한다.
-     */
-    [
-      'codex-aistudio-katex-display-fix',
-      'tm-aistudio-katex-display-fix',
-      'aistudio-mobile-readable-font-css',
-      'aistudio-mobile-katex-md-fix-style',
-      'aistudio-mobile-display-fix-style',
-      'aistudio-mobile-safe-fix-style',
-      'aistudio-mobile-safe-display-fix-style',
-      'aistudio-mobile-safe-143-style'
-    ].forEach((id) => {
-      const oldStyle =
-        document.getElementById(id);
-
-      if (oldStyle) {
-        oldStyle.remove();
-      }
-    });
-
-    const oldKatexLink =
-      document.getElementById(
-        'aistudio-mobile-katex-css'
-      );
-
-    if (oldKatexLink) {
-      oldKatexLink.remove();
-    }
-
-    /*
-     * 이전 Custom Highlight 등록도 제거한다.
-     */
-    try {
-      if (
-        window.CSS &&
-        CSS.highlights
-      ) {
-        CSS.highlights.delete(
-          'aistudio-raw-bold-markers'
-        );
-
-        CSS.highlights.delete(
-          'aistudio-raw-bold-content'
-        );
-      }
-    } catch (_) {
-      /*
-       * 구형 Firefox 또는 격리된 실행 환경이면 무시한다.
-       */
-    }
+    cleanupLegacy();
 
     let style =
       document.getElementById(STYLE_ID);
@@ -403,925 +407,18 @@ ${SCOPE} ms-katex.display {
       }
 
       style.id = STYLE_ID;
-    } else {
+    } else if (style.textContent !== CSS_TEXT) {
       style.textContent = CSS_TEXT;
     }
+
+    style.setAttribute(
+      'data-version',
+      VERSION
+    );
 
     if (!style.isConnected) {
       parent.appendChild(style);
     }
-  }
-
-  function hasPair(text) {
-    return Boolean(
-      text &&
-      (
-        text.includes('**') ||
-        text.includes('__')
-      )
-    );
-  }
-
-  function isWordChar(character) {
-    return Boolean(
-      character &&
-      /[0-9A-Za-z_\u00C0-\uFFFF]/.test(
-        character
-      )
-    );
-  }
-
-  function findMatches(text) {
-    const result = [];
-
-    const regex =
-      /(\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
-
-    let match;
-
-    while ((match = regex.exec(text))) {
-      const marker = match[1];
-      const inner = match[2] || '';
-
-      const start = match.index;
-      const end =
-        start + match[0].length;
-
-      const markerCharacter =
-        marker[0];
-
-      const before =
-        text[start - 1] || '';
-
-      const after =
-        text[end] || '';
-
-      if (
-        !inner.trim() ||
-        inner.length > MAX_MATCH_INNER_LENGTH
-      ) {
-        continue;
-      }
-
-      if (
-        /\n\s*\n\s*\n/.test(inner)
-      ) {
-        continue;
-      }
-
-      /*
-       * ***bold*** 또는 ___bold___ 일부를
-       * 잘못 잡지 않는다.
-       */
-      if (
-        before === markerCharacter ||
-        after === markerCharacter ||
-        inner[0] === markerCharacter ||
-        inner[inner.length - 1] ===
-          markerCharacter
-      ) {
-        continue;
-      }
-
-      /*
-       * foo__bar__baz 같은 식별자를
-       * Markdown으로 처리하지 않는다.
-       */
-      if (
-        marker === '__' &&
-        (
-          isWordChar(before) ||
-          isWordChar(after)
-        )
-      ) {
-        continue;
-      }
-
-      result.push({
-        start,
-        end,
-        marker,
-        inner
-      });
-    }
-
-    return result;
-  }
-
-  function skipped(textNode) {
-    const parent =
-      textNode &&
-      textNode.parentElement;
-
-    if (!parent) {
-      return true;
-    }
-
-    return Boolean(
-      closest(parent, USER_SELECTOR) ||
-      closest(parent, SKIP_SELECTOR)
-    );
-  }
-
-  function repairTextNode(textNode) {
-    if (
-      !textNode ||
-      !textNode.parentNode ||
-      !textNode.isConnected ||
-      skipped(textNode)
-    ) {
-      return 0;
-    }
-
-    const text =
-      textNode.nodeValue || '';
-
-    const matches =
-      hasPair(text)
-        ? findMatches(text)
-        : [];
-
-    if (!matches.length) {
-      return 0;
-    }
-
-    const fragment =
-      document.createDocumentFragment();
-
-    let cursor = 0;
-
-    for (const match of matches) {
-      if (match.start > cursor) {
-        fragment.appendChild(
-          document.createTextNode(
-            text.slice(
-              cursor,
-              match.start
-            )
-          )
-        );
-      }
-
-      const strong =
-        document.createElement('strong');
-
-      strong.className =
-        'aistudio-md-repaired';
-
-      strong.setAttribute(
-        'data-aistudio-md-repaired',
-        '1'
-      );
-
-      strong.textContent =
-        match.inner;
-
-      fragment.appendChild(strong);
-
-      cursor = match.end;
-    }
-
-    if (cursor < text.length) {
-      fragment.appendChild(
-        document.createTextNode(
-          text.slice(cursor)
-        )
-      );
-    }
-
-    textNode.parentNode.replaceChild(
-      fragment,
-      textNode
-    );
-
-    return matches.length;
-  }
-
-  function collectRepairTextNodes(container) {
-    const walker =
-      document.createTreeWalker(
-        container,
-        NodeFilter.SHOW_TEXT,
-        {
-          acceptNode(textNode) {
-            if (
-              !textNode.nodeValue ||
-              skipped(textNode)
-            ) {
-              return NodeFilter.FILTER_REJECT;
-            }
-
-            return NodeFilter.FILTER_ACCEPT;
-          }
-        }
-      );
-
-    const textNodes = [];
-
-    while (walker.nextNode()) {
-      textNodes.push(
-        walker.currentNode
-      );
-    }
-
-    return textNodes;
-  }
-
-  function textPosition(textNodes, offset) {
-    let remaining =
-      Math.max(0, offset);
-
-    for (const textNode of textNodes) {
-      const length =
-        (textNode.nodeValue || '').length;
-
-      if (remaining <= length) {
-        return {
-          node: textNode,
-          offset: remaining
-        };
-      }
-
-      remaining -= length;
-    }
-
-    const last =
-      textNodes[textNodes.length - 1];
-
-    if (!last) {
-      return null;
-    }
-
-    return {
-      node: last,
-      offset: (last.nodeValue || '').length
-    };
-  }
-
-  function rangeFromTextOffsets(
-    textNodes,
-    start,
-    end
-  ) {
-    const from =
-      textPosition(textNodes, start);
-
-    const to =
-      textPosition(textNodes, end);
-
-    if (!from || !to) {
-      return null;
-    }
-
-    const range =
-      document.createRange();
-
-    range.setStart(
-      from.node,
-      from.offset
-    );
-
-    range.setEnd(
-      to.node,
-      to.offset
-    );
-
-    return range;
-  }
-
-  function textNodesAndText(container) {
-    const textNodes =
-      collectRepairTextNodes(container);
-
-    return {
-      textNodes,
-      text: textNodes.map((textNode) => (
-        textNode.nodeValue || ''
-      )).join('')
-    };
-  }
-
-  function deleteTextRange(
-    container,
-    start,
-    end
-  ) {
-    if (end <= start) {
-      return false;
-    }
-
-    const current =
-      textNodesAndText(container);
-
-    const range =
-      rangeFromTextOffsets(
-        current.textNodes,
-        start,
-        end
-      );
-
-    if (!range) {
-      return false;
-    }
-
-    try {
-      range.deleteContents();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function wrapTextRange(
-    container,
-    start,
-    end
-  ) {
-    if (end <= start) {
-      return false;
-    }
-
-    const current =
-      textNodesAndText(container);
-
-    const range =
-      rangeFromTextOffsets(
-        current.textNodes,
-        start,
-        end
-      );
-
-    if (!range || range.collapsed) {
-      return false;
-    }
-
-    const strong =
-      document.createElement('strong');
-
-    strong.className =
-      'aistudio-md-repaired';
-
-    strong.setAttribute(
-      'data-aistudio-md-repaired',
-      '1'
-    );
-
-    try {
-      strong.appendChild(
-        range.extractContents()
-      );
-
-      range.insertNode(strong);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function repairSplitMatch(
-    container,
-    match
-  ) {
-    const markerLength =
-      match.marker.length;
-
-    const innerStart =
-      match.start + markerLength;
-
-    const innerEnd =
-      match.end - markerLength;
-
-    if (
-      !deleteTextRange(
-        container,
-        innerEnd,
-        match.end
-      )
-    ) {
-      return false;
-    }
-
-    if (
-      !deleteTextRange(
-        container,
-        match.start,
-        innerStart
-      )
-    ) {
-      return false;
-    }
-
-    return wrapTextRange(
-      container,
-      match.start,
-      innerEnd - markerLength
-    );
-  }
-
-  function repairSplitEmphasisInContainer(container) {
-    if (
-      !container ||
-      !container.isConnected ||
-      closest(container, USER_SELECTOR) ||
-      container.querySelector(SPLIT_BLOCK_SELECTOR)
-    ) {
-      return 0;
-    }
-
-    const snapshot =
-      textNodesAndText(container);
-
-    const text =
-      snapshot.text;
-
-    if (
-      !hasPair(text) ||
-      text.length > MAX_INLINE_TEXT_LENGTH
-    ) {
-      return 0;
-    }
-
-    const matches =
-      findMatches(text);
-
-    if (!matches.length) {
-      return 0;
-    }
-
-    let repaired = 0;
-
-    for (
-      let index = matches.length - 1;
-      index >= 0;
-      index -= 1
-    ) {
-      if (
-        repairSplitMatch(
-          container,
-          matches[index]
-        )
-      ) {
-        repaired += 1;
-      }
-    }
-
-    return repaired;
-  }
-
-  function repairSplitEmphasis(root) {
-    const containers = [];
-
-    if (
-      root.matches &&
-      root.matches(INLINE_REPAIR_CONTAINER_SELECTOR)
-    ) {
-      containers.push(root);
-    }
-
-    root.querySelectorAll(
-      INLINE_REPAIR_CONTAINER_SELECTOR
-    ).forEach((container) => {
-      containers.push(container);
-    });
-
-    let repaired = 0;
-
-    for (const container of containers) {
-      repaired +=
-        repairSplitEmphasisInContainer(
-          container
-        );
-    }
-
-    return repaired;
-  }
-
-  function repairRoot(root) {
-    if (
-      !root ||
-      !root.isConnected ||
-      closest(root, USER_SELECTOR)
-    ) {
-      return 0;
-    }
-
-    const walker =
-      document.createTreeWalker(
-        root,
-        NodeFilter.SHOW_TEXT,
-        {
-          acceptNode(textNode) {
-            const value =
-              textNode.nodeValue || '';
-
-            if (!hasPair(value)) {
-              return NodeFilter.FILTER_SKIP;
-            }
-
-            if (skipped(textNode)) {
-              return NodeFilter.FILTER_REJECT;
-            }
-
-            return NodeFilter.FILTER_ACCEPT;
-          }
-        }
-      );
-
-    const textNodes = [];
-
-    while (walker.nextNode()) {
-      textNodes.push(
-        walker.currentNode
-      );
-    }
-
-    let repaired = 0;
-
-    /*
-     * 뒤에서부터 바꿔 앞쪽 노드 참조에
-     * 미치는 영향을 줄인다.
-     */
-    for (
-      let index = textNodes.length - 1;
-      index >= 0;
-      index -= 1
-    ) {
-      repaired +=
-        repairTextNode(
-          textNodes[index]
-        );
-    }
-
-    if (
-      hasPair(root.textContent || '')
-    ) {
-      repaired +=
-        repairSplitEmphasis(root);
-    }
-
-    return repaired;
-  }
-
-  function nearViewport(element) {
-    const height =
-      window.innerHeight || 800;
-
-    const rect =
-      element.getBoundingClientRect();
-
-    return (
-      rect.bottom >= -height &&
-      rect.top <= height * 2
-    );
-  }
-
-  function collectRoots() {
-    const all =
-      Array.from(
-        document.querySelectorAll(
-          REPAIR_ROOT_SELECTOR
-        )
-      ).filter((root) => {
-        if (
-          !root.isConnected ||
-          closest(root, USER_SELECTOR)
-        ) {
-          return false;
-        }
-
-        /*
-         * 중첩된 ms-cmark-node라면
-         * 가장 바깥쪽 루트만 처리한다.
-         */
-        const parentRoot =
-          root.parentElement
-            ? closest(
-                root.parentElement,
-                REPAIR_ROOT_SELECTOR
-              )
-            : null;
-
-        return !parentRoot;
-      });
-
-    const selected =
-      all.filter(nearViewport);
-
-    /*
-     * 현재 및 최근 답변은 화면 판정과
-     * 상관없이 항상 확인한다.
-     */
-    all.slice(-4).forEach((root) => {
-      if (!selected.includes(root)) {
-        selected.push(root);
-      }
-    });
-
-    return selected;
-  }
-
-  function lastModelTurn() {
-    const models =
-      document.querySelectorAll(
-        [
-          'ms-chat-turn .chat-turn-container.model',
-          'ms-chat-turn [data-turn-role="Model"]'
-        ].join(',')
-      );
-
-    const last =
-      models[models.length - 1];
-
-    if (!last) {
-      return null;
-    }
-
-    return (
-      closest(last, 'ms-chat-turn') ||
-      last
-    );
-  }
-
-  function visible(element) {
-    if (
-      !element ||
-      !element.isConnected
-    ) {
-      return false;
-    }
-
-    const style =
-      getComputedStyle(element);
-
-    const rect =
-      element.getBoundingClientRect();
-
-    return (
-      style.display !== 'none' &&
-      style.visibility !== 'hidden' &&
-      rect.width > 0 &&
-      rect.height > 0
-    );
-  }
-
-  function generating() {
-    const runButton =
-      document.querySelector(
-        'button.run-button'
-      );
-
-    const label =
-      runButton
-        ? [
-            runButton.getAttribute(
-              'aria-label'
-            ) || '',
-
-            runButton.getAttribute(
-              'title'
-            ) || '',
-
-            runButton.textContent || ''
-          ].join(' ')
-        : '';
-
-    if (
-      runButton &&
-      visible(runButton) &&
-      /(?:stop|cancel|abort|중지|정지|취소)/i.test(
-        label
-      )
-    ) {
-      return true;
-    }
-
-    const indicators =
-      document.querySelectorAll(
-        [
-          'ms-chat-turn .chat-turn-container.model [aria-busy="true"]',
-          'ms-chat-turn .chat-turn-container.model mat-progress-spinner',
-          'ms-chat-turn .chat-turn-container.model mat-spinner',
-          'ms-chat-turn .chat-turn-container.model [role="progressbar"]'
-        ].join(',')
-      );
-
-    return Array.from(
-      indicators
-    ).some(visible);
-  }
-
-  function scan() {
-    pending = false;
-
-    if (document.hidden) {
-      return;
-    }
-
-    const now = Date.now();
-    const roots = collectRoots();
-    const lastTurn = lastModelTurn();
-    const pageGenerating = generating();
-
-    for (const root of roots) {
-      const text =
-        root.textContent || '';
-
-      if (!hasPair(text)) {
-        states.delete(root);
-        continue;
-      }
-
-      let state =
-        states.get(root);
-
-      /*
-       * 텍스트가 바뀌었다면 생성이나 렌더링이
-       * 진행 중일 수 있으므로 대기 시간을 재설정한다.
-       */
-      if (
-        !state ||
-        state.text !== text
-      ) {
-        state = {
-          text,
-          since: now,
-          attempted: null,
-          attempts: 0,
-          lastAttemptAt: null
-        };
-
-        states.set(root, state);
-        continue;
-      }
-
-      const turn =
-        closest(
-          root,
-          'ms-chat-turn'
-        ) ||
-        closest(
-          root,
-          '.chat-turn-container.model'
-        );
-
-      const wait =
-        turn &&
-        lastTurn &&
-        turn === lastTurn
-          ? LAST_TURN_WAIT_MS
-          : OLD_TURN_WAIT_MS;
-
-      if (
-        pageGenerating &&
-        turn &&
-        lastTurn &&
-        turn === lastTurn
-      ) {
-        continue;
-      }
-
-      const attempts =
-        state.attempts || 0;
-
-      const retryWait =
-        Math.min(
-          RETRY_MAX_MS,
-          RETRY_BASE_MS *
-            Math.pow(
-              2,
-              Math.min(attempts, 4)
-            )
-        );
-
-      if (
-        now - state.since < wait ||
-        (
-          state.attempted === text &&
-          now - (state.lastAttemptAt || 0) <
-            retryWait
-        )
-      ) {
-        continue;
-      }
-
-      state.attempted = text;
-
-      const repaired =
-        repairRoot(root);
-
-      const after =
-        root.textContent || '';
-
-      if (repaired > 0) {
-        states.set(root, {
-          text: after,
-          since: now,
-          attempted: null,
-          attempts: 0,
-          lastAttemptAt: null
-        });
-
-        if (hasPair(after)) {
-          schedule(250);
-        }
-
-        continue;
-      }
-
-      states.set(root, {
-        text,
-        since: state.since,
-        attempted: text,
-        attempts: attempts + 1,
-        lastAttemptAt: now
-      });
-    }
-  }
-
-  function schedule(delay = 0) {
-    if (pending) {
-      return;
-    }
-
-    pending = true;
-
-    window.setTimeout(() => {
-      if (
-        typeof window.requestIdleCallback ===
-        'function'
-      ) {
-        window.requestIdleCallback(
-          scan,
-          {
-            timeout: 900
-          }
-        );
-      } else {
-        scan();
-      }
-    }, delay);
-  }
-
-  function shouldObserveMutationTarget(node) {
-    const element =
-      elementOf(node);
-
-    return Boolean(
-      element &&
-      !closest(element, USER_SELECTOR) &&
-      (
-        closest(element, MODEL_TURN_SELECTOR) ||
-        closest(element, REPAIR_ROOT_SELECTOR)
-      )
-    );
-  }
-
-  function installObserver() {
-    if (
-      observer ||
-      typeof MutationObserver !== 'function'
-    ) {
-      return;
-    }
-
-    const target =
-      document.body ||
-      document.documentElement;
-
-    if (!target) {
-      return;
-    }
-
-    observer =
-      new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-          if (
-            shouldObserveMutationTarget(
-              mutation.target
-            )
-          ) {
-            schedule(300);
-            return;
-          }
-
-          for (
-            const node of mutation.addedNodes || []
-          ) {
-            if (
-              shouldObserveMutationTarget(node)
-            ) {
-              schedule(300);
-              return;
-            }
-          }
-        }
-      });
-
-    observer.observe(target, {
-      childList: true,
-      characterData: true,
-      subtree: true
-    });
   }
 
   function boot() {
@@ -1332,12 +429,7 @@ ${SCOPE} ms-katex.display {
       return;
     }
 
-    if (
-      html.getAttribute(VERSION_ATTR) ===
-      VERSION
-    ) {
-      return;
-    }
+    installStyle();
 
     html.setAttribute(
       VERSION_ATTR,
@@ -1346,29 +438,17 @@ ${SCOPE} ms-katex.display {
 
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'safe-completed-model-dom-repair'
+      'css-only-katex-safe'
     );
 
-    installStyle();
-    installObserver();
-    schedule(250);
-
-    window.setInterval(
-      schedule,
-      SCAN_MS
-    );
-
+    /*
+     * AI Studio는 SPA라서 navigation 후에도 style이 유지되는 편이지만,
+     * 혹시 head가 다시 구성되는 경우를 대비해서 style만 재확인한다.
+     * 모델 출력 DOM은 절대 수정하지 않는다.
+     */
     window.addEventListener(
       'pageshow',
-      () => schedule(150),
-      {
-        passive: true
-      }
-    );
-
-    window.addEventListener(
-      'scroll',
-      () => schedule(250),
+      installStyle,
       {
         passive: true
       }
@@ -1376,7 +456,12 @@ ${SCOPE} ms-katex.display {
 
     window.addEventListener(
       'popstate',
-      () => schedule(300),
+      () => {
+        window.setTimeout(
+          installStyle,
+          150
+        );
+      },
       {
         passive: true
       }
@@ -1386,14 +471,29 @@ ${SCOPE} ms-katex.display {
       'visibilitychange',
       () => {
         if (!document.hidden) {
-          schedule(150);
+          installStyle();
         }
       },
       {
         passive: true
       }
     );
+
+    window.setInterval(
+      installStyle,
+      10000
+    );
   }
 
-  boot();
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      boot,
+      {
+        once: true
+      }
+    );
+  } else {
+    boot();
+  }
 }());
