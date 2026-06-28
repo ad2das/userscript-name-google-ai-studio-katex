@@ -6,7 +6,7 @@ Mobile Firefox + Violentmonkey userscript for Google AI Studio.
 
 Open this link on the phone with Violentmonkey installed:
 
-https://raw.githubusercontent.com/ad2das/userscript-name-google-ai-studio-katex/main/google-ai-studio-katex-markdown-mobile.user.js
+https://raw.githubusercontent.com/ad2das/userscript-name-google-ai-studio-katex/main/aaa.user.js
 
 Violentmonkey should detect the `.user.js` file and show an install screen.
 

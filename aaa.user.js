@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.4.3
+// @version      1.4.4
 // @description  Mobile-safe font/wrapping fix and delayed repair of raw **bold** in completed model output.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -15,9 +15,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.4.3';
-  const STYLE_ID = 'aistudio-mobile-safe-143-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-143';
+  const VERSION = '1.4.4';
+  const STYLE_ID = 'aistudio-mobile-safe-144-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-144';
 
   /*
    * 생성 중에는 DOM을 건드리지 않는다.
@@ -27,7 +27,7 @@
   const OLD_TURN_WAIT_MS = 1800;
   const LAST_TURN_WAIT_MS = 4500;
 
-  const ROOT_SELECTOR = [
+  const STYLE_ROOT_SELECTOR = [
     'ms-chat-turn .chat-turn-container.model ms-cmark-node',
     'ms-chat-turn [data-turn-role="Model"] ms-cmark-node',
     '.chat-turn-container.model ms-cmark-node',
@@ -36,6 +36,19 @@
     '.model-prompt-container ms-cmark-node',
     '.chat-turn-container.model .markdown',
     '.chat-turn-container.model .markdown-body'
+  ].join(',');
+
+  const MODEL_TURN_SELECTOR = [
+    'ms-chat-turn .chat-turn-container.model',
+    'ms-chat-turn [data-turn-role="Model"]',
+    '[data-message-author-role="assistant"]',
+    '.model-prompt-container',
+    '.chat-turn-container.model'
+  ].join(',');
+
+  const REPAIR_ROOT_SELECTOR = [
+    STYLE_ROOT_SELECTOR,
+    MODEL_TURN_SELECTOR
   ].join(',');
 
   const USER_SELECTOR = [
@@ -74,14 +87,61 @@
     '.MathJax',
     'mjx-container',
 
-    '.very-large-text-container',
-
     'strong',
     'b',
     '.aistudio-md-repaired'
   ].join(',');
 
-  const SCOPE = `:where(${ROOT_SELECTOR})`;
+  const SPLIT_BLOCK_SELECTOR = [
+    'textarea',
+    'input',
+    'select',
+    'button',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+
+    'code',
+    'pre',
+    'kbd',
+    'samp',
+    'script',
+    'style',
+    'noscript',
+
+    'svg',
+    'math',
+    '.cm-editor',
+    '.monaco-editor',
+
+    '.katex',
+    'ms-katex',
+    '.MathJax',
+    'mjx-container'
+  ].join(',');
+
+  const INLINE_REPAIR_CONTAINER_SELECTOR = [
+    'p',
+    'li',
+    'dd',
+    'dt',
+    'figcaption',
+    'blockquote',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'th',
+    'td'
+  ].join(',');
+
+  const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
+
+  const MAX_MATCH_INNER_LENGTH = 2000;
+  const MAX_INLINE_TEXT_LENGTH = 12000;
+  const RETRY_BASE_MS = 2000;
+  const RETRY_MAX_MS = 30000;
 
   const CSS_TEXT = `
 :root {
@@ -228,6 +288,7 @@ ${SCOPE} ms-katex.display {
   const states = new WeakMap();
 
   let pending = false;
+  let observer = null;
 
   function elementOf(node) {
     if (!node) {
@@ -275,7 +336,8 @@ ${SCOPE} ms-katex.display {
       'aistudio-mobile-katex-md-fix-style',
       'aistudio-mobile-display-fix-style',
       'aistudio-mobile-safe-fix-style',
-      'aistudio-mobile-safe-display-fix-style'
+      'aistudio-mobile-safe-display-fix-style',
+      'aistudio-mobile-safe-143-style'
     ].forEach((id) => {
       const oldStyle =
         document.getElementById(id);
@@ -396,7 +458,7 @@ ${SCOPE} ms-katex.display {
 
       if (
         !inner.trim() ||
-        inner.length > 2000
+        inner.length > MAX_MATCH_INNER_LENGTH
       ) {
         continue;
       }
@@ -438,6 +500,7 @@ ${SCOPE} ms-katex.display {
       result.push({
         start,
         end,
+        marker,
         inner
       });
     }
@@ -534,6 +597,305 @@ ${SCOPE} ms-katex.display {
     return matches.length;
   }
 
+  function collectRepairTextNodes(container) {
+    const walker =
+      document.createTreeWalker(
+        container,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode(textNode) {
+            if (
+              !textNode.nodeValue ||
+              skipped(textNode)
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        }
+      );
+
+    const textNodes = [];
+
+    while (walker.nextNode()) {
+      textNodes.push(
+        walker.currentNode
+      );
+    }
+
+    return textNodes;
+  }
+
+  function textPosition(textNodes, offset) {
+    let remaining =
+      Math.max(0, offset);
+
+    for (const textNode of textNodes) {
+      const length =
+        (textNode.nodeValue || '').length;
+
+      if (remaining <= length) {
+        return {
+          node: textNode,
+          offset: remaining
+        };
+      }
+
+      remaining -= length;
+    }
+
+    const last =
+      textNodes[textNodes.length - 1];
+
+    if (!last) {
+      return null;
+    }
+
+    return {
+      node: last,
+      offset: (last.nodeValue || '').length
+    };
+  }
+
+  function rangeFromTextOffsets(
+    textNodes,
+    start,
+    end
+  ) {
+    const from =
+      textPosition(textNodes, start);
+
+    const to =
+      textPosition(textNodes, end);
+
+    if (!from || !to) {
+      return null;
+    }
+
+    const range =
+      document.createRange();
+
+    range.setStart(
+      from.node,
+      from.offset
+    );
+
+    range.setEnd(
+      to.node,
+      to.offset
+    );
+
+    return range;
+  }
+
+  function textNodesAndText(container) {
+    const textNodes =
+      collectRepairTextNodes(container);
+
+    return {
+      textNodes,
+      text: textNodes.map((textNode) => (
+        textNode.nodeValue || ''
+      )).join('')
+    };
+  }
+
+  function deleteTextRange(
+    container,
+    start,
+    end
+  ) {
+    if (end <= start) {
+      return false;
+    }
+
+    const current =
+      textNodesAndText(container);
+
+    const range =
+      rangeFromTextOffsets(
+        current.textNodes,
+        start,
+        end
+      );
+
+    if (!range) {
+      return false;
+    }
+
+    try {
+      range.deleteContents();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function wrapTextRange(
+    container,
+    start,
+    end
+  ) {
+    if (end <= start) {
+      return false;
+    }
+
+    const current =
+      textNodesAndText(container);
+
+    const range =
+      rangeFromTextOffsets(
+        current.textNodes,
+        start,
+        end
+      );
+
+    if (!range || range.collapsed) {
+      return false;
+    }
+
+    const strong =
+      document.createElement('strong');
+
+    strong.className =
+      'aistudio-md-repaired';
+
+    strong.setAttribute(
+      'data-aistudio-md-repaired',
+      '1'
+    );
+
+    try {
+      strong.appendChild(
+        range.extractContents()
+      );
+
+      range.insertNode(strong);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function repairSplitMatch(
+    container,
+    match
+  ) {
+    const markerLength =
+      match.marker.length;
+
+    const innerStart =
+      match.start + markerLength;
+
+    const innerEnd =
+      match.end - markerLength;
+
+    if (
+      !deleteTextRange(
+        container,
+        innerEnd,
+        match.end
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      !deleteTextRange(
+        container,
+        match.start,
+        innerStart
+      )
+    ) {
+      return false;
+    }
+
+    return wrapTextRange(
+      container,
+      match.start,
+      innerEnd - markerLength
+    );
+  }
+
+  function repairSplitEmphasisInContainer(container) {
+    if (
+      !container ||
+      !container.isConnected ||
+      closest(container, USER_SELECTOR) ||
+      container.querySelector(SPLIT_BLOCK_SELECTOR)
+    ) {
+      return 0;
+    }
+
+    const snapshot =
+      textNodesAndText(container);
+
+    const text =
+      snapshot.text;
+
+    if (
+      !hasPair(text) ||
+      text.length > MAX_INLINE_TEXT_LENGTH
+    ) {
+      return 0;
+    }
+
+    const matches =
+      findMatches(text);
+
+    if (!matches.length) {
+      return 0;
+    }
+
+    let repaired = 0;
+
+    for (
+      let index = matches.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      if (
+        repairSplitMatch(
+          container,
+          matches[index]
+        )
+      ) {
+        repaired += 1;
+      }
+    }
+
+    return repaired;
+  }
+
+  function repairSplitEmphasis(root) {
+    const containers = [];
+
+    if (
+      root.matches &&
+      root.matches(INLINE_REPAIR_CONTAINER_SELECTOR)
+    ) {
+      containers.push(root);
+    }
+
+    root.querySelectorAll(
+      INLINE_REPAIR_CONTAINER_SELECTOR
+    ).forEach((container) => {
+      containers.push(container);
+    });
+
+    let repaired = 0;
+
+    for (const container of containers) {
+      repaired +=
+        repairSplitEmphasisInContainer(
+          container
+        );
+    }
+
+    return repaired;
+  }
+
   function repairRoot(root) {
     if (
       !root ||
@@ -590,6 +952,13 @@ ${SCOPE} ms-katex.display {
         );
     }
 
+    if (
+      hasPair(root.textContent || '')
+    ) {
+      repaired +=
+        repairSplitEmphasis(root);
+    }
+
     return repaired;
   }
 
@@ -610,7 +979,7 @@ ${SCOPE} ms-katex.display {
     const all =
       Array.from(
         document.querySelectorAll(
-          ROOT_SELECTOR
+          REPAIR_ROOT_SELECTOR
         )
       ).filter((root) => {
         if (
@@ -628,7 +997,7 @@ ${SCOPE} ms-katex.display {
           root.parentElement
             ? closest(
                 root.parentElement,
-                ROOT_SELECTOR
+                REPAIR_ROOT_SELECTOR
               )
             : null;
 
@@ -744,16 +1113,14 @@ ${SCOPE} ms-katex.display {
   function scan() {
     pending = false;
 
-    if (
-      document.hidden ||
-      generating()
-    ) {
+    if (document.hidden) {
       return;
     }
 
     const now = Date.now();
     const roots = collectRoots();
     const lastTurn = lastModelTurn();
+    const pageGenerating = generating();
 
     for (const root of roots) {
       const text =
@@ -778,7 +1145,9 @@ ${SCOPE} ms-katex.display {
         state = {
           text,
           since: now,
-          attempted: null
+          attempted: null,
+          attempts: 0,
+          lastAttemptAt: null
         };
 
         states.set(root, state);
@@ -803,23 +1172,68 @@ ${SCOPE} ms-katex.display {
           : OLD_TURN_WAIT_MS;
 
       if (
+        pageGenerating &&
+        turn &&
+        lastTurn &&
+        turn === lastTurn
+      ) {
+        continue;
+      }
+
+      const attempts =
+        state.attempts || 0;
+
+      const retryWait =
+        Math.min(
+          RETRY_MAX_MS,
+          RETRY_BASE_MS *
+            Math.pow(
+              2,
+              Math.min(attempts, 4)
+            )
+        );
+
+      if (
         now - state.since < wait ||
-        state.attempted === text
+        (
+          state.attempted === text &&
+          now - (state.lastAttemptAt || 0) <
+            retryWait
+        )
       ) {
         continue;
       }
 
       state.attempted = text;
 
-      repairRoot(root);
+      const repaired =
+        repairRoot(root);
 
       const after =
         root.textContent || '';
 
+      if (repaired > 0) {
+        states.set(root, {
+          text: after,
+          since: now,
+          attempted: null,
+          attempts: 0,
+          lastAttemptAt: null
+        });
+
+        if (hasPair(after)) {
+          schedule(250);
+        }
+
+        continue;
+      }
+
       states.set(root, {
-        text: after,
-        since: now,
-        attempted: after
+        text,
+        since: state.since,
+        attempted: text,
+        attempts: attempts + 1,
+        lastAttemptAt: now
       });
     }
   }
@@ -848,6 +1262,68 @@ ${SCOPE} ms-katex.display {
     }, delay);
   }
 
+  function shouldObserveMutationTarget(node) {
+    const element =
+      elementOf(node);
+
+    return Boolean(
+      element &&
+      !closest(element, USER_SELECTOR) &&
+      (
+        closest(element, MODEL_TURN_SELECTOR) ||
+        closest(element, REPAIR_ROOT_SELECTOR)
+      )
+    );
+  }
+
+  function installObserver() {
+    if (
+      observer ||
+      typeof MutationObserver !== 'function'
+    ) {
+      return;
+    }
+
+    const target =
+      document.body ||
+      document.documentElement;
+
+    if (!target) {
+      return;
+    }
+
+    observer =
+      new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          if (
+            shouldObserveMutationTarget(
+              mutation.target
+            )
+          ) {
+            schedule(300);
+            return;
+          }
+
+          for (
+            const node of mutation.addedNodes || []
+          ) {
+            if (
+              shouldObserveMutationTarget(node)
+            ) {
+              schedule(300);
+              return;
+            }
+          }
+        }
+      });
+
+    observer.observe(target, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+  }
+
   function boot() {
     const html =
       document.documentElement;
@@ -874,6 +1350,7 @@ ${SCOPE} ms-katex.display {
     );
 
     installStyle();
+    installObserver();
     schedule(250);
 
     window.setInterval(
