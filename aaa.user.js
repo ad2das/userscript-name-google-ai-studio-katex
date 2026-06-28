@@ -34,7 +34,7 @@
 
   const SCAN_MS = 1800;
   const OLD_TURN_WAIT_MS = 1800;
-  const LAST_TURN_WAIT_MS = 4500;
+  const LAST_TURN_WAIT_MS = 100;
   const RETRY_BASE_MS = 2000;
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
