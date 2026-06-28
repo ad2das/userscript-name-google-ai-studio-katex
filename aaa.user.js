@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.5.1
-// @description  Mobile-safe CSS fix plus conservative completed-output raw **bold** repair. Math-safe by default.
+// @version      1.5.2
+// @description  Mobile-safe CSS fix plus conservative completed-output raw **bold** repair. Math vertical-clipping safe.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,9 +15,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.5.1';
-  const STYLE_ID = 'aistudio-mobile-safe-151-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-151';
+  const VERSION = '1.5.2';
+  const STYLE_ID = 'aistudio-mobile-safe-152-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-152';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
@@ -29,11 +29,15 @@
    * - KaTeX / MathJax 내부 수정
    * - code / pre / link / input 내부 수정
    * - 여러 DOM 노드에 나뉜 **bold**를 억지로 합쳐서 수정
+   *
+   * v1.5.2 핵심:
+   * - display 수식에 overflow-x: auto를 주지 않는다.
+   * - 수식 위아래 clipping / 세로 스크롤 발생을 막기 위해 overflow: visible을 우선한다.
    */
   const ENABLE_SAFE_RAW_BOLD_REPAIR = true;
 
-  const SCAN_MS = 1800;
-  const OLD_TURN_WAIT_MS = 1800;
+  const SCAN_MS = 100;
+  const OLD_TURN_WAIT_MS = 100;
   const LAST_TURN_WAIT_MS = 100;
   const RETRY_BASE_MS = 2000;
   const RETRY_MAX_MS = 30000;
@@ -120,7 +124,8 @@
     'aistudio-mobile-safe-143-style',
     'aistudio-mobile-safe-144-style',
     'aistudio-mobile-safe-145-style',
-    'aistudio-mobile-safe-150-style'
+    'aistudio-mobile-safe-150-style',
+    'aistudio-mobile-safe-151-style'
   ];
 
   const CSS_TEXT = `
@@ -279,6 +284,16 @@ ${SCOPE} :where(img, video, canvas) {
   box-sizing: border-box !important;
 }
 
+/*
+ * KaTeX / MathJax 안전 처리.
+ *
+ * display 수식에는 overflow-x: auto를 주지 않는다.
+ * overflow-x: auto + overflow-y: visible 조합은 브라우저에서
+ * 실제로 세로 clipping 또는 세로 스크롤 컨테이너처럼 동작할 수 있다.
+ *
+ * 그래서 수식은 위아래 보존을 우선하고, overflow: visible로 둔다.
+ * 아주 긴 수식은 화면 오른쪽으로 넘칠 수 있지만, 수식 자체가 잘리는 것보다는 안전하다.
+ */
 ${SCOPE} :where(
   ms-katex.display,
   .katex-display,
@@ -287,17 +302,21 @@ ${SCOPE} :where(
   display: block !important;
   max-width: 100% !important;
 
-  overflow-x: auto !important;
+  overflow: visible !important;
+  overflow-x: visible !important;
   overflow-y: visible !important;
 
   box-sizing: border-box !important;
-  -webkit-overflow-scrolling: touch !important;
-  overscroll-behavior-x: contain !important;
 
-  padding-top: 0.05em !important;
-  padding-bottom: 0.05em !important;
+  padding-top: 0.35em !important;
+  padding-bottom: 0.35em !important;
+  margin-top: 0.65em !important;
+  margin-bottom: 0.65em !important;
 }
 
+/*
+ * 수식 내부는 일반 텍스트 줄바꿈 규칙의 영향을 받지 않게 한다.
+ */
 ${SCOPE} :where(
   ms-katex,
   .katex,
@@ -309,24 +328,51 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
+/*
+ * 인라인 수식은 중간에서 부서지지 않게 한다.
+ * .katex 전체에 nowrap을 걸면 display 수식에도 영향을 줄 수 있으므로 제외한다.
+ */
 ${SCOPE} :where(
   ms-katex:not(.display),
-  .katex,
   mjx-container:not([display="true"])
 ) {
   white-space: nowrap !important;
 }
 
-${SCOPE} :where(.katex-display > .katex) {
-  max-width: none !important;
+/*
+ * KaTeX display 내부도 세로 clipping을 막는다.
+ */
+${SCOPE} :where(
+  .katex-display,
+  .katex-display > .katex,
+  .katex-display > .katex *,
+  ms-katex.display,
+  ms-katex.display *,
+  mjx-container[display="true"],
+  mjx-container[display="true"] *
+) {
+  overflow: visible !important;
 }
 
+/*
+ * display 수식 내부 본체가 부모 폭 안에서 가능한 한 자연스럽게 놓이도록 한다.
+ */
+${SCOPE} :where(.katex-display > .katex) {
+  max-width: 100% !important;
+}
+
+/*
+ * details/summary, blockquote 같은 Markdown 부가 요소도 모바일에서 폭을 넘지 않게 한다.
+ */
 ${SCOPE} :where(details, blockquote) {
   max-width: 100% !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
 }
 
+/*
+ * 긴 단어가 있는 제목이 모바일에서 화면을 밀지 않게 한다.
+ */
 ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   overflow-wrap: anywhere !important;
   word-break: normal !important;
@@ -1041,7 +1087,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'css-plus-safe-raw-bold-repair'
+      'css-plus-safe-raw-bold-repair-math-visible'
     );
 
     window.addEventListener(
