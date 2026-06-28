@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (CSS Safe)
+// @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.5.0
-// @description  CSS-only mobile-safe font/wrapping/display fix for Google AI Studio model output. Does not edit completed DOM.
+// @version      1.5.1
+// @description  Mobile-safe CSS fix plus conservative completed-output raw **bold** repair. Math-safe by default.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,24 +15,29 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.5.0';
-  const STYLE_ID = 'aistudio-mobile-safe-150-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-150';
+  const VERSION = '1.5.1';
+  const STYLE_ID = 'aistudio-mobile-safe-151-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-151';
 
   /*
-   * 이 버전은 DOM을 고치지 않는다.
+   * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
+   * 그래서 이 버전은 "완료된 모델 출력"의 "수식 없는 단일 텍스트 노드"만 아주 보수적으로 고친다.
    *
-   * 목적:
-   * - 모바일에서 모델 답변 폰트/줄바꿈 개선
-   * - 코드블록 가로 스크롤 유지
-   * - 표 셀 내부 줄바꿈 개선
-   * - KaTeX / MathJax 수식이 잘리거나 깨지는 것을 최대한 방지
-   *
-   * 하지 않는 것:
-   * - raw **bold** 를 <strong>으로 변환하지 않음
-   * - raw TeX를 직접 KaTeX로 렌더링하지 않음
-   * - 모델 출력 DOM을 split / wrap / replace 하지 않음
+   * 안전을 위해 하지 않는 것:
+   * - 생성 중 최신 답변 수정
+   * - 수식이 들어 있는 텍스트 노드 수정
+   * - KaTeX / MathJax 내부 수정
+   * - code / pre / link / input 내부 수정
+   * - 여러 DOM 노드에 나뉜 **bold**를 억지로 합쳐서 수정
    */
+  const ENABLE_SAFE_RAW_BOLD_REPAIR = true;
+
+  const SCAN_MS = 1800;
+  const OLD_TURN_WAIT_MS = 1800;
+  const LAST_TURN_WAIT_MS = 4500;
+  const RETRY_BASE_MS = 2000;
+  const RETRY_MAX_MS = 30000;
+  const MAX_MATCH_INNER_LENGTH = 2000;
 
   const STYLE_ROOT_SELECTOR = [
     'ms-chat-turn .chat-turn-container.model ms-cmark-node',
@@ -47,6 +52,61 @@
     '[data-message-author-role="assistant"] .markdown-body'
   ].join(',');
 
+  const MODEL_TURN_SELECTOR = [
+    'ms-chat-turn .chat-turn-container.model',
+    'ms-chat-turn [data-turn-role="Model"]',
+    '[data-message-author-role="assistant"]',
+    '.model-prompt-container',
+    '.chat-turn-container.model'
+  ].join(',');
+
+  const REPAIR_ROOT_SELECTOR = [
+    STYLE_ROOT_SELECTOR,
+    MODEL_TURN_SELECTOR
+  ].join(',');
+
+  const USER_SELECTOR = [
+    '[data-turn-role="User"]',
+    '[data-message-author-role="user"]',
+    '.user-prompt-container',
+    '.chat-turn-container.user',
+    'ms-prompt-input',
+    'ms-autosize-textarea',
+    'ms-chat-input'
+  ].join(',');
+
+  const SKIP_SELECTOR = [
+    'textarea',
+    'input',
+    'select',
+    'button',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+
+    'a',
+    'code',
+    'pre',
+    'kbd',
+    'samp',
+    'script',
+    'style',
+    'noscript',
+
+    'svg',
+    'math',
+    '.cm-editor',
+    '.monaco-editor',
+
+    '.katex',
+    'ms-katex',
+    '.MathJax',
+    'mjx-container',
+
+    'strong',
+    'b',
+    '.aistudio-md-repaired'
+  ].join(',');
+
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
 
   const LEGACY_STYLE_IDS = [
@@ -59,7 +119,8 @@
     'aistudio-mobile-safe-display-fix-style',
     'aistudio-mobile-safe-143-style',
     'aistudio-mobile-safe-144-style',
-    'aistudio-mobile-safe-145-style'
+    'aistudio-mobile-safe-145-style',
+    'aistudio-mobile-safe-150-style'
   ];
 
   const CSS_TEXT = `
@@ -91,10 +152,6 @@
   --as-bold: 600;
 }
 
-/*
- * 기본 UI 폰트 정리.
- * 모델 출력뿐 아니라 입력창/버튼의 모바일 가독성도 같이 맞춘다.
- */
 html,
 body,
 button,
@@ -106,9 +163,6 @@ select {
   text-rendering: optimizeLegibility !important;
 }
 
-/*
- * 모델 답변 본문 기본값.
- */
 ${SCOPE} {
   max-width: 100% !important;
   min-width: 0 !important;
@@ -124,9 +178,6 @@ ${SCOPE} {
   word-break: normal !important;
 }
 
-/*
- * 일반 문단/목록/제목은 모바일 폭 안에서 자연스럽게 줄바꿈.
- */
 ${SCOPE} :where(
   p,
   li,
@@ -151,37 +202,23 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-/*
- * 굵게 표시는 모델 답변 영역 안에서만 보정한다.
- * 전역 strong/b를 건드리지 않는다.
- */
-${SCOPE} :where(strong, b) {
+${SCOPE} :where(strong, b, .aistudio-md-repaired) {
   font-family: inherit !important;
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
 }
 
-/*
- * 링크나 긴 URL은 화면 밖으로 밀려나지 않게 한다.
- */
 ${SCOPE} :where(a) {
   overflow-wrap: anywhere !important;
   word-break: normal !important;
 }
 
-/*
- * 코드 계열 폰트.
- */
 ${SCOPE} :where(code, pre, kbd, samp) {
   font-family: var(--as-mono) !important;
   letter-spacing: 0 !important;
 }
 
-/*
- * 코드블록은 줄을 강제로 꺾지 않고 가로 스크롤한다.
- * 코드 가독성과 복사 안정성을 우선한다.
- */
 ${SCOPE} pre {
   max-width: 100% !important;
   min-width: 0 !important;
@@ -202,9 +239,6 @@ ${SCOPE} pre code {
   word-break: normal !important;
 }
 
-/*
- * 인라인 코드는 너무 긴 토큰일 때만 화면을 밀지 않게 한다.
- */
 ${SCOPE} :where(
   p code,
   li code,
@@ -219,10 +253,6 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-/*
- * 표는 block으로 바꾸지 않는다.
- * 표 구조는 유지하고, 셀 내부 텍스트만 모바일 폭에 맞춰 줄바꿈한다.
- */
 ${SCOPE} table {
   width: 100% !important;
   max-width: 100% !important;
@@ -243,25 +273,12 @@ ${SCOPE} :where(th, td) {
   vertical-align: top !important;
 }
 
-/*
- * 이미지/영상은 모델 답변 폭을 넘지 않게 한다.
- * svg는 KaTeX 내부에서 쓰일 수 있으므로 여기서 건드리지 않는다.
- */
 ${SCOPE} :where(img, video, canvas) {
   max-width: 100% !important;
   height: auto !important;
   box-sizing: border-box !important;
 }
 
-/*
- * KaTeX / MathJax 안전 처리.
- *
- * 핵심:
- * - 수식 내부 구조는 건드리지 않는다.
- * - display 수식 바깥 래퍼에만 가로 스크롤을 허용한다.
- * - overflow-y: hidden 을 쓰지 않는다.
- *   분수, 적분, 행렬, 위첨자/아래첨자가 잘릴 수 있기 때문이다.
- */
 ${SCOPE} :where(
   ms-katex.display,
   .katex-display,
@@ -281,9 +298,6 @@ ${SCOPE} :where(
   padding-bottom: 0.05em !important;
 }
 
-/*
- * 수식 내부는 일반 텍스트 줄바꿈 규칙의 영향을 받지 않게 한다.
- */
 ${SCOPE} :where(
   ms-katex,
   .katex,
@@ -295,9 +309,6 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-/*
- * 인라인 수식은 중간에서 부서지지 않게 한다.
- */
 ${SCOPE} :where(
   ms-katex:not(.display),
   .katex,
@@ -306,32 +317,54 @@ ${SCOPE} :where(
   white-space: nowrap !important;
 }
 
-/*
- * display 수식은 래퍼가 스크롤을 담당한다.
- */
 ${SCOPE} :where(.katex-display > .katex) {
   max-width: none !important;
 }
 
-/*
- * details/summary, blockquote 같은 Markdown 부가 요소도 모바일에서 폭을 넘지 않게 한다.
- */
 ${SCOPE} :where(details, blockquote) {
   max-width: 100% !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
 }
 
-/*
- * 긴 단어가 있는 제목이 모바일에서 화면을 밀지 않게 한다.
- */
 ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   overflow-wrap: anywhere !important;
   word-break: normal !important;
 }
 `;
 
+  const states = new WeakMap();
+
   let cleanedLegacy = false;
+  let pending = false;
+  let observer = null;
+
+  function elementOf(node) {
+    if (!node) {
+      return null;
+    }
+
+    return node.nodeType === Node.ELEMENT_NODE
+      ? node
+      : node.parentElement;
+  }
+
+  function closest(node, selector) {
+    const element = elementOf(node);
+
+    if (
+      !element ||
+      typeof element.closest !== 'function'
+    ) {
+      return null;
+    }
+
+    try {
+      return element.closest(selector);
+    } catch (_) {
+      return null;
+    }
+  }
 
   function cleanupLegacy() {
     if (cleanedLegacy) {
@@ -340,10 +373,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     cleanedLegacy = true;
 
-    /*
-     * 이전 버전 userscript가 삽입한 style만 제거한다.
-     * KaTeX 자체 CSS일 수 있는 aistudio-mobile-katex-css 같은 link는 제거하지 않는다.
-     */
     for (const id of LEGACY_STYLE_IDS) {
       const oldStyle = document.getElementById(id);
 
@@ -352,10 +381,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
     }
 
-    /*
-     * 이전 버전에서 Custom Highlight를 사용했다면 잔여 등록을 제거한다.
-     * DOM 자체는 건드리지 않는다.
-     */
     try {
       if (
         window.CSS &&
@@ -399,9 +424,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         !style ||
         style.nodeType !== Node.ELEMENT_NODE
       ) {
-        style =
-          document.createElement('style');
-
+        style = document.createElement('style');
         style.textContent = CSS_TEXT;
         parent.appendChild(style);
       }
@@ -411,60 +434,640 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       style.textContent = CSS_TEXT;
     }
 
-    style.setAttribute(
-      'data-version',
-      VERSION
-    );
+    style.setAttribute('data-version', VERSION);
 
     if (!style.isConnected) {
       parent.appendChild(style);
     }
   }
 
-  function boot() {
-    const html =
+  function hasPair(text) {
+    return Boolean(
+      text &&
+      (
+        text.includes('**') ||
+        text.includes('__')
+      )
+    );
+  }
+
+  function isEscaped(text, index) {
+    let count = 0;
+
+    for (
+      let cursor = index - 1;
+      cursor >= 0 && text[cursor] === '\\';
+      cursor -= 1
+    ) {
+      count += 1;
+    }
+
+    return count % 2 === 1;
+  }
+
+  function hasUnescapedDollarPair(text) {
+    if (!text) {
+      return false;
+    }
+
+    let count = 0;
+
+    for (let index = 0; index < text.length; index += 1) {
+      if (
+        text[index] === '$' &&
+        !isEscaped(text, index)
+      ) {
+        count += 1;
+
+        if (count >= 2) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function hasMathLikeText(text) {
+    return Boolean(
+      text &&
+      (
+        /\\(?:\(|\)|\[|\])/.test(text) ||
+        /\\(?:begin|end)\s*\{/.test(text) ||
+        /\\(?:frac|sqrt|sum|prod|int|lim|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|phi|omega)\b/.test(text) ||
+        text.includes('$$') ||
+        hasUnescapedDollarPair(text)
+      )
+    );
+  }
+
+  function isWordChar(character) {
+    return Boolean(
+      character &&
+      /[0-9A-Za-z_\u00C0-\uFFFF]/.test(character)
+    );
+  }
+
+  function findMatches(text) {
+    const result = [];
+    const regex = /(\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
+
+    let match;
+
+    while ((match = regex.exec(text))) {
+      const marker = match[1];
+      const inner = match[2] || '';
+      const start = match.index;
+      const end = start + match[0].length;
+      const markerCharacter = marker[0];
+      const before = text[start - 1] || '';
+      const after = text[end] || '';
+      const closingMarkerStart = end - marker.length;
+
+      if (
+        isEscaped(text, start) ||
+        isEscaped(text, closingMarkerStart)
+      ) {
+        continue;
+      }
+
+      if (
+        !inner.trim() ||
+        inner.length > MAX_MATCH_INNER_LENGTH ||
+        hasMathLikeText(inner)
+      ) {
+        continue;
+      }
+
+      if (/\n\s*\n/.test(inner)) {
+        continue;
+      }
+
+      /*
+       * ***bold*** 또는 ___bold___ 일부를 잘못 잡지 않는다.
+       */
+      if (
+        before === markerCharacter ||
+        after === markerCharacter ||
+        inner[0] === markerCharacter ||
+        inner[inner.length - 1] === markerCharacter
+      ) {
+        continue;
+      }
+
+      /*
+       * foo__bar__baz 같은 식별자를 Markdown으로 처리하지 않는다.
+       */
+      if (
+        marker === '__' &&
+        (
+          isWordChar(before) ||
+          isWordChar(after)
+        )
+      ) {
+        continue;
+      }
+
+      result.push({
+        start,
+        end,
+        inner
+      });
+    }
+
+    return result;
+  }
+
+  function skipped(textNode) {
+    const parent =
+      textNode &&
+      textNode.parentElement;
+
+    if (!parent) {
+      return true;
+    }
+
+    return Boolean(
+      closest(parent, USER_SELECTOR) ||
+      closest(parent, SKIP_SELECTOR)
+    );
+  }
+
+  function repairTextNode(textNode) {
+    if (
+      !textNode ||
+      !textNode.parentNode ||
+      !textNode.isConnected ||
+      skipped(textNode)
+    ) {
+      return 0;
+    }
+
+    const text = textNode.nodeValue || '';
+
+    /*
+     * 수식이 같은 텍스트 노드 안에 있으면 통째로 건너뛴다.
+     * 볼드보다 수식 안정성을 우선한다.
+     */
+    if (
+      !hasPair(text) ||
+      hasMathLikeText(text)
+    ) {
+      return 0;
+    }
+
+    const matches = findMatches(text);
+
+    if (!matches.length) {
+      return 0;
+    }
+
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+
+    for (const match of matches) {
+      if (match.start > cursor) {
+        fragment.appendChild(
+          document.createTextNode(
+            text.slice(cursor, match.start)
+          )
+        );
+      }
+
+      const strong = document.createElement('strong');
+      strong.className = 'aistudio-md-repaired';
+      strong.setAttribute('data-aistudio-md-repaired', '1');
+      strong.textContent = match.inner;
+
+      fragment.appendChild(strong);
+      cursor = match.end;
+    }
+
+    if (cursor < text.length) {
+      fragment.appendChild(
+        document.createTextNode(
+          text.slice(cursor)
+        )
+      );
+    }
+
+    textNode.parentNode.replaceChild(fragment, textNode);
+
+    return matches.length;
+  }
+
+  function repairRoot(root) {
+    if (
+      !root ||
+      !root.isConnected ||
+      closest(root, USER_SELECTOR)
+    ) {
+      return 0;
+    }
+
+    const rootText = root.textContent || '';
+
+    if (!hasPair(rootText)) {
+      return 0;
+    }
+
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(textNode) {
+          const value = textNode.nodeValue || '';
+
+          if (!hasPair(value)) {
+            return NodeFilter.FILTER_SKIP;
+          }
+
+          if (skipped(textNode)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    const textNodes = [];
+
+    while (walker.nextNode()) {
+      textNodes.push(walker.currentNode);
+    }
+
+    let repaired = 0;
+
+    /*
+     * 뒤에서부터 바꿔 앞쪽 노드 참조 영향을 줄인다.
+     */
+    for (
+      let index = textNodes.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      repaired += repairTextNode(textNodes[index]);
+    }
+
+    return repaired;
+  }
+
+  function nearViewport(element) {
+    const height = window.innerHeight || 800;
+    const rect = element.getBoundingClientRect();
+
+    return (
+      rect.bottom >= -height &&
+      rect.top <= height * 2
+    );
+  }
+
+  function collectRoots() {
+    const roots = Array.from(
+      document.querySelectorAll(REPAIR_ROOT_SELECTOR)
+    ).filter((root) => {
+      if (
+        !root.isConnected ||
+        closest(root, USER_SELECTOR)
+      ) {
+        return false;
+      }
+
+      /*
+       * 중첩된 후보가 있으면 가장 바깥쪽만 처리한다.
+       */
+      const parentRoot =
+        root.parentElement
+          ? closest(root.parentElement, REPAIR_ROOT_SELECTOR)
+          : null;
+
+      return !parentRoot;
+    });
+
+    const selected = roots.filter(nearViewport);
+
+    /*
+     * 최근 답변 몇 개는 화면 판정과 상관없이 확인한다.
+     */
+    roots.slice(-4).forEach((root) => {
+      if (!selected.includes(root)) {
+        selected.push(root);
+      }
+    });
+
+    return selected;
+  }
+
+  function lastModelTurn() {
+    const models = document.querySelectorAll(
+      [
+        'ms-chat-turn .chat-turn-container.model',
+        'ms-chat-turn [data-turn-role="Model"]',
+        '[data-message-author-role="assistant"]',
+        '.model-prompt-container',
+        '.chat-turn-container.model'
+      ].join(',')
+    );
+
+    const last = models[models.length - 1];
+
+    if (!last) {
+      return null;
+    }
+
+    return closest(last, 'ms-chat-turn') || last;
+  }
+
+  function sameTurnOrInside(root, turn) {
+    if (!root || !turn) {
+      return false;
+    }
+
+    return (
+      root === turn ||
+      turn.contains(root) ||
+      root.contains(turn)
+    );
+  }
+
+  function visible(element) {
+    if (
+      !element ||
+      !element.isConnected
+    ) {
+      return false;
+    }
+
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  }
+
+  function generating() {
+    const runButton = document.querySelector('button.run-button');
+
+    const label = runButton
+      ? [
+          runButton.getAttribute('aria-label') || '',
+          runButton.getAttribute('title') || '',
+          runButton.textContent || ''
+        ].join(' ')
+      : '';
+
+    if (
+      runButton &&
+      visible(runButton) &&
+      /(?:stop|cancel|abort|중지|정지|취소)/i.test(label)
+    ) {
+      return true;
+    }
+
+    const indicators = document.querySelectorAll(
+      [
+        'ms-chat-turn .chat-turn-container.model [aria-busy="true"]',
+        'ms-chat-turn .chat-turn-container.model mat-progress-spinner',
+        'ms-chat-turn .chat-turn-container.model mat-spinner',
+        'ms-chat-turn .chat-turn-container.model [role="progressbar"]'
+      ].join(',')
+    );
+
+    return Array.from(indicators).some(visible);
+  }
+
+  function scan() {
+    pending = false;
+
+    if (
+      document.hidden ||
+      !ENABLE_SAFE_RAW_BOLD_REPAIR
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    const roots = collectRoots();
+    const lastTurn = lastModelTurn();
+    const pageGenerating = generating();
+
+    for (const root of roots) {
+      const text = root.textContent || '';
+
+      if (!hasPair(text)) {
+        states.delete(root);
+        continue;
+      }
+
+      let state = states.get(root);
+
+      /*
+       * 텍스트가 바뀌었다면 아직 생성/렌더링 중일 수 있으므로 대기 시간을 다시 잰다.
+       */
+      if (
+        !state ||
+        state.text !== text
+      ) {
+        state = {
+          text,
+          since: now,
+          attempted: null,
+          attempts: 0,
+          lastAttemptAt: null
+        };
+
+        states.set(root, state);
+        continue;
+      }
+
+      const rootTurn =
+        closest(root, 'ms-chat-turn') ||
+        closest(root, MODEL_TURN_SELECTOR) ||
+        root;
+
+      const isLastTurn = sameTurnOrInside(rootTurn, lastTurn);
+
+      /*
+       * 최신 답변이 생성 중이면 절대 건드리지 않는다.
+       */
+      if (
+        pageGenerating &&
+        isLastTurn
+      ) {
+        continue;
+      }
+
+      const wait = isLastTurn
+        ? LAST_TURN_WAIT_MS
+        : OLD_TURN_WAIT_MS;
+
+      const attempts = state.attempts || 0;
+      const retryWait = Math.min(
+        RETRY_MAX_MS,
+        RETRY_BASE_MS * Math.pow(2, Math.min(attempts, 4))
+      );
+
+      if (
+        now - state.since < wait ||
+        (
+          state.attempted === text &&
+          now - (state.lastAttemptAt || 0) < retryWait
+        )
+      ) {
+        continue;
+      }
+
+      state.attempted = text;
+
+      const repaired = repairRoot(root);
+      const after = root.textContent || '';
+
+      if (repaired > 0) {
+        states.set(root, {
+          text: after,
+          since: now,
+          attempted: null,
+          attempts: 0,
+          lastAttemptAt: null
+        });
+
+        if (hasPair(after)) {
+          schedule(250);
+        }
+
+        continue;
+      }
+
+      states.set(root, {
+        text,
+        since: state.since,
+        attempted: text,
+        attempts: attempts + 1,
+        lastAttemptAt: now
+      });
+    }
+  }
+
+  function schedule(delay = 0) {
+    if (
+      pending ||
+      !ENABLE_SAFE_RAW_BOLD_REPAIR
+    ) {
+      return;
+    }
+
+    pending = true;
+
+    window.setTimeout(() => {
+      if (
+        typeof window.requestIdleCallback === 'function'
+      ) {
+        window.requestIdleCallback(scan, { timeout: 900 });
+      } else {
+        scan();
+      }
+    }, delay);
+  }
+
+  function shouldObserveMutationTarget(node) {
+    const element = elementOf(node);
+
+    return Boolean(
+      element &&
+      !closest(element, USER_SELECTOR) &&
+      (
+        closest(element, MODEL_TURN_SELECTOR) ||
+        closest(element, REPAIR_ROOT_SELECTOR)
+      )
+    );
+  }
+
+  function installObserver() {
+    if (
+      observer ||
+      !ENABLE_SAFE_RAW_BOLD_REPAIR ||
+      typeof MutationObserver !== 'function'
+    ) {
+      return;
+    }
+
+    const target =
+      document.body ||
       document.documentElement;
+
+    if (!target) {
+      return;
+    }
+
+    observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (shouldObserveMutationTarget(mutation.target)) {
+          schedule(300);
+          return;
+        }
+
+        for (const node of mutation.addedNodes || []) {
+          if (shouldObserveMutationTarget(node)) {
+            schedule(300);
+            return;
+          }
+        }
+      }
+    });
+
+    observer.observe(target, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+  }
+
+  function boot() {
+    const html = document.documentElement;
 
     if (!html) {
       return;
     }
 
     installStyle();
+    installObserver();
+    schedule(250);
 
-    html.setAttribute(
-      VERSION_ATTR,
-      VERSION
-    );
-
+    html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'css-only-katex-safe'
+      'css-plus-safe-raw-bold-repair'
     );
 
-    /*
-     * AI Studio는 SPA라서 navigation 후에도 style이 유지되는 편이지만,
-     * 혹시 head가 다시 구성되는 경우를 대비해서 style만 재확인한다.
-     * 모델 출력 DOM은 절대 수정하지 않는다.
-     */
     window.addEventListener(
       'pageshow',
-      installStyle,
-      {
-        passive: true
-      }
+      () => {
+        installStyle();
+        schedule(150);
+      },
+      { passive: true }
     );
 
     window.addEventListener(
       'popstate',
       () => {
-        window.setTimeout(
-          installStyle,
-          150
-        );
+        window.setTimeout(() => {
+          installStyle();
+          schedule(150);
+        }, 150);
       },
-      {
-        passive: true
-      }
+      { passive: true }
+    );
+
+    window.addEventListener(
+      'scroll',
+      () => schedule(250),
+      { passive: true }
     );
 
     document.addEventListener(
@@ -472,27 +1075,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       () => {
         if (!document.hidden) {
           installStyle();
+          schedule(150);
         }
       },
-      {
-        passive: true
-      }
+      { passive: true }
     );
 
-    window.setInterval(
-      installStyle,
-      10000
-    );
+    window.setInterval(installStyle, 10000);
+    window.setInterval(schedule, SCAN_MS);
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener(
-      'DOMContentLoaded',
-      boot,
-      {
-        once: true
-      }
-    );
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
   } else {
     boot();
   }
