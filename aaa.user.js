@@ -1,23 +1,23 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.5.2
-// @description  Mobile-safe CSS fix plus conservative completed-output raw **bold** repair. Math vertical-clipping safe.
+// @version      1.6.1
+// @description  Mobile-safe display fixes, table <br> repair, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
 // @run-at       document-idle
-// @inject-into  content
+// @inject-into  auto
 // @noframes
-// @grant        GM_addStyle
+// @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const VERSION = '1.5.2';
-  const STYLE_ID = 'aistudio-mobile-safe-152-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-152';
+  const VERSION = '1.6.1';
+  const STYLE_ID = 'aistudio-mobile-safe-161-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-161';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
@@ -34,14 +34,28 @@
    * - display 수식에 overflow-x: auto를 주지 않는다.
    * - 수식 위아래 clipping / 세로 스크롤 발생을 막기 위해 overflow: visible을 우선한다.
    */
-  const ENABLE_SAFE_RAW_BOLD_REPAIR = true;
+  const ENABLE_SAFE_OUTPUT_REPAIR = true;
 
-  const SCAN_MS = 100;
-  const OLD_TURN_WAIT_MS = 100;
-  const LAST_TURN_WAIT_MS = 100;
+  const SCAN_MS = 10000;
+  const MUTATION_SCAN_DELAY_MS = 450;
+  const OLD_TURN_WAIT_MS = 500;
+  const LAST_TURN_WAIT_MS = 1500;
   const RETRY_BASE_MS = 2000;
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
+
+  const ENABLE_SESSION_KEEPALIVE = true;
+  const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
+  const AUTH_HEARTBEAT_MS = 5 * 60 * 1000;
+  const SESSION_FRESH_MS = 90 * 1000;
+  const SESSION_PREFLIGHT_TIMEOUT_MS = 6000;
+  const RECOVERY_STATUS_ID = 'aistudio-session-recovery-status';
+
+  const RUN_BUTTON_SELECTOR = [
+    'button[type="submit"]',
+    'button.ctrl-enter-submits',
+    'button.run-button'
+  ].join(',');
 
   const STYLE_ROOT_SELECTOR = [
     'ms-chat-turn .chat-turn-container.model ms-cmark-node',
@@ -63,6 +77,18 @@
     '.model-prompt-container',
     '.chat-turn-container.model'
   ].join(',');
+
+  const MODEL_ACTIVITY_SELECTOR = MODEL_TURN_SELECTOR
+    .split(',')
+    .flatMap((turnSelector) => [
+      '[aria-busy="true"]',
+      'mat-progress-spinner',
+      'mat-spinner',
+      '[role="progressbar"]'
+    ].map((activitySelector) => (
+      `${turnSelector.trim()} ${activitySelector}`
+    )))
+    .join(',');
 
   const REPAIR_ROOT_SELECTOR = [
     STYLE_ROOT_SELECTOR,
@@ -125,7 +151,9 @@
     'aistudio-mobile-safe-144-style',
     'aistudio-mobile-safe-145-style',
     'aistudio-mobile-safe-150-style',
-    'aistudio-mobile-safe-151-style'
+    'aistudio-mobile-safe-151-style',
+    'aistudio-mobile-safe-152-style',
+    'aistudio-mobile-safe-160-style'
   ];
 
   const CSS_TEXT = `
@@ -377,6 +405,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   overflow-wrap: anywhere !important;
   word-break: normal !important;
 }
+
+#${RECOVERY_STATUS_ID} {
+  position: fixed !important;
+  right: max(12px, env(safe-area-inset-right)) !important;
+  bottom: max(12px, env(safe-area-inset-bottom)) !important;
+  z-index: 2147483647 !important;
+  max-width: min(88vw, 420px) !important;
+  padding: 10px 13px !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 12px !important;
+  background: rgba(32, 33, 36, 0.94) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28) !important;
+  font: 500 13px/1.45 var(--as-font) !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+  transform: translateY(8px) !important;
+  transition: opacity 160ms ease, transform 160ms ease !important;
+}
+
+#${RECOVERY_STATUS_ID}[data-visible="true"] {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
 `;
 
   const states = new WeakMap();
@@ -384,6 +436,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let cleanedLegacy = false;
   let pending = false;
   let observer = null;
+  let authRefreshPromise = null;
+  let sessionRefreshPromise = null;
+  let runPreflightPromise = null;
+  let lastSessionRefreshAt = 0;
+  let bypassRunPreflight = false;
+  let statusTimer = null;
 
   function elementOf(node) {
     if (!node) {
@@ -457,23 +515,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       document.getElementById(STYLE_ID);
 
     if (!style) {
-      try {
-        style =
-          typeof GM_addStyle === 'function'
-            ? GM_addStyle(CSS_TEXT)
-            : null;
-      } catch (_) {
-        style = null;
-      }
-
-      if (
-        !style ||
-        style.nodeType !== Node.ELEMENT_NODE
-      ) {
-        style = document.createElement('style');
-        style.textContent = CSS_TEXT;
-        parent.appendChild(style);
-      }
+      style = document.createElement('style');
+      style.textContent = CSS_TEXT;
+      parent.appendChild(style);
 
       style.id = STYLE_ID;
     } else if (style.textContent !== CSS_TEXT) {
@@ -495,6 +539,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         text.includes('__')
       )
     );
+  }
+
+  function hasLiteralTableBreak(text) {
+    return Boolean(
+      text &&
+      /<br\s*\/?\s*>/i.test(text)
+    );
+  }
+
+  function hasRepairableText(text) {
+    return hasPair(text) || hasLiteralTableBreak(text);
   }
 
   function isEscaped(text, index) {
@@ -639,36 +694,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function repairTextNode(textNode) {
-    if (
-      !textNode ||
-      !textNode.parentNode ||
-      !textNode.isConnected ||
-      skipped(textNode)
-    ) {
-      return 0;
-    }
-
-    const text = textNode.nodeValue || '';
-
-    /*
-     * 수식이 같은 텍스트 노드 안에 있으면 통째로 건너뛴다.
-     * 볼드보다 수식 안정성을 우선한다.
-     */
-    if (
-      !hasPair(text) ||
-      hasMathLikeText(text)
-    ) {
-      return 0;
-    }
-
+  function appendBoldRepairedText(fragment, text) {
     const matches = findMatches(text);
 
     if (!matches.length) {
+      fragment.appendChild(document.createTextNode(text));
       return 0;
     }
 
-    const fragment = document.createDocumentFragment();
     let cursor = 0;
 
     for (const match of matches) {
@@ -697,9 +730,91 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       );
     }
 
+    return matches.length;
+  }
+
+  function repairTextNode(textNode) {
+    if (
+      !textNode ||
+      !textNode.parentNode ||
+      !textNode.isConnected ||
+      skipped(textNode)
+    ) {
+      return 0;
+    }
+
+    const text = textNode.nodeValue || '';
+
+    /*
+     * 수식이 같은 텍스트 노드 안에 있으면 통째로 건너뛴다.
+     * 볼드보다 수식 안정성을 우선한다.
+     */
+    if (
+      !hasPair(text) ||
+      hasMathLikeText(text)
+    ) {
+      return 0;
+    }
+
+    const fragment = document.createDocumentFragment();
+    const repaired = appendBoldRepairedText(fragment, text);
+
+    if (!repaired) {
+      return 0;
+    }
+
     textNode.parentNode.replaceChild(fragment, textNode);
 
-    return matches.length;
+    return repaired;
+  }
+
+  function repairTableBreakTextNode(textNode) {
+    if (
+      !textNode ||
+      !textNode.parentNode ||
+      !textNode.isConnected ||
+      skipped(textNode)
+    ) {
+      return 0;
+    }
+
+    const cell = closest(textNode.parentElement, 'th, td');
+    const text = textNode.nodeValue || '';
+
+    if (
+      !cell ||
+      !hasLiteralTableBreak(text) ||
+      hasMathLikeText(text)
+    ) {
+      return 0;
+    }
+
+    const parts = text.split(/(<br\s*\/?\s*>)/gi);
+    const fragment = document.createDocumentFragment();
+    let repaired = 0;
+
+    for (const part of parts) {
+      if (!part) {
+        continue;
+      }
+
+      if (/^<br\s*\/?\s*>$/i.test(part)) {
+        const lineBreak = document.createElement('br');
+        lineBreak.className = 'aistudio-table-br-repaired';
+        lineBreak.setAttribute('data-aistudio-table-br-repaired', '1');
+        fragment.appendChild(lineBreak);
+        repaired += 1;
+      } else {
+        repaired += appendBoldRepairedText(fragment, part);
+      }
+    }
+
+    if (!repaired) {
+      return 0;
+    }
+
+    textNode.parentNode.replaceChild(fragment, textNode);
+    return repaired;
   }
 
   function repairRoot(root) {
@@ -713,7 +828,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const rootText = root.textContent || '';
 
-    if (!hasPair(rootText)) {
+    if (!hasRepairableText(rootText)) {
       return 0;
     }
 
@@ -724,7 +839,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         acceptNode(textNode) {
           const value = textNode.nodeValue || '';
 
-          if (!hasPair(value)) {
+          if (!hasRepairableText(value)) {
             return NodeFilter.FILTER_SKIP;
           }
 
@@ -753,7 +868,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       index >= 0;
       index -= 1
     ) {
-      repaired += repairTextNode(textNodes[index]);
+      const tableBreaks = repairTableBreakTextNode(textNodes[index]);
+
+      repaired += tableBreaks;
+
+      if (!tableBreaks) {
+        repaired += repairTextNode(textNodes[index]);
+      }
     }
 
     return repaired;
@@ -856,35 +977,402 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function buttonLabel(button) {
+    if (!button) {
+      return '';
+    }
+
+    const primaryLabel = button.querySelector
+      ? button.querySelector('.run-button-label')
+      : null;
+
+    return [
+      primaryLabel ? primaryLabel.textContent || '' : '',
+      button.getAttribute ? button.getAttribute('aria-label') || '' : '',
+      button.getAttribute ? button.getAttribute('title') || '' : '',
+      button.textContent || ''
+    ].join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function isStopActionLabel(label) {
+    return /(?:^|\s)(?:stop|cancel|abort|중지|정지|취소)(?:\s|$)/i.test(
+      label || ''
+    );
+  }
+
+  function isRunActionLabel(label) {
+    return /(?:^|\s)(?:run|retry|rerun|실행|재시도|다시\s*생성)(?:\s|$)/i.test(
+      label || ''
+    );
+  }
+
+  function canSubmit(button) {
+    return Boolean(
+      button &&
+      !button.disabled &&
+      button.getAttribute('aria-disabled') !== 'true'
+    );
+  }
+
+  function isPromptRunButton(button) {
+    if (!button) {
+      return false;
+    }
+
+    return Boolean(
+      (
+        button.matches &&
+        button.matches('button.ctrl-enter-submits, button.run-button')
+      ) ||
+      (
+        button.querySelector &&
+        button.querySelector('.run-button-label')
+      )
+    );
+  }
+
+  function findRunButton() {
+    const buttons = Array.from(
+      document.querySelectorAll(RUN_BUTTON_SELECTOR)
+    );
+
+    return buttons.find((button) => {
+      const label = buttonLabel(button);
+
+      return (
+        visible(button) &&
+        isPromptRunButton(button) &&
+        isRunActionLabel(label) &&
+        !isStopActionLabel(label)
+      );
+    }) || null;
+  }
+
   function generating() {
-    const runButton = document.querySelector('button.run-button');
+    const activeStopButton = Array.from(
+      document.querySelectorAll('button')
+    ).some((button) => (
+      visible(button) &&
+      isStopActionLabel(buttonLabel(button))
+    ));
 
-    const label = runButton
-      ? [
-          runButton.getAttribute('aria-label') || '',
-          runButton.getAttribute('title') || '',
-          runButton.textContent || ''
-        ].join(' ')
-      : '';
-
-    if (
-      runButton &&
-      visible(runButton) &&
-      /(?:stop|cancel|abort|중지|정지|취소)/i.test(label)
-    ) {
+    if (activeStopButton) {
       return true;
     }
 
     const indicators = document.querySelectorAll(
-      [
-        'ms-chat-turn .chat-turn-container.model [aria-busy="true"]',
-        'ms-chat-turn .chat-turn-container.model mat-progress-spinner',
-        'ms-chat-turn .chat-turn-container.model mat-spinner',
-        'ms-chat-turn .chat-turn-container.model [role="progressbar"]'
-      ].join(',')
+      MODEL_ACTIVITY_SELECTOR
     );
 
     return Array.from(indicators).some(visible);
+  }
+
+  function showRecoveryStatus(message, visibleForMs = 3500) {
+    const parent = document.body || document.documentElement;
+
+    if (!parent) {
+      return;
+    }
+
+    let status = document.getElementById(RECOVERY_STATUS_ID);
+
+    if (!status) {
+      status = document.createElement('div');
+      status.id = RECOVERY_STATUS_ID;
+      status.setAttribute('role', 'status');
+      status.setAttribute('aria-live', 'polite');
+      parent.appendChild(status);
+    }
+
+    status.textContent = message;
+    status.setAttribute('data-visible', 'true');
+
+    if (statusTimer) {
+      window.clearTimeout(statusTimer);
+    }
+
+    statusTimer = window.setTimeout(() => {
+      status.removeAttribute('data-visible');
+    }, visibleForMs);
+  }
+
+  function googleAuthUser() {
+    try {
+      const gapi = window.gapi;
+      const auth =
+        gapi &&
+        gapi.auth2 &&
+        typeof gapi.auth2.getAuthInstance === 'function'
+          ? gapi.auth2.getAuthInstance()
+          : null;
+
+      return (
+        auth &&
+        auth.currentUser &&
+        typeof auth.currentUser.get === 'function'
+      )
+        ? auth.currentUser.get()
+        : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function refreshGoogleAuthIfNeeded() {
+    if (authRefreshPromise) {
+      return authRefreshPromise;
+    }
+
+    const user = googleAuthUser();
+
+    if (
+      !user ||
+      typeof user.getAuthResponse !== 'function' ||
+      typeof user.reloadAuthResponse !== 'function'
+    ) {
+      return Promise.resolve(false);
+    }
+
+    try {
+      const response = user.getAuthResponse(true);
+      const expiresAt = response && Number(response.expires_at);
+
+      if (
+        !Number.isFinite(expiresAt) ||
+        expiresAt - Date.now() >= AUTH_EXPIRY_MARGIN_MS
+      ) {
+        return Promise.resolve(false);
+      }
+    } catch (_) {
+      return Promise.resolve(false);
+    }
+
+    authRefreshPromise = Promise.resolve()
+      .then(() => user.reloadAuthResponse())
+      .then(() => true)
+      .catch(() => false)
+      .finally(() => {
+        authRefreshPromise = null;
+      });
+
+    return authRefreshPromise;
+  }
+
+  function withTimeout(promise, timeoutMs) {
+    return Promise.race([
+      promise,
+      new Promise((resolve) => {
+        window.setTimeout(() => resolve(false), timeoutMs);
+      })
+    ]);
+  }
+
+  function refreshSessionDocument() {
+    if (typeof window.fetch !== 'function') {
+      return Promise.resolve(false);
+    }
+
+    /*
+     * This GET keeps the authenticated AI Studio document session warm and verifies
+     * that it is still reachable. It does not claim to replace app-internal tokens;
+     * the exposed Google auth object above is the only token we refresh directly.
+     */
+    return window.fetch(
+      window.location.href.split('#')[0],
+      {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        redirect: 'follow',
+        headers: {
+          Accept: 'text/html'
+        }
+      }
+    ).then((response) => {
+      let responseUrl = null;
+
+      try {
+        responseUrl = new URL(response.url || window.location.href);
+      } catch (_) {
+        responseUrl = null;
+      }
+
+      const refreshed = Boolean(
+        response.ok &&
+        responseUrl &&
+        responseUrl.origin === window.location.origin &&
+        !/^\/(?:welcome|available[_-]regions?)(?:\/|$)/i.test(
+          responseUrl.pathname
+        )
+      );
+
+      if (response.body && typeof response.body.cancel === 'function') {
+        response.body.cancel().catch(() => {});
+      }
+
+      return refreshed;
+    }).catch(() => false);
+  }
+
+  function keepSessionFresh(force = false) {
+    if (!ENABLE_SESSION_KEEPALIVE) {
+      return Promise.resolve(true);
+    }
+
+    if (
+      !force &&
+      Date.now() - lastSessionRefreshAt < SESSION_FRESH_MS
+    ) {
+      return Promise.resolve(true);
+    }
+
+    if (sessionRefreshPromise) {
+      return sessionRefreshPromise;
+    }
+
+    sessionRefreshPromise = withTimeout(
+      Promise.all([
+        refreshGoogleAuthIfNeeded(),
+        refreshSessionDocument()
+      ]).then(([tokenRefreshed, documentRefreshed]) => (
+        tokenRefreshed || documentRefreshed
+      )),
+      SESSION_PREFLIGHT_TIMEOUT_MS
+    ).then((refreshed) => {
+      if (refreshed) {
+        lastSessionRefreshAt = Date.now();
+        document.documentElement.setAttribute(
+          'data-aistudio-session-fresh-at',
+          String(lastSessionRefreshAt)
+        );
+      }
+
+      return Boolean(refreshed);
+    }).finally(() => {
+      sessionRefreshPromise = null;
+    });
+
+    return sessionRefreshPromise;
+  }
+
+  function clickedRunButton(target) {
+    const button = closest(target, RUN_BUTTON_SELECTOR);
+
+    if (
+      !button ||
+      !visible(button) ||
+      !isPromptRunButton(button) ||
+      !canSubmit(button) ||
+      !isRunActionLabel(buttonLabel(button)) ||
+      isStopActionLabel(buttonLabel(button))
+    ) {
+      return null;
+    }
+
+    return button;
+  }
+
+  function runAfterSessionPreflight(button) {
+    if (!button || runPreflightPromise) {
+      return;
+    }
+
+    showRecoveryStatus('답변 생성 전에 AI Studio 세션을 확인하고 있습니다…');
+
+    runPreflightPromise = keepSessionFresh(true).then((refreshed) => {
+      if (
+        !button.isConnected ||
+        !canSubmit(button) ||
+        generating()
+      ) {
+        showRecoveryStatus(
+          'AI Studio가 아직 생성 중이거나 Run 버튼 상태가 바뀌어 요청을 보내지 않았습니다.',
+          6000
+        );
+        return;
+      }
+
+      bypassRunPreflight = true;
+      showRecoveryStatus(
+        refreshed
+          ? '세션 확인 완료 · 답변 생성을 시작합니다.'
+          : '세션 선제 갱신을 확인하지 못해 AI Studio 기본 방식으로 전송합니다.',
+        refreshed ? 3500 : 6000
+      );
+
+      try {
+        button.click();
+      } finally {
+        window.setTimeout(() => {
+          bypassRunPreflight = false;
+        }, 0);
+      }
+    }).finally(() => {
+      runPreflightPromise = null;
+    });
+  }
+
+  function installSessionKeepalive() {
+    if (!ENABLE_SESSION_KEEPALIVE) {
+      return;
+    }
+
+    document.addEventListener(
+      'click',
+      (event) => {
+        if (bypassRunPreflight || !event.isTrusted) {
+          return;
+        }
+
+        const button = clickedRunButton(event.target);
+
+        if (
+          !button ||
+          Date.now() - lastSessionRefreshAt < SESSION_FRESH_MS
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        runAfterSessionPreflight(button);
+      },
+      true
+    );
+
+    document.addEventListener(
+      'keydown',
+      (event) => {
+        if (
+          bypassRunPreflight ||
+          event.key !== 'Enter' ||
+          (!event.ctrlKey && !event.metaKey) ||
+          Date.now() - lastSessionRefreshAt < SESSION_FRESH_MS
+        ) {
+          return;
+        }
+
+        const prompt = closest(
+          event.target,
+          'ms-prompt-input, ms-autosize-textarea, textarea, [contenteditable="true"], [role="textbox"]'
+        );
+        const button = findRunButton();
+
+        if (!prompt || !button || !canSubmit(button)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        runAfterSessionPreflight(button);
+      },
+      true
+    );
+
+    window.setInterval(
+      () => keepSessionFresh(true),
+      AUTH_HEARTBEAT_MS
+    );
   }
 
   function scan() {
@@ -892,7 +1380,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     if (
       document.hidden ||
-      !ENABLE_SAFE_RAW_BOLD_REPAIR
+      !ENABLE_SAFE_OUTPUT_REPAIR
     ) {
       return;
     }
@@ -902,14 +1390,28 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const lastTurn = lastModelTurn();
     const pageGenerating = generating();
 
+    /*
+     * AI Studio가 스트리밍 중일 때는 이전 답변을 포함해 어떤 출력 DOM도 바꾸지 않는다.
+     * Angular가 관리하는 노드를 동시에 교체하면 다음 GenerateContent 요청의 내부 상태가
+     * 깨질 수 있으므로, 완료 후 안정 구간에서만 보정한다.
+     */
+    if (pageGenerating) {
+      return;
+    }
+
     for (const root of roots) {
       const text = root.textContent || '';
 
-      if (!hasPair(text)) {
+      if (!hasRepairableText(text)) {
         states.delete(root);
         continue;
       }
 
+      const rootTurn =
+        closest(root, 'ms-chat-turn') ||
+        closest(root, MODEL_TURN_SELECTOR) ||
+        root;
+      const isLastTurn = sameTurnOrInside(rootTurn, lastTurn);
       let state = states.get(root);
 
       /*
@@ -928,26 +1430,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         };
 
         states.set(root, state);
+        schedule(
+          (isLastTurn ? LAST_TURN_WAIT_MS : OLD_TURN_WAIT_MS) + 50
+        );
         continue;
       }
-
-      const rootTurn =
-        closest(root, 'ms-chat-turn') ||
-        closest(root, MODEL_TURN_SELECTOR) ||
-        root;
-
-      const isLastTurn = sameTurnOrInside(rootTurn, lastTurn);
 
       /*
-       * 최신 답변이 생성 중이면 절대 건드리지 않는다.
+       * 최신 답변은 렌더러의 후속 갱신을 기다리기 위해 더 오래 안정화한다.
        */
-      if (
-        pageGenerating &&
-        isLastTurn
-      ) {
-        continue;
-      }
-
       const wait = isLastTurn
         ? LAST_TURN_WAIT_MS
         : OLD_TURN_WAIT_MS;
@@ -958,12 +1449,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         RETRY_BASE_MS * Math.pow(2, Math.min(attempts, 4))
       );
 
+      const stabilityRemaining = wait - (now - state.since);
+
+      if (stabilityRemaining > 0) {
+        schedule(stabilityRemaining + 50);
+        continue;
+      }
+
       if (
-        now - state.since < wait ||
-        (
-          state.attempted === text &&
-          now - (state.lastAttemptAt || 0) < retryWait
-        )
+        state.attempted === text &&
+        now - (state.lastAttemptAt || 0) < retryWait
       ) {
         continue;
       }
@@ -982,7 +1477,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           lastAttemptAt: null
         });
 
-        if (hasPair(after)) {
+        if (hasRepairableText(after)) {
           schedule(250);
         }
 
@@ -1002,7 +1497,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function schedule(delay = 0) {
     if (
       pending ||
-      !ENABLE_SAFE_RAW_BOLD_REPAIR
+      !ENABLE_SAFE_OUTPUT_REPAIR
     ) {
       return;
     }
@@ -1036,7 +1531,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function installObserver() {
     if (
       observer ||
-      !ENABLE_SAFE_RAW_BOLD_REPAIR ||
+      !ENABLE_SAFE_OUTPUT_REPAIR ||
       typeof MutationObserver !== 'function'
     ) {
       return;
@@ -1053,13 +1548,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (shouldObserveMutationTarget(mutation.target)) {
-          schedule(300);
+          schedule(MUTATION_SCAN_DELAY_MS);
           return;
         }
 
         for (const node of mutation.addedNodes || []) {
           if (shouldObserveMutationTarget(node)) {
-            schedule(300);
+            schedule(MUTATION_SCAN_DELAY_MS);
             return;
           }
         }
@@ -1082,12 +1577,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     installStyle();
     installObserver();
+    installSessionKeepalive();
     schedule(250);
+    keepSessionFresh(true);
 
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'css-plus-safe-raw-bold-repair-math-visible'
+      'css-plus-safe-raw-bold-repair-session-keepalive'
     );
 
     window.addEventListener(
@@ -1095,6 +1592,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       () => {
         installStyle();
         schedule(150);
+        keepSessionFresh(false);
       },
       { passive: true }
     );
@@ -1122,8 +1620,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         if (!document.hidden) {
           installStyle();
           schedule(150);
+          keepSessionFresh(false);
         }
       },
+      { passive: true }
+    );
+
+    window.addEventListener(
+      'focus',
+      () => keepSessionFresh(false),
       { passive: true }
     );
 
