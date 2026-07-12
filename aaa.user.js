@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.6.1
-// @description  Mobile-safe display fixes, table <br> repair, and guarded AI Studio session keepalive.
+// @version      1.6.2
+// @description  Mobile-safe display fixes, split table <br> repair, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,9 +15,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.1';
-  const STYLE_ID = 'aistudio-mobile-safe-161-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-161';
+  const VERSION = '1.6.2';
+  const STYLE_ID = 'aistudio-mobile-safe-162-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-162';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
@@ -153,7 +153,8 @@
     'aistudio-mobile-safe-150-style',
     'aistudio-mobile-safe-151-style',
     'aistudio-mobile-safe-152-style',
-    'aistudio-mobile-safe-160-style'
+    'aistudio-mobile-safe-160-style',
+    'aistudio-mobile-safe-161-style'
   ];
 
   const CSS_TEXT = `
@@ -799,10 +800,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
 
       if (/^<br\s*\/?\s*>$/i.test(part)) {
-        const lineBreak = document.createElement('br');
-        lineBreak.className = 'aistudio-table-br-repaired';
-        lineBreak.setAttribute('data-aistudio-table-br-repaired', '1');
-        fragment.appendChild(lineBreak);
+        fragment.appendChild(createRepairedTableBreak());
         repaired += 1;
       } else {
         repaired += appendBoldRepairedText(fragment, part);
@@ -814,6 +812,158 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     textNode.parentNode.replaceChild(fragment, textNode);
+    return repaired;
+  }
+
+  function createRepairedTableBreak() {
+    const lineBreak = document.createElement('br');
+    lineBreak.className = 'aistudio-table-br-repaired';
+    lineBreak.setAttribute('data-aistudio-table-br-repaired', '1');
+    return lineBreak;
+  }
+
+  function textPosition(records, offset, endPosition = false) {
+    for (const record of records) {
+      const inside = endPosition
+        ? offset > record.start && offset <= record.end
+        : offset >= record.start && offset < record.end;
+
+      if (inside) {
+        return {
+          node: record.node,
+          offset: offset - record.start
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function repairSplitTableBreaksInCell(cell) {
+    if (!cell || !cell.isConnected || !hasLiteralTableBreak(cell.textContent || '')) {
+      return 0;
+    }
+
+    const groups = [];
+    const walker = document.createTreeWalker(
+      cell,
+      NodeFilter.SHOW_TEXT
+    );
+    let currentGroup = null;
+
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+
+      if (!textNode.nodeValue) {
+        continue;
+      }
+
+      if (
+        skipped(textNode) ||
+        closest(textNode.parentElement, 'th, td') !== cell
+      ) {
+        currentGroup = null;
+        continue;
+      }
+
+      const block = closest(
+        textNode.parentElement,
+        'p, div, li, dd, dt, blockquote, figcaption'
+      ) || cell;
+
+      if (!currentGroup || currentGroup.block !== block) {
+        currentGroup = {
+          block,
+          textNodes: []
+        };
+        groups.push(currentGroup);
+      }
+
+      currentGroup.textNodes.push(textNode);
+    }
+
+    let repaired = 0;
+
+    for (const group of groups) {
+      const records = [];
+      let text = '';
+
+      for (const textNode of group.textNodes) {
+        const value = textNode.nodeValue || '';
+        const start = text.length;
+        text += value;
+        records.push({
+          node: textNode,
+          start,
+          end: text.length
+        });
+      }
+
+      const matches = Array.from(text.matchAll(/<br\s*\/?\s*>/gi));
+
+      for (let index = matches.length - 1; index >= 0; index -= 1) {
+        const match = matches[index];
+        const start = textPosition(records, match.index, false);
+        const end = textPosition(
+          records,
+          match.index + match[0].length,
+          true
+        );
+
+        if (!start || !end) {
+          continue;
+        }
+
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset);
+
+        const selected = range.cloneContents();
+
+        if (
+          selected.querySelector &&
+          selected.querySelector(
+            'br, a, strong, b, code, pre, kbd, samp, script, style, noscript, svg, math, ' +
+            'textarea, input, select, [contenteditable="true"], [role="textbox"], ' +
+            '.katex, ms-katex, .MathJax, mjx-container'
+          )
+        ) {
+          if (typeof range.detach === 'function') {
+            range.detach();
+          }
+          continue;
+        }
+
+        range.deleteContents();
+        range.insertNode(createRepairedTableBreak());
+        if (typeof range.detach === 'function') {
+          range.detach();
+        }
+        repaired += 1;
+      }
+    }
+
+    return repaired;
+  }
+
+  function repairSplitTableBreaks(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    let repaired = 0;
+    const cells = [];
+
+    if (root.matches && root.matches('th, td')) {
+      cells.push(root);
+    }
+
+    cells.push(...root.querySelectorAll('th, td'));
+
+    for (const cell of cells) {
+      repaired += repairSplitTableBreaksInCell(cell);
+    }
+
     return repaired;
   }
 
@@ -832,6 +982,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
+    let repaired = repairSplitTableBreaks(root);
     const walker = document.createTreeWalker(
       root,
       NodeFilter.SHOW_TEXT,
@@ -857,8 +1008,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     while (walker.nextNode()) {
       textNodes.push(walker.currentNode);
     }
-
-    let repaired = 0;
 
     /*
      * 뒤에서부터 바꿔 앞쪽 노드 참조 영향을 줄인다.

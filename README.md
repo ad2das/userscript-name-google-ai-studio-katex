@@ -14,7 +14,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 - KaTeX display math horizontal scrolling on mobile
 - Markdown tables overflowing the screen
-- Literal `<br>`, `<br/>`, and `<br />` markers shown inside completed table cells
+- Literal `<br>`, `<br/>`, and `<br />` markers shown inside completed table cells,
+  including markers split across multiple inline nodes
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses
 - Mobile readable Google/Samsung-like font stack
@@ -32,7 +33,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.6.1 no longer uses a privileged GM API. Violentmonkey may inject it into
+Version 1.6.2 no longer uses a privileged GM API. Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
 does not retry a failed generation. It refreshes an exposed Google auth token when
 needed, warms the authenticated AI Studio document session before generation, and

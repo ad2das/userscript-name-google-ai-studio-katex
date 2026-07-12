@@ -37,14 +37,20 @@ async (page) => {
 
   const rendering = await page.evaluate(() => {
     const cell = document.getElementById('literal-break-cell');
+    const literalCode = document.getElementById('literal-code');
+    const blockBoundary = document.getElementById('block-boundary');
+    const linkBoundary = document.getElementById('link-boundary');
     return {
       boldCount: cell.querySelectorAll('strong.aistudio-md-repaired').length,
       boldText: cell.querySelector('strong.aistudio-md-repaired')?.textContent,
       breakCount: cell.querySelectorAll('br.aistudio-table-br-repaired').length,
       html: cell.innerHTML,
       text: cell.textContent,
+      preservedBlockBoundary: blockBoundary.querySelectorAll('br').length === 0,
+      preservedCode: literalCode.textContent === '<br>',
+      preservedLinkBoundary: linkBoundary.querySelectorAll('br').length === 0,
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-161'
+        'data-aistudio-mobile-safe-162'
       )
     };
   });
@@ -55,7 +61,10 @@ async (page) => {
     rendering.boldText !== 'bold' ||
     rendering.text.includes('<br>') ||
     rendering.text.includes('**') ||
-    rendering.version !== '1.6.1'
+    !rendering.preservedBlockBoundary ||
+    !rendering.preservedCode ||
+    !rendering.preservedLinkBoundary ||
+    rendering.version !== '1.6.2'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

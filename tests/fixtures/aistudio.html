@@ -15,7 +15,12 @@
         <table>
           <tbody>
             <tr>
-              <td id="literal-break-cell">first&lt;br&gt;second&lt;BR /&gt;third **bold**</td>
+              <td id="literal-break-cell">first<span>&lt;</span><span>br</span><span>&gt;</span>second<span>&lt;br /</span><span>&gt;</span>third **bold**</td>
+            </tr>
+            <tr>
+              <td><code id="literal-code">&lt;br&gt;</code></td>
+              <td id="block-boundary"><p>&lt;br</p><p>&gt;</p></td>
+              <td id="link-boundary"><span>&lt;</span><a href="#">ignored</a><span>br&gt;</span></td>
             </tr>
           </tbody>
         </table>

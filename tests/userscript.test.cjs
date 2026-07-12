@@ -6,10 +6,11 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.6\.1/);
+assert.match(source, /\/\/ @version\s+1\.6\.2/);
 assert.match(source, /\/\/ @inject-into\s+auto/);
 assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
+assert.match(source, /function repairSplitTableBreaksInCell/);
 assert.match(source, /if \(pageGenerating\) \{\s*return;\s*\}/);
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 
