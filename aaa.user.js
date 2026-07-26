@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.6.2
-// @description  Mobile-safe display fixes, split table <br> repair, and guarded AI Studio session keepalive.
+// @version      1.6.3
+// @description  Mobile-safe display fixes, split Markdown emphasis/table breaks, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,20 +15,19 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.2';
-  const STYLE_ID = 'aistudio-mobile-safe-162-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-162';
+  const VERSION = '1.6.3';
+  const STYLE_ID = 'aistudio-mobile-safe-163-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-163';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
-   * 그래서 이 버전은 "완료된 모델 출력"의 "수식 없는 단일 텍스트 노드"만 아주 보수적으로 고친다.
+   * 그래서 이 버전은 "완료된 모델 출력"의 raw Markdown만 아주 보수적으로 고친다.
    *
    * 안전을 위해 하지 않는 것:
    * - 생성 중 최신 답변 수정
-   * - 수식이 들어 있는 텍스트 노드 수정
    * - KaTeX / MathJax 내부 수정
    * - code / pre / link / input 내부 수정
-   * - 여러 DOM 노드에 나뉜 **bold**를 억지로 합쳐서 수정
+   * - 링크, 코드, 수식, 블록 경계를 가로질러 **bold**를 합치기
    *
    * v1.5.2 핵심:
    * - display 수식에 overflow-x: auto를 주지 않는다.
@@ -43,6 +42,7 @@
   const RETRY_BASE_MS = 2000;
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
+  const MAX_INLINE_REPAIR_LENGTH = 12000;
 
   const ENABLE_SESSION_KEEPALIVE = true;
   const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
@@ -137,6 +137,76 @@
     '.aistudio-md-repaired'
   ].join(',');
 
+  const INLINE_REPAIR_CONTAINER_SELECTOR = [
+    'ms-cmark-node',
+    'p',
+    'li',
+    'dd',
+    'dt',
+    'figcaption',
+    'summary',
+    'blockquote',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'th',
+    'td'
+  ].join(',');
+
+  const INLINE_REPAIR_BOUNDARY_SELECTOR = [
+    'br',
+    'hr',
+    'a',
+    'strong',
+    'b',
+    'code',
+    'pre',
+    'kbd',
+    'samp',
+    'script',
+    'style',
+    'noscript',
+    'svg',
+    'math',
+    'textarea',
+    'input',
+    'select',
+    'button',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+    '.katex',
+    'ms-katex',
+    '.MathJax',
+    'mjx-container',
+    'ms-cmark-node',
+    'p',
+    'div',
+    'li',
+    'dd',
+    'dt',
+    'figcaption',
+    'summary',
+    'blockquote',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'table',
+    'thead',
+    'tbody',
+    'tfoot',
+    'tr',
+    'th',
+    'td',
+    'ul',
+    'ol'
+  ].join(',');
+
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
 
   const LEGACY_STYLE_IDS = [
@@ -154,7 +224,8 @@
     'aistudio-mobile-safe-151-style',
     'aistudio-mobile-safe-152-style',
     'aistudio-mobile-safe-160-style',
-    'aistudio-mobile-safe-161-style'
+    'aistudio-mobile-safe-161-style',
+    'aistudio-mobile-safe-162-style'
   ];
 
   const CSS_TEXT = `
@@ -241,6 +312,10 @@ ${SCOPE} :where(strong, b, .aistudio-md-repaired) {
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
+}
+
+${SCOPE} .aistudio-md-bold-italic {
+  font-style: italic !important;
 }
 
 ${SCOPE} :where(a) {
@@ -612,7 +687,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function findMatches(text) {
     const result = [];
-    const regex = /(\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
+    const regex = /(\*\*\*|___|\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
 
     let match;
 
@@ -646,7 +721,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
 
       /*
-       * ***bold*** 또는 ___bold___ 일부를 잘못 잡지 않는다.
+       * 네 개 이상의 연속 마커나 중첩 마커 일부를 잘못 잡지 않는다.
        */
       if (
         before === markerCharacter ||
@@ -661,7 +736,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
        * foo__bar__baz 같은 식별자를 Markdown으로 처리하지 않는다.
        */
       if (
-        marker === '__' &&
+        markerCharacter === '_' &&
         (
           isWordChar(before) ||
           isWordChar(after)
@@ -673,6 +748,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       result.push({
         start,
         end,
+        marker,
+        raw: match[0],
         inner
       });
     }
@@ -695,6 +772,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function createRepairedStrong(text, marker = '**') {
+    const strong = document.createElement('strong');
+    strong.className = marker.length === 3
+      ? 'aistudio-md-repaired aistudio-md-bold-italic'
+      : 'aistudio-md-repaired';
+    strong.setAttribute('data-aistudio-md-repaired', '1');
+    strong.setAttribute(
+      'data-aistudio-md-emphasis',
+      marker.length === 3 ? 'bold-italic' : 'bold'
+    );
+    strong.textContent = text;
+    return strong;
+  }
+
   function appendBoldRepairedText(fragment, text) {
     const matches = findMatches(text);
 
@@ -714,12 +805,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         );
       }
 
-      const strong = document.createElement('strong');
-      strong.className = 'aistudio-md-repaired';
-      strong.setAttribute('data-aistudio-md-repaired', '1');
-      strong.textContent = match.inner;
-
-      fragment.appendChild(strong);
+      fragment.appendChild(
+        createRepairedStrong(match.inner, match.marker)
+      );
       cursor = match.end;
     }
 
@@ -747,13 +835,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const text = textNode.nodeValue || '';
 
     /*
-     * 수식이 같은 텍스트 노드 안에 있으면 통째로 건너뛴다.
-     * 볼드보다 수식 안정성을 우선한다.
+     * findMatches가 수식 자체를 포함한 강조만 제외한다. 같은 텍스트
+     * 노드의 다른 위치에 있는 raw 수식 표기는 그대로 보존한다.
      */
-    if (
-      !hasPair(text) ||
-      hasMathLikeText(text)
-    ) {
+    if (!hasPair(text)) {
       return 0;
     }
 
@@ -967,6 +1052,224 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return repaired;
   }
 
+  function repairTextRecordForMatch(record, match) {
+    const textNode = record && record.node;
+
+    if (
+      !textNode ||
+      !textNode.parentNode ||
+      !textNode.isConnected
+    ) {
+      return false;
+    }
+
+    const text = textNode.nodeValue || '';
+    const markerLength = match.marker.length;
+    const innerStart = match.start + markerLength;
+    const innerEnd = match.end - markerLength;
+    const overlapStart = Math.max(record.start, match.start);
+    const overlapEnd = Math.min(record.end, match.end);
+
+    if (overlapEnd <= overlapStart) {
+      return false;
+    }
+
+    const localBoundaries = Array.from(new Set([
+      0,
+      text.length,
+      match.start - record.start,
+      innerStart - record.start,
+      innerEnd - record.start,
+      match.end - record.start
+    ].map((offset) => (
+      Math.max(0, Math.min(text.length, offset))
+    )))).sort((left, right) => left - right);
+
+    const fragment = document.createDocumentFragment();
+
+    for (
+      let index = 0;
+      index < localBoundaries.length - 1;
+      index += 1
+    ) {
+      const localStart = localBoundaries[index];
+      const localEnd = localBoundaries[index + 1];
+
+      if (localEnd <= localStart) {
+        continue;
+      }
+
+      const part = text.slice(localStart, localEnd);
+      const globalStart = record.start + localStart;
+      const globalEnd = record.start + localEnd;
+      const insideOpeningMarker =
+        globalStart >= match.start &&
+        globalEnd <= innerStart;
+      const insideClosingMarker =
+        globalStart >= innerEnd &&
+        globalEnd <= match.end;
+      const insideContent =
+        globalStart >= innerStart &&
+        globalEnd <= innerEnd;
+
+      if (insideOpeningMarker || insideClosingMarker) {
+        continue;
+      }
+
+      fragment.appendChild(
+        insideContent
+          ? createRepairedStrong(part, match.marker)
+          : document.createTextNode(part)
+      );
+    }
+
+    textNode.parentNode.replaceChild(fragment, textNode);
+    return true;
+  }
+
+  function repairInlineMatch(container, records, match) {
+    const start = textPosition(records, match.start, false);
+    const end = textPosition(records, match.end, true);
+
+    if (!start || !end) {
+      return false;
+    }
+
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+
+    const selected = range.cloneContents();
+    const selectedText = selected.textContent || '';
+    const crossesBoundary = Boolean(
+      selected.querySelector &&
+      selected.querySelector(INLINE_REPAIR_BOUNDARY_SELECTOR)
+    );
+
+    if (typeof range.detach === 'function') {
+      range.detach();
+    }
+
+    if (
+      selectedText !== match.raw ||
+      crossesBoundary
+    ) {
+      return false;
+    }
+
+    const affected = records.filter((record) => (
+      record.end > match.start &&
+      record.start < match.end
+    ));
+
+    if (!affected.length) {
+      return false;
+    }
+
+    for (let index = affected.length - 1; index >= 0; index -= 1) {
+      repairTextRecordForMatch(affected[index], match);
+    }
+
+    return true;
+  }
+
+  function repairInlineEmphasisInContainer(container) {
+    if (
+      !container ||
+      !container.isConnected ||
+      closest(container, USER_SELECTOR)
+    ) {
+      return 0;
+    }
+
+    const collect = () => {
+      const records = [];
+      const walker = document.createTreeWalker(
+        container,
+        NodeFilter.SHOW_TEXT
+      );
+      let text = '';
+
+      while (walker.nextNode()) {
+        const textNode = walker.currentNode;
+        const value = textNode.nodeValue || '';
+
+        if (!value || skipped(textNode)) {
+          continue;
+        }
+
+        const start = text.length;
+        text += value;
+        records.push({
+          node: textNode,
+          start,
+          end: text.length
+        });
+      }
+
+      return { records, text };
+    };
+
+    const snapshot = collect();
+
+    if (
+      !hasPair(snapshot.text) ||
+      snapshot.text.length > MAX_INLINE_REPAIR_LENGTH
+    ) {
+      return 0;
+    }
+
+    const matches = findMatches(snapshot.text);
+    let repaired = 0;
+
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const current = collect();
+
+      if (
+        repairInlineMatch(
+          container,
+          current.records,
+          matches[index]
+        )
+      ) {
+        repaired += 1;
+      }
+    }
+
+    return repaired;
+  }
+
+  function repairInlineEmphasis(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const containers = Array.from(
+      root.querySelectorAll(INLINE_REPAIR_CONTAINER_SELECTOR)
+    );
+
+    if (
+      root.matches &&
+      root.matches(INLINE_REPAIR_CONTAINER_SELECTOR)
+    ) {
+      containers.unshift(root);
+    } else {
+      /*
+       * 새 AI Studio 마크업이 별도 문단 래퍼 없이 inline 노드만
+       * 출력하는 경우에도 root 자체를 마지막 안전 후보로 사용한다.
+       */
+      containers.push(root);
+    }
+
+    let repaired = 0;
+
+    for (const container of containers) {
+      repaired += repairInlineEmphasisInContainer(container);
+    }
+
+    return repaired;
+  }
+
   function repairRoot(root) {
     if (
       !root ||
@@ -983,6 +1286,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     let repaired = repairSplitTableBreaks(root);
+    repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
       root,
       NodeFilter.SHOW_TEXT,

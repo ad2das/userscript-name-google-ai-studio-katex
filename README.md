@@ -33,7 +33,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.6.2 no longer uses a privileged GM API. Violentmonkey may inject it into
+Version 1.6.3 no longer uses a privileged GM API. Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
 does not retry a failed generation. It refreshes an exposed Google auth token when
 needed, warms the authenticated AI Studio document session before generation, and

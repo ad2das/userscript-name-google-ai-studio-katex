@@ -6,11 +6,12 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.6\.2/);
+assert.match(source, /\/\/ @version\s+1\.6\.3/);
 assert.match(source, /\/\/ @inject-into\s+auto/);
 assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
 assert.match(source, /function repairSplitTableBreaksInCell/);
+assert.match(source, /function repairInlineEmphasisInContainer/);
 assert.match(source, /if \(pageGenerating\) \{\s*return;\s*\}/);
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 
@@ -24,6 +25,7 @@ const instrumented = source.replace(
     MODEL_ACTIVITY_SELECTOR,
     buttonLabel,
     canSubmit,
+    findMatches,
     generating,
     hasLiteralTableBreak,
     installSessionKeepalive,
@@ -174,6 +176,20 @@ assert.equal(api.isStopActionLabel('Run'), false);
 assert.equal(api.hasLiteralTableBreak('first<br>second'), true);
 assert.equal(api.hasLiteralTableBreak('first<BR />second'), true);
 assert.equal(api.hasLiteralTableBreak('first break second'), false);
+
+const adjacentMathMatch = api.findMatches(
+  'Formula $x$ remains raw while **this is bold**.'
+);
+assert.equal(adjacentMathMatch.length, 1);
+assert.equal(adjacentMathMatch[0].inner, 'this is bold');
+assert.equal(api.findMatches('Keep **$x$** math untouched.').length, 0);
+assert.equal(api.findMatches('Keep \\**escaped** markers.').length, 0);
+assert.equal(api.findMatches('foo__bar__baz').length, 0);
+assert.equal(api.findMatches('Render ***bold italic*** too.').length, 1);
+assert.equal(
+  api.findMatches('Render ***bold italic*** too.')[0].marker,
+  '***'
+);
 
 let replacement = null;
 const tableCell = {

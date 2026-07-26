@@ -12,6 +12,12 @@
   <ms-chat-turn>
     <div class="chat-turn-container model">
       <ms-cmark-node>
+        <p id="split-bold"><span>*</span><span>*split </span><em>bold</em><span>**</span></p>
+        <p id="multiple-bold">**first** and <span>**sec</span><span>ond**</span></p>
+        <p id="split-bold-italic"><span>**</span><span>*very important</span><span>***</span></p>
+        <p id="math-adjacent-bold">Formula $x$ remains raw while **this is bold**.</p>
+        <p id="code-boundary-bold"><span>**do not </span><code>cross code</code><span> here**</span></p>
+        <p id="link-boundary-bold"><span>**do not </span><a href="#">cross links</a><span> here**</span></p>
         <table>
           <tbody>
             <tr>
