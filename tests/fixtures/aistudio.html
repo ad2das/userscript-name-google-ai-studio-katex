@@ -55,6 +55,12 @@
         <p id="existing-rendered-math"><span class="katex">already rendered</span></p>
         <p id="code-boundary-bold"><span>**do not </span><code>cross code</code><span> here**</span></p>
         <p id="link-boundary-bold"><span>**do not </span><a href="#">cross links</a><span> here**</span></p>
+        <pre id="reported-prose-code-bold"><code>이미 자산으로 잡혀있는 브랜드라도 **&quot;취득 후의 지출(후속지출)&quot;은 자산인식 요건을 따질 것도 없이 무조건 100% 당기비용**으로 처리해야 합니다. ⑤번 선지에서 자산으로 인식될 수 있다고 했으므로 바로 정답!</code></pre>
+        <pre id="reported-prose-code-split"><code>이미 자산으로 잡혀있는 브랜드라도 *<span>*&quot;취득 후의 지출(후속지출)&quot;은 자산인식 요건을 </span><span>따질 것도 없이 무조건 100% 당기비용*</span>*으로 처리해야 합니다. 바로 정답!</code></pre>
+        <pre id="actual-code-bold"><code>const label = &quot;**literal markdown**&quot;;</code></pre>
+        <pre id="korean-code-bold"><code>const label = &quot;**정답**&quot;; // 한국어 코드 예시</code></pre>
+        <pre id="markdown-syntax-example"><code>마크다운 문법 예시: **굵게**</code></pre>
+        <pre id="language-code-bold"><code class="language-text">한국어 설명입니다. **굵게 표시합니다.**</code></pre>
         <table>
           <tbody>
             <tr>
@@ -107,6 +113,7 @@
       <p id="user-raw-math">begin{aligned}x&amp;=\mathbf{y}\end{aligned}</p>
       <p id="user-native-bold-math"></p>
       <p id="user-raw-underline">&lt;u&gt;사용자 원문&lt;/u&gt;</p>
+      <pre id="user-prose-code-bold"><code>사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.</code></pre>
     </div>
   </ms-chat-turn>
 </body>

@@ -31,6 +31,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Bold fallback for unsupported enclosed and currency glyphs such as `①` and `₩`
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses
+- Bold Korean prose that AI Studio misclassifies as an indented code block,
+  while preserving actual code and literal Markdown syntax examples
 - Literal `<u>underlined text</u>` in completed model responses, including tags
   split across multiple inline nodes, without interpreting attributes or other HTML
 - Mobile readable Google/Samsung-like font stack
@@ -48,7 +50,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.8.2 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.8.3 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
