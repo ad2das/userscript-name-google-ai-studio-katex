@@ -59,6 +59,15 @@ async (page) => {
       document.getElementById('user-native-bold-math'),
       options
     );
+    window.__unexpectedBarrierMathSources = [];
+    const originalKatexRender = window.katex.render.bind(window.katex);
+    window.katex.render = (source, element, renderOptions) => {
+      if (String(source).includes('{aistudio-dom-barrier')) {
+        window.__unexpectedBarrierMathSources.push(String(source));
+      }
+
+      return originalKatexRender(source, element, renderOptions);
+    };
   });
   await page.addScriptTag({ path: 'aaa.user.js' });
   await page.waitForTimeout(4000);
@@ -82,13 +91,17 @@ async (page) => {
       'raw-standalone-bold',
       'mixed-partial-math',
       'modern-raw-math',
-      'embedded-acquisition-math'
+      'embedded-acquisition-math',
+      'structured-development-response'
     ];
     const rawMathNodes = rawMathIds.map((id) => document.getElementById(id));
     const sourceOf = (id) => document
       .getElementById(id)
       .querySelector('annotation[encoding="application/x-tex"]')
       ?.textContent;
+    const fontWeightOf = (element) => element
+      ? Number(getComputedStyle(element).fontWeight)
+      : 0;
     const codeBoundaryBold = document.getElementById('code-boundary-bold');
     const linkBoundaryBold = document.getElementById('link-boundary-bold');
     return {
@@ -157,6 +170,33 @@ async (page) => {
           '#embedded-acquisition-math .aistudio-katex-bold-glyph-fallback'
         )).find((element) => element.textContent.includes('①'))
       ).fontWeight),
+      developmentSource: sourceOf('structured-development-response'),
+      developmentHeadingPreserved:
+        document.getElementById('development-heading')?.textContent ===
+        '계산 및 정답',
+      developmentExplanationPreserved:
+        document.getElementById('development-explanation')?.textContent ===
+        '개발비(무형자산)로 인식할 금액은 위 표에서 🛠️ 개발로 분류된 4가지의 합계입니다.',
+      developmentTablePreserved:
+        document.querySelectorAll('#development-table td').length === 2 &&
+        document.getElementById('development-table').textContent.includes(
+          '4개 항목'
+        ),
+      developmentAnswerPreserved:
+        document.getElementById('development-answer')?.textContent ===
+        '정답: ② ₩332,000',
+      developmentWonBoldWeight: fontWeightOf(
+        Array.from(document.querySelectorAll(
+          '#structured-development-response ' +
+          '.aistudio-katex-bold-glyph-fallback'
+        )).find((element) => element.textContent.includes('₩'))
+      ),
+      developmentNormalCircledFallbackCount: Array.from(
+        document.querySelectorAll(
+          '#structured-development-response ' +
+          '.aistudio-katex-bold-glyph-fallback'
+        )
+      ).filter((element) => /[③④⑦⑨]/.test(element.textContent)).length,
       alignedBoldCount: document.querySelectorAll(
         '#raw-aligned-equation .katex-html .mathbf'
       ).length,
@@ -226,8 +266,10 @@ async (page) => {
         document.getElementById('fenced-raw-math').textContent.includes(
           String.raw`\begin{aligned}`
         ),
+      unexpectedBarrierMathSources:
+        window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-180'
+        'data-aistudio-mobile-safe-181'
       )
     };
   });
@@ -245,9 +287,9 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
-    rendering.rawMathCount !== 10 ||
-    rendering.rawMathKatexCount !== 10 ||
-    rendering.rawMathMathmlCount !== 10 ||
+    rendering.rawMathCount !== 11 ||
+    rendering.rawMathKatexCount !== 11 ||
+    rendering.rawMathMathmlCount !== 11 ||
     rendering.rawMathErrorCount !== 0 ||
     !rendering.arraySource?.startsWith('\\begin{array}{ll|ll}') ||
     !rendering.arraySource?.includes('\\\\') ||
@@ -266,6 +308,13 @@ async (page) => {
     rendering.embeddedRepairCount !== '1' ||
     rendering.embeddedBoldWeight < 600 ||
     rendering.embeddedCircledBoldWeight < 600 ||
+    !rendering.developmentSource?.includes('\\text{\\bf ₩}') ||
+    !rendering.developmentHeadingPreserved ||
+    !rendering.developmentExplanationPreserved ||
+    !rendering.developmentTablePreserved ||
+    !rendering.developmentAnswerPreserved ||
+    rendering.developmentWonBoldWeight < 600 ||
+    rendering.developmentNormalCircledFallbackCount !== 0 ||
     rendering.alignedBoldCount < 3 ||
     rendering.matrixBoldCount < 1 ||
     !rendering.markdownMathBold ||
@@ -290,7 +339,8 @@ async (page) => {
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
     !rendering.fencedMathPreserved ||
-    rendering.version !== '1.8.0'
+    rendering.unexpectedBarrierMathSources.length !== 0 ||
+    rendering.version !== '1.8.1'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.0
+// @version      1.8.1
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.0';
-  const STYLE_ID = 'aistudio-mobile-safe-180-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-180';
+  const VERSION = '1.8.1';
+  const STYLE_ID = 'aistudio-mobile-safe-181-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-181';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -260,6 +260,35 @@
     '.very-large-text-container'
   ].join(',');
 
+  const RAW_MATH_RANGE_BLOCK_SELECTOR = [
+    'p',
+    'li',
+    'blockquote',
+    'figcaption',
+    'dd',
+    'dt',
+    'th',
+    'td',
+    'div',
+    'section',
+    'article',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'ms-cmark-node',
+    'ms-text-chunk'
+  ].join(',');
+
+  const RAW_MATH_RANGE_BARRIER_SELECTOR = [
+    SKIP_SELECTOR,
+    'table',
+    '.aistudio-rendered-math-bold-repaired'
+  ].join(',');
+  const RAW_MATH_RANGE_BARRIER_TEXT = '\n{aistudio-dom-barrier\n';
+
   const INLINE_REPAIR_BOUNDARY_SELECTOR = [
     'br',
     'hr',
@@ -334,7 +363,8 @@
     'aistudio-mobile-safe-164-style',
     'aistudio-mobile-safe-165-style',
     'aistudio-mobile-safe-170-style',
-    'aistudio-mobile-safe-171-style'
+    'aistudio-mobile-safe-171-style',
+    'aistudio-mobile-safe-180-style'
   ];
 
   const CSS_TEXT = `
@@ -2248,35 +2278,53 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const enclosedGlyph = /[\u2460-\u24FF\u2776-\u2793\u{1F100}-\u{1F1FF}]/u;
+    const unsupportedGlyph = /[\u20A0-\u20CF\u2460-\u24FF\u2776-\u2793\u{1F100}-\u{1F1FF}]/gu;
+    const glyphWeights = new Map();
     let marked = 0;
 
-    for (const group of rendered.querySelectorAll(
-      '.katex-html .mord.text > .mord'
+    for (const mathmlToken of rendered.querySelectorAll(
+      '.katex-mathml mtext, .katex-mathml mi, ' +
+      '.katex-mathml mn, .katex-mathml mo'
     )) {
-      const children = Array.from(group.children || []);
-      const hasBoldSibling = children.some((element) => (
-        element.classList &&
-        (
-          element.classList.contains('mathbf') ||
-          element.classList.contains('textbf') ||
-          element.classList.contains('boldsymbol')
-        )
-      ));
+      for (const glyph of (
+        (mathmlToken.textContent || '').match(unsupportedGlyph) || []
+      )) {
+        if (!glyphWeights.has(glyph)) {
+          glyphWeights.set(glyph, []);
+        }
 
-      if (!hasBoldSibling) {
+        glyphWeights.get(glyph).push(Boolean(
+          mathmlToken.closest('[mathvariant="bold"]')
+        ));
+      }
+    }
+
+    if (!glyphWeights.size) {
+      return 0;
+    }
+
+    for (const element of rendered.querySelectorAll('.katex-html span')) {
+      if (element.children.length || !element.classList) {
         continue;
       }
 
-      for (const element of children) {
-        if (
-          element.classList &&
-          enclosedGlyph.test(element.textContent || '') &&
-          !element.classList.contains('aistudio-katex-bold-glyph-fallback')
-        ) {
-          element.classList.add('aistudio-katex-bold-glyph-fallback');
-          marked += 1;
+      const glyphs = (element.textContent || '').match(unsupportedGlyph) || [];
+      let shouldBeBold = false;
+
+      for (const glyph of glyphs) {
+        const weights = glyphWeights.get(glyph);
+
+        if (weights && weights.length && weights.shift()) {
+          shouldBeBold = true;
         }
+      }
+
+      if (
+        shouldBeBold &&
+        !element.classList.contains('aistudio-katex-bold-glyph-fallback')
+      ) {
+        element.classList.add('aistudio-katex-bold-glyph-fallback');
+        marked += 1;
       }
     }
 
@@ -2421,76 +2469,201 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return null;
   }
 
-  function hasOnlyPlainEmbeddedMathMarkup(container) {
-    if (!container || !container.querySelectorAll) {
-      return false;
-    }
+  function mappedRawMathSource(container) {
+    let source = '';
+    const segments = [];
 
-    return Array.from(container.querySelectorAll('*')).every((element) => (
-      ['BR', 'SPAN', 'WBR'].includes(element.tagName)
-    ));
-  }
+    const appendBoundary = () => {
+      source += '\n';
+    };
 
-  function appendPreservedRawText(fragment, source) {
-    const lines = source.split('\n');
-
-    for (let index = 0; index < lines.length; index += 1) {
-      if (lines[index]) {
-        fragment.appendChild(document.createTextNode(lines[index]));
+    const visit = (node) => {
+      if (!node) {
+        return;
       }
 
-      if (index < lines.length - 1) {
-        const lineBreak = document.createElement('br');
-        lineBreak.className = 'aistudio-raw-math-preserved-break';
-        fragment.appendChild(lineBreak);
+      if (node.nodeType === 3) {
+        const value = node.nodeValue || '';
+
+        if (value) {
+          const start = source.length;
+          source += value;
+          segments.push({
+            end: source.length,
+            node,
+            start
+          });
+        }
+
+        return;
       }
-    }
+
+      if (node.nodeType !== 1) {
+        return;
+      }
+
+      if (
+        node !== container &&
+        node.matches &&
+        node.matches(RAW_MATH_RANGE_BARRIER_SELECTOR)
+      ) {
+        source += RAW_MATH_RANGE_BARRIER_TEXT;
+        return;
+      }
+
+      if (node.matches && node.matches('br')) {
+        appendBoundary();
+        return;
+      }
+
+      const isBlock = Boolean(
+        node !== container &&
+        node.matches &&
+        node.matches(RAW_MATH_RANGE_BLOCK_SELECTOR)
+      );
+
+      if (isBlock) {
+        appendBoundary();
+      }
+
+      for (const child of Array.from(node.childNodes || [])) {
+        visit(child);
+      }
+
+      if (isBlock) {
+        appendBoundary();
+      }
+    };
+
+    visit(container);
+
+    return { segments, source };
   }
 
-  function repairEmbeddedRawMathContainer(container, source) {
+  function mappedRawMathPoint(segments, index, endPoint) {
+    for (const segment of segments) {
+      const contains = endPoint
+        ? index > segment.start && index <= segment.end
+        : index >= segment.start && index < segment.end;
+
+      if (contains) {
+        return {
+          node: segment.node,
+          offset: index - segment.start
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function mappedRawMathRange(mapping, block) {
     if (
-      !source ||
-      !hasOnlyPlainEmbeddedMathMarkup(container)
+      !mapping ||
+      !block ||
+      typeof document.createRange !== 'function'
     ) {
+      return null;
+    }
+
+    const start = mappedRawMathPoint(
+      mapping.segments,
+      block.start,
+      false
+    );
+    const end = mappedRawMathPoint(
+      mapping.segments,
+      block.end,
+      true
+    );
+
+    if (!start || !end) {
+      return null;
+    }
+
+    const range = document.createRange();
+
+    try {
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+
+      const selected = range.cloneContents();
+
+      if (
+        range.collapsed ||
+        (
+          selected.querySelector &&
+          selected.querySelector(RAW_MATH_RANGE_BARRIER_SELECTOR)
+        )
+      ) {
+        range.detach();
+        return null;
+      }
+    } catch (_) {
+      range.detach();
+      return null;
+    }
+
+    return range;
+  }
+
+  function repairEmbeddedRawMathRanges(container) {
+    if (!container || !container.querySelectorAll) {
       return 0;
     }
 
-    const renderedBlocks = [];
+    const mapping = mappedRawMathSource(container);
+    const operations = [];
 
-    for (const block of findEmbeddedRawMathBlocks(source)) {
+    for (const block of findEmbeddedRawMathBlocks(mapping.source)) {
+      const range = mappedRawMathRange(mapping, block);
+
+      if (!range) {
+        continue;
+      }
+
       const replacement =
         renderRawMathCandidate(block.candidate) ||
         fallbackRawMath(block.source, block.candidate);
 
       if (replacement) {
-        renderedBlocks.push({ ...block, replacement });
+        operations.push({ range, replacement });
+      } else {
+        range.detach();
       }
     }
 
-    if (!renderedBlocks.length) {
-      return 0;
+    let repaired = 0;
+
+    for (
+      let index = operations.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const operation = operations[index];
+
+      try {
+        operation.range.deleteContents();
+        operation.range.insertNode(operation.replacement);
+        repaired += 1;
+      } catch (_) {
+        // DOM이 동시에 갱신된 경우 다음 스캔에서 다시 시도한다.
+      } finally {
+        operation.range.detach();
+      }
     }
 
-    const fragment = document.createDocumentFragment();
-    let cursor = 0;
-
-    for (const block of renderedBlocks) {
-      appendPreservedRawText(
-        fragment,
-        source.slice(cursor, block.start)
+    if (repaired) {
+      const previous = Number(container.getAttribute(
+        'data-aistudio-embedded-raw-math-repaired'
+      )) || 0;
+      container.setAttribute(
+        'data-aistudio-embedded-raw-math-repaired',
+        String(previous + repaired)
       );
-      fragment.appendChild(block.replacement);
-      cursor = block.end;
     }
 
-    appendPreservedRawText(fragment, source.slice(cursor));
-    container.replaceChildren(fragment);
-    container.setAttribute(
-      'data-aistudio-embedded-raw-math-repaired',
-      String(renderedBlocks.length)
-    );
-
-    return renderedBlocks.length;
+    return repaired;
   }
 
   function repairRawMathContainer(container) {
@@ -2499,14 +2672,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       !container.isConnected ||
       closest(container, USER_SELECTOR) ||
       closest(container, SKIP_SELECTOR) ||
-      (
-        container.querySelector &&
-        container.querySelector(
-          'a, code, pre, table, .aistudio-array-repaired, ' +
-          '.aistudio-aligned-repaired, .aistudio-raw-math-repaired, ' +
-          '.aistudio-rendered-math-bold-repaired'
-        )
-      ) ||
+      !container.querySelector ||
       typeof container.replaceChildren !== 'function'
     ) {
       return 0;
@@ -2524,47 +2690,43 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const mixedSource = sourceFromMixedMathDom(container);
-    const sources = containsRenderedMath
-      ? [mixedSource].filter(Boolean)
-      : Array.from(new Set([
-        mixedSource,
-        container.textContent || '',
-        typeof container.innerText === 'string'
-          ? container.innerText
-          : ''
-      ].filter(Boolean)));
+    const canReplaceWhole = !container.querySelector(
+      'a, code, pre, table, .aistudio-array-repaired, ' +
+      '.aistudio-aligned-repaired, .aistudio-raw-math-repaired, ' +
+      '.aistudio-rendered-math-bold-repaired'
+    );
 
-    for (const source of sources) {
-      const candidate = parseRawMathCandidate(source);
+    if (canReplaceWhole) {
+      const mixedSource = sourceFromMixedMathDom(container);
+      const sources = containsRenderedMath
+        ? [mixedSource].filter(Boolean)
+        : Array.from(new Set([
+          mixedSource,
+          container.textContent || '',
+          typeof container.innerText === 'string'
+            ? container.innerText
+            : ''
+        ].filter(Boolean)));
 
-      if (!candidate) {
-        continue;
-      }
-
-      const replacement =
-        renderRawMathCandidate(candidate) ||
-        fallbackRawMath(source, candidate);
-
-      if (!replacement) {
-        continue;
-      }
-
-      container.replaceChildren(replacement);
-      return 1;
-    }
-
-    if (!containsRenderedMath) {
       for (const source of sources) {
-        const repaired = repairEmbeddedRawMathContainer(container, source);
+        const candidate = parseRawMathCandidate(source);
 
-        if (repaired) {
-          return repaired;
+        if (!candidate) {
+          continue;
+        }
+
+        const replacement =
+          renderRawMathCandidate(candidate) ||
+          fallbackRawMath(source, candidate);
+
+        if (replacement) {
+          container.replaceChildren(replacement);
+          return 1;
         }
       }
     }
 
-    return 0;
+    return repairEmbeddedRawMathRanges(container);
   }
 
   function repairRawMath(root) {

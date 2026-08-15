@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.8\.0/);
+assert.match(source, /\/\/ @version\s+1\.8\.1/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -651,6 +651,43 @@ const embeddedAcquisitionHtml = katex.renderToString(
 );
 assert.match(embeddedAcquisitionHtml, /class="katex"/);
 assert.match(embeddedAcquisitionHtml, /① 쌩 공사비/);
+
+const structuredDevelopmentResponse = String.raw`계산 및 정답
+
+개발비(무형자산)로 인식할 금액은 위 표에서 🛠️ 개발로 분류된 4가지의 합계입니다.
+
+\begin{aligned}
+\text{개발비} &= \text{③ 시제품}(12,000) + \text{④ 금형설계}(80,000) \
+&\quad + \text{⑦ 시험공장}(200,000) + \text{⑨ 최종선정안 제작시험}(40,000) \
+&= \mathbf{\text{₩}332,000}
+\end{aligned}
+
+정답: ② ₩332,000`;
+const structuredDevelopmentBlocks = api.findEmbeddedRawMathBlocks(
+  structuredDevelopmentResponse
+);
+assert.equal(structuredDevelopmentBlocks.length, 1);
+assert.equal(structuredDevelopmentBlocks[0].candidate.environment, 'aligned');
+assert.match(
+  structuredDevelopmentBlocks[0].candidate.tex,
+  /\\mathbf\{\\text\{\\bf ₩\}332,000\}/
+);
+assert.doesNotMatch(
+  structuredDevelopmentBlocks[0].candidate.tex,
+  /\\text\{\\bf ③ 시제품\}/
+);
+const structuredDevelopmentHtml = katex.renderToString(
+  structuredDevelopmentBlocks[0].candidate.tex,
+  {
+    displayMode: true,
+    output: 'htmlAndMathml',
+    throwOnError: true,
+    strict: 'ignore',
+    trust: false
+  }
+);
+assert.match(structuredDevelopmentHtml, /class="katex"/);
+assert.match(structuredDevelopmentHtml, /₩/);
 
 const multipleEmbeddedBlocks = api.findEmbeddedRawMathBlocks(String.raw`제목
 $$\mathbf{첫째}$$
