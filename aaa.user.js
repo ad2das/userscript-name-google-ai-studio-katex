@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.3
+// @version      1.8.4
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.3';
-  const STYLE_ID = 'aistudio-mobile-safe-183-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-183';
+  const VERSION = '1.8.4';
+  const STYLE_ID = 'aistudio-mobile-safe-184-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-184';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -38,7 +38,7 @@
    * - 실제 code / pre / link / input 내부 수정
    * - 링크, 코드, 수식, 블록 경계를 가로질러 **bold**를 합치기
    *
-   * 단, 한 줄 한국어 설명문이 들여쓰기 때문에 pre > code로 잘못
+   * 단, 한국어 설명문이 들여쓰기 때문에 pre > code로 잘못
    * 분류된 경우에는 코드 신호가 없을 때만 raw bold를 복구한다.
    *
    * v1.5.2 핵심:
@@ -372,7 +372,8 @@
     'aistudio-mobile-safe-171-style',
     'aistudio-mobile-safe-180-style',
     'aistudio-mobile-safe-181-style',
-    'aistudio-mobile-safe-182-style'
+    'aistudio-mobile-safe-182-style',
+    'aistudio-mobile-safe-183-style'
   ];
 
   const CSS_TEXT = `
@@ -673,7 +674,7 @@ code.aistudio-prose-code-repaired {
   font-family: var(--as-font) !important;
   font-size: inherit !important;
   line-height: inherit !important;
-  white-space: normal !important;
+  white-space: pre-line !important;
   overflow-wrap: break-word !important;
   word-break: normal !important;
 }
@@ -2862,11 +2863,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       /*
        * foo__bar__baz 같은 식별자를 Markdown으로 처리하지 않는다.
        */
+      const asciiIdentifierInner = /^[0-9A-Za-z_]+$/.test(inner);
+
       if (
         markerCharacter === '_' &&
         (
           isWordChar(before) ||
-          isWordChar(after)
+          (
+            isWordChar(after) &&
+            asciiIdentifierInner
+          )
         )
       ) {
         continue;
@@ -2891,8 +2897,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       !source ||
       source.length > MAX_INLINE_REPAIR_LENGTH ||
       !hasPair(source) ||
-      hasMathLikeText(source) ||
-      /\n\s*\n/.test(source)
+      hasMathLikeText(source)
     ) {
       return false;
     }
@@ -2901,7 +2906,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       .split(/\r?\n/)
       .filter((line) => line.trim());
 
-    if (nonEmptyLines.length > 3) {
+    const paragraphs = source
+      .split(/\r?\n\s*\r?\n/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean);
+
+    if (
+      nonEmptyLines.length > 30 ||
+      paragraphs.length > 12
+    ) {
       return false;
     }
 
@@ -2914,6 +2927,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|switch|try|catch)\b/im.test(source) ||
       /(?:^|\n)\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/im.test(source) ||
       /(?:^|\n)\s*[$>#]\s/m.test(source) ||
+      /(?:^|\n)\s*(?:\/\/|\/\*|\*\/|<!--)/m.test(source) ||
+      /(?:^|\n)\s*[A-Za-z_$][\w$.[\]-]*\s*(?:=|\+=|-=|\*=|\/=)/m.test(source) ||
+      /(?:^|\n)\s*[A-Za-z_][\w.-]*\s*:\s+\S/m.test(source) ||
+      /^\s*["'`][\s\S]*["'`]\s*;?\s*$/.test(source) ||
       /(?:=>|===|!==|&&|\|\||::|[{}]|;\s*(?:\n|$))/m.test(source) ||
       /<\/?[A-Za-z][^>]*>/.test(source) ||
       /\b(?:console\.(?:log|error|warn)|print|printf|echo)\s*\(/i.test(source) ||
@@ -2924,23 +2941,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const matches = findMatches(source);
-    const hangulCount = (source.match(/[가-힣]/g) || []).length;
-    const visibleCount = (source.match(/[^\s*_]/g) || []).length;
     const hasKoreanEmphasis = matches.some((match) => (
       /[가-힣]{2}/.test(match.inner)
     ));
-    const sentenceLike = (
-      /(?:다|요|함|임|까|자)(?:[.!?]|$)/.test(source) ||
-      /[.!?](?:\s|$)/.test(source)
-    );
+    const paragraphsLookLikeProse = paragraphs.every((paragraph) => {
+      const hangulCount = (paragraph.match(/[가-힣]/g) || []).length;
+      const visibleCount = (paragraph.match(/[^\s*_]/g) || []).length;
+      const sentenceLike = (
+        /(?:다|요|함|임|까|자)(?:[.!?]["'”’]?|$)/.test(paragraph) ||
+        /[.!?]["'”’]?(?:\s|$)/.test(paragraph)
+      );
+
+      return Boolean(
+        sentenceLike &&
+        hangulCount >= 4 &&
+        visibleCount > 0 &&
+        hangulCount / visibleCount >= 0.2
+      );
+    });
 
     return Boolean(
       matches.length &&
       hasKoreanEmphasis &&
-      sentenceLike &&
-      hangulCount >= 8 &&
-      visibleCount > 0 &&
-      hangulCount / visibleCount >= 0.25
+      paragraphs.length &&
+      paragraphsLookLikeProse
     );
   }
 

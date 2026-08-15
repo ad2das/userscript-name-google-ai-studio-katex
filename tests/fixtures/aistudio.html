@@ -16,6 +16,9 @@
         <p id="multiple-bold">**first** and <span>**sec</span><span>ond**</span></p>
         <p id="split-bold-italic"><span>**</span><span>*very important</span><span>***</span></p>
         <p id="math-adjacent-bold">Formula $x$ remains raw while **this is bold**.</p>
+        <h3 id="heading-bold">핵심 제목은 **항상 충족**입니다.</h3>
+        <blockquote id="blockquote-bold">인용문에서도 **신뢰성 있게 측정**합니다.</blockquote>
+        <ul><li id="korean-underscore-bold">목록에서는 __필수 조건__입니다.</li></ul>
         <div id="raw-underline-passages">
           <p id="underline-correct">맞는 지문: "법적 권리가 없는 경우에는 통제를 제시하기 &lt;<span>u&gt;어렵</span><span>다&lt;/u</span><span>&gt;.</span>" ( O )</p>
           <p id="underline-wrong-absolute">틀린 지문: "법적 권리가 없는 경우에는 통제를 제시할 수 &lt;u&gt;없다&lt;/u&gt;." ( ❌ )</p>
@@ -57,6 +60,9 @@
         <p id="link-boundary-bold"><span>**do not </span><a href="#">cross links</a><span> here**</span></p>
         <pre id="reported-prose-code-bold"><code>이미 자산으로 잡혀있는 브랜드라도 **&quot;취득 후의 지출(후속지출)&quot;은 자산인식 요건을 따질 것도 없이 무조건 100% 당기비용**으로 처리해야 합니다. ⑤번 선지에서 자산으로 인식될 수 있다고 했으므로 바로 정답!</code></pre>
         <pre id="reported-prose-code-split"><code>이미 자산으로 잡혀있는 브랜드라도 *<span>*&quot;취득 후의 지출(후속지출)&quot;은 자산인식 요건을 </span><span>따질 것도 없이 무조건 100% 당기비용*</span>*으로 처리해야 합니다. 바로 정답!</code></pre>
+        <pre id="reported-ma-prose-code"><code>회사를 통째로 M&amp;A할 때는 전문 감정평가법인이 피인수 회사의 모든 특허와 브랜드를 샅샅이 뒤져서 취득일의 '공정가치'를 무조건 산출해 냅니다.
+
+그래서 기준서(제1038호 문단 33)는 **&quot;M&amp;A로 취득하는 무형자산은 유입가능성과 신뢰성 있는 측정 기준 둘 다 항상 충족하는 것으로 본다!&quot;**라고 못을 박아두었습니다.</code></pre>
         <pre id="actual-code-bold"><code>const label = &quot;**literal markdown**&quot;;</code></pre>
         <pre id="korean-code-bold"><code>const label = &quot;**정답**&quot;; // 한국어 코드 예시</code></pre>
         <pre id="markdown-syntax-example"><code>마크다운 문법 예시: **굵게**</code></pre>
@@ -75,6 +81,7 @@
         </table>
       </ms-cmark-node>
       <ms-text-chunk id="modern-text-chunk">
+        <div id="modern-chunk-bold" class="very-large-text-container">현대 출력에서도 **공정가치를 측정**합니다.</div>
         <div id="modern-raw-math" class="very-large-text-container">begin{aligned}
           \mathbf{매출\text{원}} &amp;= 10 \
           &amp;= \boldsymbol{x}
