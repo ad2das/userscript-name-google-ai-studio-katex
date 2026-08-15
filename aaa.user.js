@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.7.1
+// @version      1.8.0
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.7.1';
-  const STYLE_ID = 'aistudio-mobile-safe-171-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-171';
+  const VERSION = '1.8.0';
+  const STYLE_ID = 'aistudio-mobile-safe-180-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-180';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -333,7 +333,8 @@
     'aistudio-mobile-safe-163-style',
     'aistudio-mobile-safe-164-style',
     'aistudio-mobile-safe-165-style',
-    'aistudio-mobile-safe-170-style'
+    'aistudio-mobile-safe-170-style',
+    'aistudio-mobile-safe-171-style'
   ];
 
   const CSS_TEXT = `
@@ -466,6 +467,17 @@ ${SCOPE} :where(
   font-family: var(--as-font) !important;
   font-weight: 700 !important;
   font-synthesis: weight !important;
+}
+
+/* KaTeX 글꼴 메트릭이 없는 ① 같은 enclosed glyph도 굵은 그룹에 맞춘다. */
+${SCOPE} :where(
+  .aistudio-raw-math-repaired,
+  .aistudio-rendered-math-bold-repaired
+) .aistudio-katex-bold-glyph-fallback {
+  font-weight: 700 !important;
+  font-synthesis: weight !important;
+  -webkit-text-stroke: 0.12px currentColor !important;
+  text-shadow: 0.01em 0 currentColor, -0.01em 0 currentColor !important;
 }
 
 ${SCOPE} .aistudio-rendered-math-bold-repaired {
@@ -1155,6 +1167,274 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       kind: 'standalone-bold',
       tex: normalizeKatexCommands(source)
     };
+  }
+
+  function markdownFencedCodeRanges(source) {
+    if (!source) {
+      return [];
+    }
+
+    const ranges = [];
+    const lines = source.split('\n');
+    let offset = 0;
+    let fence = null;
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const rawLine = lines[index];
+      const line = rawLine.endsWith('\r')
+        ? rawLine.slice(0, -1)
+        : rawLine;
+      const lineEnd = offset + rawLine.length + (
+        index < lines.length - 1 ? 1 : 0
+      );
+      const match = line.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
+
+      if (match) {
+        const marker = match[1];
+
+        if (!fence) {
+          fence = {
+            character: marker[0],
+            length: marker.length,
+            start: offset
+          };
+        } else if (
+          marker[0] === fence.character &&
+          marker.length >= fence.length &&
+          !match[2].trim()
+        ) {
+          ranges.push({ start: fence.start, end: lineEnd });
+          fence = null;
+        }
+      }
+
+      offset = lineEnd;
+    }
+
+    if (fence) {
+      ranges.push({ start: fence.start, end: source.length });
+    }
+
+    return ranges;
+  }
+
+  function rangeOverlaps(ranges, start, end) {
+    return ranges.some((range) => (
+      start < range.end && end > range.start
+    ));
+  }
+
+  function whitespaceOnlyOnLineBefore(source, index) {
+    const lineStart = source.lastIndexOf('\n', index - 1) + 1;
+
+    return !source.slice(lineStart, index).trim();
+  }
+
+  function whitespaceOnlyOnLineAfter(source, index) {
+    const nextLine = source.indexOf('\n', index);
+    const lineEnd = nextLine === -1 ? source.length : nextLine;
+
+    return !source.slice(index, lineEnd).trim();
+  }
+
+  function delimiterIsEscaped(source, index) {
+    let slashes = 0;
+
+    for (
+      let cursor = index - 1;
+      cursor >= 0 && source[cursor] === '\\';
+      cursor -= 1
+    ) {
+      slashes += 1;
+    }
+
+    return slashes % 2 === 1;
+  }
+
+  function findEnvironmentMathBlocks(source, protectedRanges) {
+    const blocks = [];
+    const openingPattern = /(?:\\)?begin\s*\{([A-Za-z][A-Za-z*]*)\}/g;
+    let opening;
+
+    while ((opening = openingPattern.exec(source))) {
+      const environment = opening[1];
+
+      if (!RAW_MATH_ENVIRONMENTS.has(environment)) {
+        continue;
+      }
+
+      const tokenPattern = /(?:\\)?(begin|end)\s*\{([A-Za-z][A-Za-z*]*)\}/g;
+      tokenPattern.lastIndex = openingPattern.lastIndex;
+      let depth = 1;
+      let closingEnd = -1;
+      let token;
+
+      while ((token = tokenPattern.exec(source))) {
+        if (token[2] !== environment) {
+          continue;
+        }
+
+        depth += token[1] === 'begin' ? 1 : -1;
+
+        if (depth === 0) {
+          closingEnd = tokenPattern.lastIndex;
+          break;
+        }
+      }
+
+      if (closingEnd === -1) {
+        continue;
+      }
+
+      const start = opening.index;
+      const end = closingEnd;
+
+      openingPattern.lastIndex = end;
+
+      if (
+        !whitespaceOnlyOnLineBefore(source, start) ||
+        !whitespaceOnlyOnLineAfter(source, end) ||
+        rangeOverlaps(protectedRanges, start, end)
+      ) {
+        continue;
+      }
+
+      const blockSource = source.slice(start, end);
+      const candidate = parseRawMathCandidate(blockSource);
+
+      if (candidate) {
+        blocks.push({ start, end, source: blockSource, candidate });
+      }
+    }
+
+    return blocks;
+  }
+
+  function findDelimitedMathBlocks(
+    source,
+    protectedRanges,
+    open,
+    close
+  ) {
+    const blocks = [];
+    let searchFrom = 0;
+
+    while (searchFrom < source.length) {
+      const start = source.indexOf(open, searchFrom);
+
+      if (start === -1) {
+        break;
+      }
+
+      searchFrom = start + open.length;
+
+      if (
+        delimiterIsEscaped(source, start) ||
+        !whitespaceOnlyOnLineBefore(source, start) ||
+        rangeOverlaps(protectedRanges, start, searchFrom)
+      ) {
+        continue;
+      }
+
+      let closeStart = source.indexOf(close, searchFrom);
+
+      while (
+        closeStart !== -1 &&
+        delimiterIsEscaped(source, closeStart)
+      ) {
+        closeStart = source.indexOf(close, closeStart + close.length);
+      }
+
+      if (closeStart === -1) {
+        break;
+      }
+
+      const end = closeStart + close.length;
+      searchFrom = end;
+
+      if (
+        !whitespaceOnlyOnLineAfter(source, end) ||
+        rangeOverlaps(protectedRanges, start, end)
+      ) {
+        continue;
+      }
+
+      const blockSource = source.slice(start, end);
+      const candidate = parseRawMathCandidate(blockSource);
+
+      if (candidate) {
+        blocks.push({ start, end, source: blockSource, candidate });
+      }
+    }
+
+    return blocks;
+  }
+
+  function findLineMathBlocks(source, protectedRanges) {
+    const blocks = [];
+    let lineStart = 0;
+
+    while (lineStart <= source.length) {
+      const nextLine = source.indexOf('\n', lineStart);
+      const lineEnd = nextLine === -1 ? source.length : nextLine;
+      const rawLine = source.slice(lineStart, lineEnd);
+      const leading = rawLine.length - rawLine.trimStart().length;
+      const trailing = rawLine.length - rawLine.trimEnd().length;
+      const start = lineStart + leading;
+      const end = lineEnd - trailing;
+
+      if (
+        start < end &&
+        !rangeOverlaps(protectedRanges, start, end)
+      ) {
+        const blockSource = source.slice(start, end);
+        const candidate = parseRawMathCandidate(blockSource);
+
+        if (candidate) {
+          blocks.push({ start, end, source: blockSource, candidate });
+        }
+      }
+
+      if (nextLine === -1) {
+        break;
+      }
+
+      lineStart = nextLine + 1;
+    }
+
+    return blocks;
+  }
+
+  function findEmbeddedRawMathBlocks(source) {
+    if (!source) {
+      return [];
+    }
+
+    const protectedRanges = markdownFencedCodeRanges(source);
+    const blocks = [
+      ...findEnvironmentMathBlocks(source, protectedRanges),
+      ...findDelimitedMathBlocks(source, protectedRanges, '$$', '$$'),
+      ...findDelimitedMathBlocks(source, protectedRanges, '\\[', '\\]'),
+      ...findLineMathBlocks(source, protectedRanges)
+    ];
+
+    blocks.sort((left, right) => (
+      left.start - right.start || right.end - left.end
+    ));
+
+    const nonOverlapping = [];
+
+    for (const block of blocks) {
+      if (
+        !nonOverlapping.some((accepted) => (
+          block.start < accepted.end && block.end > accepted.start
+        ))
+      ) {
+        nonOverlapping.push(block);
+      }
+    }
+
+    return nonOverlapping;
   }
 
   function hasRawMathText(text) {
@@ -1963,6 +2243,46 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return rendered;
   }
 
+  function markUnsupportedBoldGlyphs(rendered) {
+    if (!rendered || !rendered.querySelectorAll) {
+      return 0;
+    }
+
+    const enclosedGlyph = /[\u2460-\u24FF\u2776-\u2793\u{1F100}-\u{1F1FF}]/u;
+    let marked = 0;
+
+    for (const group of rendered.querySelectorAll(
+      '.katex-html .mord.text > .mord'
+    )) {
+      const children = Array.from(group.children || []);
+      const hasBoldSibling = children.some((element) => (
+        element.classList &&
+        (
+          element.classList.contains('mathbf') ||
+          element.classList.contains('textbf') ||
+          element.classList.contains('boldsymbol')
+        )
+      ));
+
+      if (!hasBoldSibling) {
+        continue;
+      }
+
+      for (const element of children) {
+        if (
+          element.classList &&
+          enclosedGlyph.test(element.textContent || '') &&
+          !element.classList.contains('aistudio-katex-bold-glyph-fallback')
+        ) {
+          element.classList.add('aistudio-katex-bold-glyph-fallback');
+          marked += 1;
+        }
+      }
+    }
+
+    return marked;
+  }
+
   function renderRawMathCandidate(candidate) {
     if (!candidate || !candidate.tex) {
       return null;
@@ -1985,6 +2305,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (!rendered) {
       return null;
     }
+
+    markUnsupportedBoldGlyphs(rendered);
 
     rendered.setAttribute('data-aistudio-raw-math-repaired', '1');
     rendered.setAttribute('data-aistudio-raw-math-kind', candidate.kind);
@@ -2067,6 +2389,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         continue;
       }
 
+      markUnsupportedBoldGlyphs(replacement);
+
       replacement.setAttribute(
         'data-aistudio-rendered-math-bold-repaired',
         '1'
@@ -2095,6 +2419,78 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     return null;
+  }
+
+  function hasOnlyPlainEmbeddedMathMarkup(container) {
+    if (!container || !container.querySelectorAll) {
+      return false;
+    }
+
+    return Array.from(container.querySelectorAll('*')).every((element) => (
+      ['BR', 'SPAN', 'WBR'].includes(element.tagName)
+    ));
+  }
+
+  function appendPreservedRawText(fragment, source) {
+    const lines = source.split('\n');
+
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index]) {
+        fragment.appendChild(document.createTextNode(lines[index]));
+      }
+
+      if (index < lines.length - 1) {
+        const lineBreak = document.createElement('br');
+        lineBreak.className = 'aistudio-raw-math-preserved-break';
+        fragment.appendChild(lineBreak);
+      }
+    }
+  }
+
+  function repairEmbeddedRawMathContainer(container, source) {
+    if (
+      !source ||
+      !hasOnlyPlainEmbeddedMathMarkup(container)
+    ) {
+      return 0;
+    }
+
+    const renderedBlocks = [];
+
+    for (const block of findEmbeddedRawMathBlocks(source)) {
+      const replacement =
+        renderRawMathCandidate(block.candidate) ||
+        fallbackRawMath(block.source, block.candidate);
+
+      if (replacement) {
+        renderedBlocks.push({ ...block, replacement });
+      }
+    }
+
+    if (!renderedBlocks.length) {
+      return 0;
+    }
+
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+
+    for (const block of renderedBlocks) {
+      appendPreservedRawText(
+        fragment,
+        source.slice(cursor, block.start)
+      );
+      fragment.appendChild(block.replacement);
+      cursor = block.end;
+    }
+
+    appendPreservedRawText(fragment, source.slice(cursor));
+    container.replaceChildren(fragment);
+    container.setAttribute(
+      'data-aistudio-embedded-raw-math-repaired',
+      String(renderedBlocks.length)
+    );
+
+    return renderedBlocks.length;
   }
 
   function repairRawMathContainer(container) {
@@ -2128,9 +2524,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
+    const mixedSource = sourceFromMixedMathDom(container);
     const sources = containsRenderedMath
-      ? [sourceFromMixedMathDom(container)].filter(Boolean)
+      ? [mixedSource].filter(Boolean)
       : Array.from(new Set([
+        mixedSource,
         container.textContent || '',
         typeof container.innerText === 'string'
           ? container.innerText
@@ -2154,6 +2552,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       container.replaceChildren(replacement);
       return 1;
+    }
+
+    if (!containsRenderedMath) {
+      for (const source of sources) {
+        const repaired = repairEmbeddedRawMathContainer(container, source);
+
+        if (repaired) {
+          return repaired;
+        }
+      }
     }
 
     return 0;
