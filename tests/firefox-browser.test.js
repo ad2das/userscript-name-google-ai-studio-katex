@@ -59,6 +59,16 @@ async (page) => {
       document.getElementById('user-native-bold-math'),
       options
     );
+    window.katex.render(
+      String.raw`\text{일반차입금 자본화액} = \left(\underbrace{\text{지출액} \times \frac{\mathbf{\text{공사기간 }9}}{12}}_{\text{공사기간이 이미 반영된 지출액}} - \text{특정차입금}\right) \times \underbrace{\text{연평균 가중평균이자율}}_{\text{1년 기준 금리}}`,
+      document.getElementById('photo-four-stretchy-math'),
+      options
+    );
+    window.katex.render(
+      String.raw`\times 9/12`,
+      document.getElementById('photo-four-inline-math'),
+      { ...options, displayMode: false }
+    );
     window.__unexpectedBarrierMathSources = [];
     const originalKatexRender = window.katex.render.bind(window.katex);
     window.katex.render = (source, element, renderOptions) => {
@@ -109,6 +119,39 @@ async (page) => {
       .getElementById(id)
       .querySelector('annotation[encoding="application/x-tex"]')
       ?.textContent;
+    const stretchyMath = document.getElementById(
+      'photo-four-stretchy-math'
+    );
+    const stretchyDisplay = stretchyMath.querySelector('.katex-display');
+    const stretchyKatex = stretchyDisplay.querySelector(':scope > .katex');
+    const stretchyHtml = stretchyKatex.querySelector('.katex-html');
+    const stretchyClipNodes = Array.from(stretchyKatex.querySelectorAll([
+      '.katex-mathml',
+      '.pstrut',
+      '.katex-stretchy',
+      '.hide-tail',
+      '.halfarrow-left',
+      '.halfarrow-right',
+      '.brace-left',
+      '.brace-center',
+      '.brace-right'
+    ].join(',')));
+    const boldWithMath = document.getElementById(
+      'photo-four-bold-with-math'
+    );
+    const boldWithMathStrong = boldWithMath.querySelector(
+      'strong.aistudio-md-repaired'
+    );
+    const boldWithMathKatex = boldWithMathStrong?.querySelector('.katex');
+    const visibleTextOf = (element) => {
+      if (!element) {
+        return '';
+      }
+
+      const clone = element.cloneNode(true);
+      clone.querySelectorAll('.katex-mathml').forEach((node) => node.remove());
+      return clone.textContent;
+    };
     const fontWeightOf = (element) => element
       ? Number(getComputedStyle(element).fontWeight)
       : 0;
@@ -346,6 +389,35 @@ async (page) => {
           '#native-bold-math .hangul_fallback'
         )).find((element) => element.textContent.includes('처분이익'))
       ).fontWeight),
+      stretchyCount: stretchyKatex.querySelectorAll(
+        '.katex-stretchy'
+      ).length,
+      stretchyClipOverflows: stretchyClipNodes.map(
+        (element) => getComputedStyle(element).overflow
+      ),
+      stretchyDisplayWidth: stretchyDisplay.clientWidth,
+      stretchyContentWidth: stretchyHtml.scrollWidth,
+      stretchyScrollWidth: stretchyKatex.scrollWidth,
+      stretchyNaturalWidth: Number(
+        stretchyKatex.getAttribute('data-aistudio-math-natural-width') || 0
+      ),
+      stretchyFitScale: Number(
+        stretchyKatex.getAttribute('data-aistudio-math-fit-scale') || 1
+      ),
+      boldWithMathText: visibleTextOf(boldWithMathStrong),
+      boldWithMathWeight: boldWithMathStrong
+        ? Number(getComputedStyle(boldWithMathStrong).fontWeight)
+        : 0,
+      boldWithMathMathStroke: boldWithMathKatex
+        ? getComputedStyle(boldWithMathKatex).textShadow
+        : 'none',
+      boldWithMathMarkersRemoved: !boldWithMath.textContent.includes('**'),
+      boldWithMathKatexPreserved:
+        Boolean(boldWithMathStrong?.querySelector('.katex')) &&
+        sourceOf('photo-four-bold-with-math') === String.raw`\times 9/12`,
+      fittedMathCount: Number(document.documentElement.getAttribute(
+        'data-aistudio-mobile-fix-fitted-math'
+      )),
       invalidMathPreserved:
         document.getElementById('invalid-raw-math').textContent ===
         'begin{array}{cc}a&b\\end{matrix}',
@@ -521,7 +593,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-187'
+        'data-aistudio-mobile-safe-188'
       )
     };
   });
@@ -595,6 +667,21 @@ async (page) => {
     !rendering.nativeBoldRepaired ||
     !rendering.nativeBoldSource?.includes('\\text{\\bf 원 (처분이익)}') ||
     rendering.nativeBoldWeight < 600 ||
+    rendering.stretchyCount < 2 ||
+    rendering.stretchyClipOverflows.some(
+      (overflow) => overflow !== 'hidden'
+    ) ||
+    rendering.stretchyNaturalWidth <= rendering.stretchyDisplayWidth ||
+    rendering.stretchyFitScale >= 1 ||
+    rendering.stretchyFitScale < 0.58 ||
+    rendering.stretchyScrollWidth > rendering.stretchyDisplayWidth + 2 ||
+    rendering.fittedMathCount < 1 ||
+    rendering.boldWithMathText !==
+      '공사기간과 겹치는 기간(4/1~12/31 = 9개월)만 직접 골라내어(×9/12)' ||
+    rendering.boldWithMathWeight < 600 ||
+    rendering.boldWithMathMathStroke === 'none' ||
+    !rendering.boldWithMathMarkersRemoved ||
+    !rendering.boldWithMathKatexPreserved ||
     !rendering.invalidMathPreserved ||
     !rendering.mixedMissingSourcePreserved ||
     !rendering.existingMathPreserved ||
@@ -664,7 +751,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.7'
+    rendering.version !== '1.8.8'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

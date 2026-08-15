@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.7
+// @version      1.8.8
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.7';
-  const STYLE_ID = 'aistudio-mobile-safe-187-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-187';
+  const VERSION = '1.8.8';
+  const STYLE_ID = 'aistudio-mobile-safe-188-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-188';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -36,14 +36,15 @@
    * - 생성 중 최신 답변 수정
    * - KaTeX / MathJax 내부 수정
    * - 실제 code / pre / link / input 내부 수정
-   * - 링크, 코드, 수식, 블록 경계를 가로질러 **bold**를 합치기
+   * - 링크, 코드, 블록 경계를 가로질러 **bold**를 합치기
+   * - 단, 강조 안에 이미 렌더된 인라인 수식만 끼어 있는 경우는 수식을
+   *   그대로 보존하면서 하나의 strong으로 안전하게 복구한다.
    *
    * 단, 한국어 설명문이 들여쓰기 때문에 pre > code로 잘못
    * 분류된 경우에는 코드 신호가 없을 때만 raw bold를 복구한다.
    *
-   * v1.5.2 핵심:
-   * - display 수식에 overflow-x: auto를 주지 않는다.
-   * - 수식 위아래 clipping / 세로 스크롤 발생을 막기 위해 overflow: visible을 우선한다.
+   * display 수식의 바깥 래퍼는 세로 clipping을 막기 위해 overflow: visible로
+   * 두되, KaTeX의 stretchy SVG 내부 clipping 규칙은 반드시 유지한다.
    */
   const ENABLE_SAFE_OUTPUT_REPAIR = true;
 
@@ -62,6 +63,7 @@
   const MAX_RECENT_REPAIR_ROOTS = 64;
   const MAX_KATEX_EXPANSIONS = 1000;
   const MAX_KATEX_SIZE = 20;
+  const MIN_DISPLAY_MATH_SCALE = 0.58;
 
   const RAW_MATH_ENVIRONMENTS = new Set([
     'array',
@@ -422,6 +424,13 @@
     'ol'
   ].join(',');
 
+  const INLINE_EMBEDDED_MATH_SELECTOR = [
+    '.katex',
+    'ms-katex',
+    '.MathJax',
+    'mjx-container'
+  ].join(',');
+
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
 
   const LEGACY_STYLE_IDS = [
@@ -452,7 +461,8 @@
     'aistudio-mobile-safe-183-style',
     'aistudio-mobile-safe-184-style',
     'aistudio-mobile-safe-185-style',
-    'aistudio-mobile-safe-186-style'
+    'aistudio-mobile-safe-186-style',
+    'aistudio-mobile-safe-187-style'
   ];
 
   const CSS_TEXT = `
@@ -579,8 +589,11 @@ ${SCOPE} .aistudio-raw-math-repaired :where(.katex, .katex *) {
   word-break: normal !important;
 }
 
-/* Markdown **...**가 수식 바깥에 남은 경우의 시각적 굵기 fallback. */
-${SCOPE} .aistudio-raw-math-bold > .katex {
+/* Markdown **...** 안의 수식도 주변 굵기와 맞추는 시각적 fallback. */
+${SCOPE} :where(
+  .aistudio-raw-math-bold > .katex,
+  .aistudio-md-contains-math .katex
+) {
   -webkit-text-stroke: 0.12px currentColor !important;
   text-shadow: 0.01em 0 currentColor, -0.01em 0 currentColor !important;
 }
@@ -805,8 +818,8 @@ ${SCOPE} :where(img, video, canvas) {
  * overflow-x: auto + overflow-y: visible 조합은 브라우저에서
  * 실제로 세로 clipping 또는 세로 스크롤 컨테이너처럼 동작할 수 있다.
  *
- * 그래서 수식은 위아래 보존을 우선하고, overflow: visible로 둔다.
- * 아주 긴 수식은 화면 오른쪽으로 넘칠 수 있지만, 수식 자체가 잘리는 것보다는 안전하다.
+ * 그래서 바깥 래퍼는 위아래 보존을 우선하고 overflow: visible로 둔다.
+ * 가로로 긴 KaTeX 본체는 JS에서 가용 폭에 맞춰 비례 축소한다.
  */
 ${SCOPE} :where(
   ms-katex.display,
@@ -854,18 +867,36 @@ ${SCOPE} :where(
 }
 
 /*
- * KaTeX display 내부도 세로 clipping을 막는다.
+ * KaTeX display의 바깥 본체도 세로 clipping을 막는다. 아래의 내부
+ * stretchy/MathML 조각은 KaTeX 원래 규칙대로 overflow:hidden을 복원한다.
  */
 ${SCOPE} :where(
   .katex-display,
   .katex-display > .katex,
-  .katex-display > .katex *,
   ms-katex.display,
-  ms-katex.display *,
-  mjx-container[display="true"],
-  mjx-container[display="true"] *
+  mjx-container[display="true"]
 ) {
   overflow: visible !important;
+}
+
+/*
+ * KaTeX의 stretchy SVG와 접근성 MathML은 내부 조각을 잘라내기 위해
+ * overflow:hidden이 필수다. 이를 visible로 바꾸면 underbrace 꼬리가
+ * 화면 전체의 수평선처럼 새어 나온다.
+ */
+${SCOPE} .katex :where(
+  .katex-mathml,
+  .pstrut,
+  .katex-stretchy,
+  .stretchy,
+  .hide-tail,
+  .halfarrow-left,
+  .halfarrow-right,
+  .brace-left,
+  .brace-center,
+  .brace-right
+) {
+  overflow: hidden !important;
 }
 
 /*
@@ -919,6 +950,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   const states = new WeakMap();
   const fallbackRoots = new WeakSet();
+  const mathFitOriginalStyles = new WeakMap();
 
   let cleanedLegacy = false;
   let pending = false;
@@ -3579,6 +3611,62 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return true;
   }
 
+  function insideEmbeddedMath(element) {
+    return Boolean(
+      element &&
+      (
+        element.matches(INLINE_EMBEDDED_MATH_SELECTOR) ||
+        closest(element, INLINE_EMBEDDED_MATH_SELECTOR)
+      )
+    );
+  }
+
+  function fragmentTextWithoutEmbeddedMath(fragment) {
+    const clone = fragment.cloneNode(true);
+
+    clone.querySelectorAll(INLINE_EMBEDDED_MATH_SELECTOR).forEach(
+      (element) => element.remove()
+    );
+
+    return clone.textContent || '';
+  }
+
+  function fragmentCrossesUnsafeInlineBoundary(fragment) {
+    return Array.from(
+      fragment.querySelectorAll(INLINE_REPAIR_BOUNDARY_SELECTOR)
+    ).some((element) => !insideEmbeddedMath(element));
+  }
+
+  function repairInlineMatchContainingMath(range, match) {
+    const contents = range.extractContents();
+    const preview = contents.cloneNode(true);
+
+    if (
+      !trimFragmentText(
+        preview,
+        match.marker.length,
+        match.marker.length
+      ) ||
+      fragmentTextWithoutEmbeddedMath(preview) !== match.inner
+    ) {
+      range.insertNode(contents);
+      return false;
+    }
+
+    trimFragmentText(
+      contents,
+      match.marker.length,
+      match.marker.length
+    );
+
+    const strong = createRepairedStrong('', match.marker);
+
+    strong.classList.add('aistudio-md-contains-math');
+    strong.replaceChildren(contents);
+    range.insertNode(strong);
+    return true;
+  }
+
   function repairInlineMatch(container, records, match) {
     const start = textPosition(records, match.start, false);
     const end = textPosition(records, match.end, true);
@@ -3592,21 +3680,40 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     range.setEnd(end.node, end.offset);
 
     const selected = range.cloneContents();
-    const selectedText = selected.textContent || '';
+    const containsEmbeddedMath = Boolean(
+      selected.querySelector &&
+      selected.querySelector(INLINE_EMBEDDED_MATH_SELECTOR)
+    );
+    const selectedText = containsEmbeddedMath
+      ? fragmentTextWithoutEmbeddedMath(selected)
+      : selected.textContent || '';
     const crossesBoundary = Boolean(
       selected.querySelector &&
-      selected.querySelector(INLINE_REPAIR_BOUNDARY_SELECTOR)
+      fragmentCrossesUnsafeInlineBoundary(selected)
     );
-
-    if (typeof range.detach === 'function') {
-      range.detach();
-    }
 
     if (
       selectedText !== match.raw ||
       crossesBoundary
     ) {
+      if (typeof range.detach === 'function') {
+        range.detach();
+      }
       return false;
+    }
+
+    if (containsEmbeddedMath) {
+      const repaired = repairInlineMatchContainingMath(range, match);
+
+      if (typeof range.detach === 'function') {
+        range.detach();
+      }
+
+      return repaired;
+    }
+
+    if (typeof range.detach === 'function') {
+      range.detach();
     }
 
     const affected = records.filter((record) => (
@@ -3922,6 +4029,105 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     return repaired;
+  }
+
+  function restoreOriginalMathFontSize(katexRoot) {
+    const original = mathFitOriginalStyles.get(katexRoot);
+
+    if (!original) {
+      mathFitOriginalStyles.set(katexRoot, {
+        priority: katexRoot.style.getPropertyPriority('font-size'),
+        value: katexRoot.style.getPropertyValue('font-size')
+      });
+      return;
+    }
+
+    if (original.value) {
+      katexRoot.style.setProperty(
+        'font-size',
+        original.value,
+        original.priority
+      );
+    } else {
+      katexRoot.style.removeProperty('font-size');
+    }
+  }
+
+  function fitDisplayMath(display) {
+    if (
+      !display ||
+      !display.isConnected ||
+      !closest(display, STYLE_ROOT_SELECTOR) ||
+      closest(display, USER_SELECTOR)
+    ) {
+      return false;
+    }
+
+    const katexRoot =
+      display.querySelector(':scope > .katex') ||
+      display.querySelector('.katex');
+
+    if (!katexRoot) {
+      return false;
+    }
+
+    restoreOriginalMathFontSize(katexRoot);
+    katexRoot.removeAttribute('data-aistudio-math-fit-scale');
+    katexRoot.removeAttribute('data-aistudio-math-natural-width');
+
+    const availableWidth = Math.floor(display.clientWidth || 0);
+    const naturalWidth = Math.ceil(katexRoot.scrollWidth || 0);
+    const baseFontSize = Number.parseFloat(
+      getComputedStyle(katexRoot).fontSize
+    );
+
+    if (
+      !availableWidth ||
+      !naturalWidth ||
+      !Number.isFinite(baseFontSize) ||
+      naturalWidth <= availableWidth + 1
+    ) {
+      return false;
+    }
+
+    const scale = Math.max(
+      MIN_DISPLAY_MATH_SCALE,
+      Math.min(1, (availableWidth - 2) / naturalWidth)
+    );
+
+    katexRoot.style.setProperty(
+      'font-size',
+      (baseFontSize * scale).toFixed(3) + 'px',
+      'important'
+    );
+    katexRoot.setAttribute(
+      'data-aistudio-math-fit-scale',
+      scale.toFixed(4)
+    );
+    katexRoot.setAttribute(
+      'data-aistudio-math-natural-width',
+      String(naturalWidth)
+    );
+
+    return true;
+  }
+
+  function fitWideDisplayMath() {
+    const displays = Array.from(document.querySelectorAll(
+      '.katex-display, ms-katex.display'
+    )).filter((display) => !(
+      display.matches('ms-katex.display') &&
+      display.querySelector('.katex-display')
+    ));
+    let fitted = 0;
+
+    for (const display of displays) {
+      if (fitDisplayMath(display)) {
+        fitted += 1;
+      }
+    }
+
+    return fitted;
   }
 
   function nearViewport(element) {
@@ -4623,12 +4829,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const now = Date.now();
     const html = document.documentElement;
+    const fittedMathCount = fitWideDisplayMath();
     const pageGenerating = generating();
 
     if (html) {
       html.setAttribute(
         'data-aistudio-mobile-fix-generating',
         pageGenerating ? 'true' : 'false'
+      );
+      html.setAttribute(
+        'data-aistudio-mobile-fix-fitted-math',
+        String(fittedMathCount)
       );
     }
 
@@ -4971,6 +5182,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     window.addEventListener(
       'scroll',
       () => schedule(250),
+      { passive: true }
+    );
+
+    window.addEventListener(
+      'resize',
+      () => schedule(150),
+      { passive: true }
+    );
+
+    window.addEventListener(
+      'orientationchange',
+      () => schedule(150),
       { passive: true }
     );
 
