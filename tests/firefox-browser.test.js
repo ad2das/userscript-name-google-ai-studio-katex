@@ -108,6 +108,10 @@ async (page) => {
       : 0;
     const codeBoundaryBold = document.getElementById('code-boundary-bold');
     const linkBoundaryBold = document.getElementById('link-boundary-bold');
+    const proseCodeBlock = document.getElementById('reported-prose-code-bold');
+    const proseCodeStrong = proseCodeBlock.querySelector(
+      'strong.aistudio-md-repaired'
+    );
     return {
       boldCount: cell.querySelectorAll('strong.aistudio-md-repaired').length,
       boldText: cell.querySelector('strong.aistudio-md-repaired')?.textContent,
@@ -286,6 +290,41 @@ async (page) => {
       preservedLinkBoundaryBold:
         linkBoundaryBold.querySelectorAll('strong').length === 0 &&
         linkBoundaryBold.textContent.includes('**'),
+      proseCodeBoldCount: proseCodeBlock.querySelectorAll(
+        'strong.aistudio-md-repaired'
+      ).length,
+      proseCodeBoldText: proseCodeStrong?.textContent,
+      proseCodeBoldWeight: fontWeightOf(proseCodeStrong),
+      proseCodeMarkersRemoved: !proseCodeBlock.textContent.includes('**'),
+      proseCodeBlockRepaired: proseCodeBlock.classList.contains(
+        'aistudio-prose-code-block-repaired'
+      ),
+      splitProseCodeRepaired:
+        document.querySelectorAll(
+          '#reported-prose-code-split strong.aistudio-md-repaired'
+        ).length === 1 &&
+        !document.getElementById('reported-prose-code-split')
+          .textContent.includes('**'),
+      actualCodePreserved:
+        document.getElementById('actual-code-bold').textContent ===
+          'const label = "**literal markdown**";' &&
+        document.querySelectorAll('#actual-code-bold strong').length === 0,
+      koreanCodePreserved:
+        document.getElementById('korean-code-bold').textContent ===
+          'const label = "**정답**"; // 한국어 코드 예시' &&
+        document.querySelectorAll('#korean-code-bold strong').length === 0,
+      markdownSyntaxPreserved:
+        document.getElementById('markdown-syntax-example').textContent ===
+          '마크다운 문법 예시: **굵게**' &&
+        document.querySelectorAll('#markdown-syntax-example strong').length === 0,
+      languageCodePreserved:
+        document.getElementById('language-code-bold').textContent ===
+          '한국어 설명입니다. **굵게 표시합니다.**' &&
+        document.querySelectorAll('#language-code-bold strong').length === 0,
+      userProseCodePreserved:
+        document.getElementById('user-prose-code-bold').textContent ===
+          '사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.' &&
+        document.querySelectorAll('#user-prose-code-bold strong').length === 0,
       fencedMathPreserved:
         document.querySelector(
           '#fenced-raw-math .aistudio-raw-math-repaired'
@@ -296,7 +335,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-182'
+        'data-aistudio-mobile-safe-183'
       )
     };
   });
@@ -374,9 +413,21 @@ async (page) => {
     !rendering.preservedLinkBoundary ||
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
+    rendering.proseCodeBoldCount !== 1 ||
+    rendering.proseCodeBoldText !==
+      '"취득 후의 지출(후속지출)"은 자산인식 요건을 따질 것도 없이 무조건 100% 당기비용' ||
+    rendering.proseCodeBoldWeight < 600 ||
+    !rendering.proseCodeMarkersRemoved ||
+    !rendering.proseCodeBlockRepaired ||
+    !rendering.splitProseCodeRepaired ||
+    !rendering.actualCodePreserved ||
+    !rendering.koreanCodePreserved ||
+    !rendering.markdownSyntaxPreserved ||
+    !rendering.languageCodePreserved ||
+    !rendering.userProseCodePreserved ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.2'
+    rendering.version !== '1.8.3'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

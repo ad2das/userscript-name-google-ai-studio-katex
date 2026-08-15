@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.2
+// @version      1.8.3
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.2';
-  const STYLE_ID = 'aistudio-mobile-safe-182-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-182';
+  const VERSION = '1.8.3';
+  const STYLE_ID = 'aistudio-mobile-safe-183-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-183';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -35,8 +35,11 @@
    * 안전을 위해 하지 않는 것:
    * - 생성 중 최신 답변 수정
    * - KaTeX / MathJax 내부 수정
-   * - code / pre / link / input 내부 수정
+   * - 실제 code / pre / link / input 내부 수정
    * - 링크, 코드, 수식, 블록 경계를 가로질러 **bold**를 합치기
+   *
+   * 단, 한 줄 한국어 설명문이 들여쓰기 때문에 pre > code로 잘못
+   * 분류된 경우에는 코드 신호가 없을 때만 raw bold를 복구한다.
    *
    * v1.5.2 핵심:
    * - display 수식에 overflow-x: auto를 주지 않는다.
@@ -368,7 +371,8 @@
     'aistudio-mobile-safe-170-style',
     'aistudio-mobile-safe-171-style',
     'aistudio-mobile-safe-180-style',
-    'aistudio-mobile-safe-181-style'
+    'aistudio-mobile-safe-181-style',
+    'aistudio-mobile-safe-182-style'
   ];
 
   const CSS_TEXT = `
@@ -647,6 +651,30 @@ ${SCOPE} pre {
 ${SCOPE} pre code {
   white-space: pre !important;
   overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+/* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
+${SCOPE} pre.aistudio-prose-code-block-repaired {
+  overflow: visible !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  white-space: normal !important;
+}
+
+${SCOPE} pre.aistudio-prose-code-block-repaired >
+code.aistudio-prose-code-repaired {
+  display: block !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  font-family: var(--as-font) !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  white-space: normal !important;
+  overflow-wrap: break-word !important;
   word-break: normal !important;
 }
 
@@ -2856,6 +2884,66 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return result;
   }
 
+  function isLikelyProseCodeText(text) {
+    const source = (text || '').trim();
+
+    if (
+      !source ||
+      source.length > MAX_INLINE_REPAIR_LENGTH ||
+      !hasPair(source) ||
+      hasMathLikeText(source) ||
+      /\n\s*\n/.test(source)
+    ) {
+      return false;
+    }
+
+    const nonEmptyLines = source
+      .split(/\r?\n/)
+      .filter((line) => line.trim());
+
+    if (nonEmptyLines.length > 3) {
+      return false;
+    }
+
+    /*
+     * 언어 표식, 실행 구문, 괄호 블록, 셸/SQL 시작 토큰이 있으면
+     * 한국어 주석이나 문자열이 섞여 있어도 실제 코드로 간주한다.
+     */
+    if (
+      /```|~~~/i.test(source) ||
+      /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|switch|try|catch)\b/im.test(source) ||
+      /(?:^|\n)\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/im.test(source) ||
+      /(?:^|\n)\s*[$>#]\s/m.test(source) ||
+      /(?:=>|===|!==|&&|\|\||::|[{}]|;\s*(?:\n|$))/m.test(source) ||
+      /<\/?[A-Za-z][^>]*>/.test(source) ||
+      /\b(?:console\.(?:log|error|warn)|print|printf|echo)\s*\(/i.test(source) ||
+      /\b[A-Za-z_$][\w$]*\s*\(/.test(source) ||
+      /(?:Markdown|마크다운|문법|리터럴|literal|raw|코드\s*예시)/i.test(source)
+    ) {
+      return false;
+    }
+
+    const matches = findMatches(source);
+    const hangulCount = (source.match(/[가-힣]/g) || []).length;
+    const visibleCount = (source.match(/[^\s*_]/g) || []).length;
+    const hasKoreanEmphasis = matches.some((match) => (
+      /[가-힣]{2}/.test(match.inner)
+    ));
+    const sentenceLike = (
+      /(?:다|요|함|임|까|자)(?:[.!?]|$)/.test(source) ||
+      /[.!?](?:\s|$)/.test(source)
+    );
+
+    return Boolean(
+      matches.length &&
+      hasKoreanEmphasis &&
+      sentenceLike &&
+      hangulCount >= 8 &&
+      visibleCount > 0 &&
+      hangulCount / visibleCount >= 0.25
+    );
+  }
+
   function findUnderlineMatches(text) {
     const result = [];
     const regex = /<u\s*>([\s\S]*?)<\/u\s*>/gi;
@@ -3022,6 +3110,63 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     return matches.length;
+  }
+
+  function repairProseCodeBold(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const candidates = Array.from(root.querySelectorAll('pre > code'));
+
+    if (root.matches && root.matches('pre > code')) {
+      candidates.unshift(root);
+    }
+
+    let repaired = 0;
+
+    for (const code of candidates) {
+      const pre = code.parentElement;
+
+      if (
+        !pre ||
+        !pre.matches('pre') ||
+        closest(code, USER_SELECTOR) ||
+        code.matches(
+          '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
+        ) ||
+        pre.matches(
+          '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
+        ) ||
+        code.querySelector(
+          'a, button, input, textarea, select, svg, math, script, style'
+        )
+      ) {
+        continue;
+      }
+
+      const text = code.textContent || '';
+
+      if (!isLikelyProseCodeText(text)) {
+        continue;
+      }
+
+      const fragment = document.createDocumentFragment();
+      const count = appendBoldRepairedText(fragment, text);
+
+      if (!count) {
+        continue;
+      }
+
+      code.replaceChildren(fragment);
+      code.classList.add('aistudio-prose-code-repaired');
+      code.setAttribute('data-aistudio-prose-code-repaired', '1');
+      pre.classList.add('aistudio-prose-code-block-repaired');
+      pre.setAttribute('data-aistudio-prose-code-block-repaired', '1');
+      repaired += count;
+    }
+
+    return repaired;
   }
 
   function repairTextNode(textNode) {
@@ -3626,6 +3771,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     repaired += repairRenderedMathBold(root);
     repaired += repairSplitTableBreaks(root);
     repaired += repairLiteralUnderlines(root);
+    repaired += repairProseCodeBold(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
       root,

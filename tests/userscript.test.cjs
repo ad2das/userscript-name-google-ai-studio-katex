@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.8\.2/);
+assert.match(source, /\/\/ @version\s+1\.8\.3/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -21,6 +21,7 @@ assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
 assert.match(source, /function repairSplitTableBreaksInCell/);
 assert.match(source, /function repairInlineEmphasisInContainer/);
+assert.match(source, /function repairProseCodeBold/);
 assert.match(source, /if \(pageGenerating\) \{\s*return;\s*\}/);
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 
@@ -45,6 +46,7 @@ const instrumented = source.replace(
     hasLiteralUnderline,
     installSessionKeepalive,
     isRunActionLabel,
+    isLikelyProseCodeText,
     isPromptRunButton,
     isStopActionLabel,
     keepSessionFresh,
@@ -235,6 +237,31 @@ assert.equal(api.findMatches('Render ***bold italic*** too.').length, 1);
 assert.equal(
   api.findMatches('Render ***bold italic*** too.')[0].marker,
   '***'
+);
+
+const reportedProseCode =
+  '이미 자산으로 잡혀있는 브랜드라도 **"취득 후의 지출(후속지출)"은 ' +
+  '자산인식 요건을 따질 것도 없이 무조건 100% 당기비용**으로 처리해야 ' +
+  '합니다. ⑤번 선지에서 자산으로 인식될 수 있다고 했으므로 바로 정답!';
+assert.equal(api.findMatches(reportedProseCode).length, 1);
+assert.equal(api.isLikelyProseCodeText(reportedProseCode), true);
+assert.equal(
+  api.isLikelyProseCodeText('const label = "**literal markdown**";'),
+  false
+);
+assert.equal(
+  api.isLikelyProseCodeText(
+    'const label = "**정답**"; // 한국어 코드 예시'
+  ),
+  false
+);
+assert.equal(
+  api.isLikelyProseCodeText('마크다운 문법 예시: **굵게**'),
+  false
+);
+assert.equal(
+  api.isLikelyProseCodeText('설명입니다.\n\n**중요합니다.**\n\n끝입니다.'),
+  false
 );
 
 const brokenArray = String.raw`begin{array}{ll|ll}
