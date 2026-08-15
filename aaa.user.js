@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.8
+// @version      1.8.9
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.8';
-  const STYLE_ID = 'aistudio-mobile-safe-188-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-188';
+  const VERSION = '1.8.9';
+  const STYLE_ID = 'aistudio-mobile-safe-189-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-189';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -428,8 +428,22 @@
     '.katex',
     'ms-katex',
     '.MathJax',
-    'mjx-container'
+    'mjx-container',
+    'math',
+    'math-field',
+    '[role="math"]',
+    '[data-tex]',
+    '[data-latex]',
+    '[data-math]',
+    '[latex]',
+    '[expression]',
+    '[formula]'
   ].join(',');
+
+  const EMBEDDED_MATH_NAME_TOKEN =
+    /(?:^|[-_:])(?:math|katex|mathjax|latex|tex|formula|equation)(?:$|[-_:](?:inline|display|renderer|rendered|container|field|block)$)/i;
+  const EMBEDDED_MATH_CLASS_TOKEN =
+    /^(?:katex|mathjax|mathjax-container|math|math-inline|inline-math|math-container|math-renderer|rendered-math|latex|latex-inline|tex-math|formula|formula-inline|equation|equation-inline)$/i;
 
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
 
@@ -462,7 +476,8 @@
     'aistudio-mobile-safe-184-style',
     'aistudio-mobile-safe-185-style',
     'aistudio-mobile-safe-186-style',
-    'aistudio-mobile-safe-187-style'
+    'aistudio-mobile-safe-187-style',
+    'aistudio-mobile-safe-188-style'
   ];
 
   const CSS_TEXT = `
@@ -592,8 +607,11 @@ ${SCOPE} .aistudio-raw-math-repaired :where(.katex, .katex *) {
 /* Markdown **...** 안의 수식도 주변 굵기와 맞추는 시각적 fallback. */
 ${SCOPE} :where(
   .aistudio-raw-math-bold > .katex,
-  .aistudio-md-contains-math .katex
+  .aistudio-md-contains-math .katex,
+  .aistudio-md-embedded-math
 ) {
+  font-weight: 700 !important;
+  font-synthesis: weight !important;
   -webkit-text-stroke: 0.12px currentColor !important;
   text-shadow: 0.01em 0 currentColor, -0.01em 0 currentColor !important;
 }
@@ -3140,7 +3158,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     return Boolean(
       closest(parent, USER_SELECTOR) ||
-      closest(parent, SKIP_SELECTOR)
+      closest(parent, SKIP_SELECTOR) ||
+      insideEmbeddedMath(parent)
     );
   }
 
@@ -3611,24 +3630,87 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return true;
   }
 
-  function insideEmbeddedMath(element) {
+  function looksLikeEmbeddedMathElement(element) {
+    if (!element || element.nodeType !== 1) {
+      return false;
+    }
+
+    if (
+      element.matches &&
+      element.matches(INLINE_EMBEDDED_MATH_SELECTOR)
+    ) {
+      return true;
+    }
+
+    const localName = (element.localName || '').toLowerCase();
+
+    if (
+      localName.includes('-') &&
+      EMBEDDED_MATH_NAME_TOKEN.test(localName)
+    ) {
+      return true;
+    }
+
     return Boolean(
-      element &&
-      (
-        element.matches(INLINE_EMBEDDED_MATH_SELECTOR) ||
-        closest(element, INLINE_EMBEDDED_MATH_SELECTOR)
-      )
+      element.classList &&
+      Array.from(element.classList).some((token) => (
+        EMBEDDED_MATH_CLASS_TOKEN.test(token)
+      ))
     );
+  }
+
+  function embeddedMathRoots(fragment) {
+    if (!fragment) {
+      return [];
+    }
+
+    const candidates = [];
+
+    if (looksLikeEmbeddedMathElement(fragment)) {
+      candidates.push(fragment);
+    }
+
+    if (fragment.querySelectorAll) {
+      for (const element of fragment.querySelectorAll('*')) {
+        if (looksLikeEmbeddedMathElement(element)) {
+          candidates.push(element);
+        }
+      }
+    }
+
+    return candidates.filter((element) => !candidates.some((other) => (
+      other !== element &&
+      typeof other.contains === 'function' &&
+      other.contains(element)
+    )));
+  }
+
+  function insideEmbeddedMath(element) {
+    let current = element;
+
+    while (current && current.nodeType === 1) {
+      if (looksLikeEmbeddedMathElement(current)) {
+        return true;
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
   }
 
   function fragmentTextWithoutEmbeddedMath(fragment) {
     const clone = fragment.cloneNode(true);
 
-    clone.querySelectorAll(INLINE_EMBEDDED_MATH_SELECTOR).forEach(
-      (element) => element.remove()
-    );
+    embeddedMathRoots(clone).forEach((element) => element.remove());
 
     return clone.textContent || '';
+  }
+
+  function markEmbeddedMathRoots(fragment) {
+    for (const element of embeddedMathRoots(fragment)) {
+      element.classList.add('aistudio-md-embedded-math');
+    }
   }
 
   function fragmentCrossesUnsafeInlineBoundary(fragment) {
@@ -3658,6 +3740,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       match.marker.length,
       match.marker.length
     );
+    markEmbeddedMathRoots(contents);
 
     const strong = createRepairedStrong('', match.marker);
 
@@ -3680,10 +3763,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     range.setEnd(end.node, end.offset);
 
     const selected = range.cloneContents();
-    const containsEmbeddedMath = Boolean(
-      selected.querySelector &&
-      selected.querySelector(INLINE_EMBEDDED_MATH_SELECTOR)
-    );
+    const containsEmbeddedMath = embeddedMathRoots(selected).length > 0;
     const selectedText = containsEmbeddedMath
       ? fragmentTextWithoutEmbeddedMath(selected)
       : selected.textContent || '';
@@ -4150,16 +4230,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function hasActionableRepairText(text) {
+  function hasActionableRepairElement(element) {
+    const text = element && (element.textContent || '');
+
+    if (!text || text.length > MAX_FALLBACK_ROOT_LENGTH) {
+      return false;
+    }
+
+    const inlineText = collectInlineText(element).text;
+
     return Boolean(
-      text &&
-      text.length <= MAX_FALLBACK_ROOT_LENGTH &&
-      (
-        findMatches(text).length ||
-        findUnderlineMatches(text).length ||
-        hasLiteralTableBreak(text) ||
-        hasRawMathText(text)
-      )
+      findMatches(inlineText).length ||
+      findUnderlineMatches(inlineText).length ||
+      hasLiteralTableBreak(text) ||
+      hasRawMathText(text)
     );
   }
 
@@ -4184,9 +4268,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return null;
     }
 
-    const surface = closest(parent, FALLBACK_SURFACE_SELECTOR);
+    const surface =
+      closest(parent, FALLBACK_SURFACE_SELECTOR) ||
+      document.body;
 
-    if (!surface) {
+    if (
+      !surface ||
+      typeof surface.contains !== 'function' ||
+      !surface.contains(parent)
+    ) {
       return null;
     }
 
@@ -4207,7 +4297,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         return null;
       }
 
-      if (hasActionableRepairText(text)) {
+      if (hasActionableRepairElement(current)) {
         fallbackRoots.add(current);
         return current;
       }
@@ -4258,7 +4348,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     ).filter((root) => {
       return Boolean(
         root.isConnected &&
-        !closest(root, USER_SELECTOR)
+        !closest(root, USER_SELECTOR) &&
+        hasRepairableText(root.textContent || '')
       );
     });
 
@@ -4320,13 +4411,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function lastModelTurn(roots = []) {
-    const models = roots.length
-      ? roots
+    const actionableRoots = roots.filter((root) => (
+      hasRepairableText(root.textContent || '')
+    ));
+    const models = actionableRoots.length
+      ? actionableRoots
       : Array.from(
         document.querySelectorAll(REPAIR_ROOT_SELECTOR)
       ).filter((root) => (
         root.isConnected &&
-        !closest(root, USER_SELECTOR)
+        !closest(root, USER_SELECTOR) &&
+        hasRepairableText(root.textContent || '')
       ));
 
     const last = models[models.length - 1];
