@@ -45,6 +45,7 @@ async (page) => {
     const splitBoldItalic = document.getElementById('split-bold-italic');
     const mathAdjacentBold = document.getElementById('math-adjacent-bold');
     const rawAccountingArray = document.getElementById('raw-accounting-array');
+    const rawAlignedEquation = document.getElementById('raw-aligned-equation');
     const codeBoundaryBold = document.getElementById('code-boundary-bold');
     const linkBoundaryBold = document.getElementById('link-boundary-bold');
     return {
@@ -87,6 +88,17 @@ async (page) => {
       arrayDividerCount: rawAccountingArray.querySelectorAll(
         '.aistudio-array-divider'
       ).length,
+      alignedRowCount: rawAlignedEquation.querySelectorAll(
+        '.aistudio-aligned-row'
+      ).length,
+      alignedCellCount: rawAlignedEquation.querySelectorAll(
+        '.aistudio-aligned-cell'
+      ).length,
+      alignedText: rawAlignedEquation.textContent.replace(/\s+/g, ' ').trim(),
+      alignedBoldText: Array.from(
+        rawAlignedEquation.querySelectorAll('strong.aistudio-tex-bold'),
+        (element) => element.textContent
+      ),
       preservedCodeBoundary:
         codeBoundaryBold.querySelectorAll('strong').length === 0 &&
         codeBoundaryBold.textContent.includes('**'),
@@ -94,7 +106,7 @@ async (page) => {
         linkBoundaryBold.querySelectorAll('strong').length === 0 &&
         linkBoundaryBold.textContent.includes('**'),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-164'
+        'data-aistudio-mobile-safe-165'
       )
     };
   });
@@ -118,6 +130,16 @@ async (page) => {
     rendering.arrayText.includes('begin{array}') ||
     !rendering.arrayText.includes('(차) 기계장치(신)') ||
     !rendering.arrayText.includes('(대) 기계장치(구)') ||
+    rendering.alignedRowCount !== 3 ||
+    rendering.alignedCellCount !== 6 ||
+    rendering.alignedText.includes('begin{aligned}') ||
+    rendering.alignedText.includes('\\text') ||
+    !rendering.alignedText.includes('기계장치 처분손익') ||
+    !rendering.alignedText.includes('+10,000원 (처분이익)') ||
+    rendering.alignedBoldText.join('|') !==
+      '[기계장치]의 공정가치(시세)|' +
+      '[기계장치]의 장부원가(장부금액)|' +
+      '+10,000원 (처분이익)' ||
     rendering.text.includes('<br>') ||
     rendering.text.includes('**') ||
     !rendering.preservedBlockBoundary ||
@@ -125,7 +147,7 @@ async (page) => {
     !rendering.preservedLinkBoundary ||
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
-    rendering.version !== '1.6.4'
+    rendering.version !== '1.6.5'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

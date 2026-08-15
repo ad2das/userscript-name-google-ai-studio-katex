@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.6\.4/);
+assert.match(source, /\/\/ @version\s+1\.6\.5/);
 assert.match(source, /\/\/ @inject-into\s+auto/);
 assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
@@ -33,9 +33,11 @@ const instrumented = source.replace(
     isPromptRunButton,
     isStopActionLabel,
     keepSessionFresh,
+    parseRawAligned,
     parseRawArray,
     repairRawArrayContainer,
-    repairTableBreakTextNode
+    repairTableBreakTextNode,
+    simpleTexRuns
   };
 }());`
 );
@@ -220,6 +222,51 @@ assert.deepEqual(
   ]
 );
 assert.equal(api.parseRawArray('begin{array}{ll} no columns end{array}'), null);
+
+const brokenAligned = String.raw`begin{aligned}
+\text{기계장치 처분손익} &= \text{\bf [기계장치]의 공정가치(시세)} - \text{\bf [기계장치]의 장부원가(장부금액)} \
+&= 30,000\text{원} - 20,000\text{원}(50,000 - 30,000) \
+&= \mathbf{+10,000\text{원 (처분이익)}}
+end{aligned}`;
+const parsedAligned = api.parseRawAligned(brokenAligned);
+assert.ok(parsedAligned);
+assert.equal(parsedAligned.rows.length, 3);
+assert.deepEqual(
+  Array.from(parsedAligned.rows, (row) => Array.from(row)),
+  [
+    [
+      String.raw`\text{기계장치 처분손익}`,
+      String.raw`= \text{\bf [기계장치]의 공정가치(시세)} - \text{\bf [기계장치]의 장부원가(장부금액)}`
+    ],
+    [
+      '',
+      String.raw`= 30,000\text{원} - 20,000\text{원}(50,000 - 30,000)`
+    ],
+    [
+      '',
+      String.raw`= \mathbf{+10,000\text{원 (처분이익)}}`
+    ]
+  ]
+);
+
+const plainRuns = (text) => Array.from(
+  api.simpleTexRuns(text),
+  (run) => ({ text: run.text, bold: run.bold })
+);
+assert.deepEqual(plainRuns(parsedAligned.rows[0][0]), [
+  { text: '기계장치 처분손익', bold: false }
+]);
+assert.deepEqual(plainRuns(parsedAligned.rows[0][1]), [
+  { text: '= ', bold: false },
+  { text: '[기계장치]의 공정가치(시세)', bold: true },
+  { text: ' - ', bold: false },
+  { text: '[기계장치]의 장부원가(장부금액)', bold: true }
+]);
+assert.deepEqual(plainRuns(parsedAligned.rows[2][1]), [
+  { text: '= ', bold: false },
+  { text: '+10,000원 (처분이익)', bold: true }
+]);
+assert.equal(api.parseRawAligned('begin{aligned} no alignment end{aligned}'), null);
 
 let replacement = null;
 const tableCell = {

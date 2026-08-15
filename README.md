@@ -18,6 +18,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   including markers split across multiple inline nodes
 - Raw `begin{array}{...}` accounting/math blocks whose command or row-separator
   backslashes were lost by AI Studio rendering
+- Raw `begin{aligned}` equations with lost backslashes, including `&=` alignment,
+  nested `\text{\bf ...}`, and `\mathbf{...}` formatting
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses
 - Mobile readable Google/Samsung-like font stack
@@ -35,7 +37,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.6.4 no longer uses a privileged GM API. Violentmonkey may inject it into
+Version 1.6.5 no longer uses a privileged GM API. Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
 does not retry a failed generation. It refreshes an exposed Google auth token when
 needed, warms the authenticated AI Studio document session before generation, and
