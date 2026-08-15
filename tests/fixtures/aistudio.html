@@ -37,6 +37,12 @@
         <p id="raw-display-bold">$$\frac{\mathbf{x}}{\boldsymbol{\beta}}$$</p>
         <p id="raw-markdown-bold">**\(\frac{x}{y}\)**</p>
         <p id="raw-standalone-bold">\text{\bf 굵은 금액 }+\bm{x}</p>
+        <p id="mixed-partial-math">begin{aligned}
+          \text{부분 렌더 합계} &amp;= <span id="partial-katex-slot"></span> \
+          &amp;= 10,000\text{원}
+          end{aligned}</p>
+        <p id="native-bold-math"></p>
+        <p id="mixed-missing-source">begin{aligned}x&amp;=<span class="katex">unknown source</span>end{aligned}</p>
         <p id="invalid-raw-math">begin{array}{cc}a&amp;b\end{matrix}</p>
         <p id="existing-rendered-math"><span class="katex">already rendered</span></p>
         <p id="code-boundary-bold"><span>**do not </span><code>cross code</code><span> here**</span></p>
@@ -54,12 +60,19 @@
           </tbody>
         </table>
       </ms-cmark-node>
+      <ms-text-chunk id="modern-text-chunk">
+        <div id="modern-raw-math" class="very-large-text-container">begin{aligned}
+          \mathbf{매출\text{원}} &amp;= 10 \
+          &amp;= \boldsymbol{x}
+          end{aligned}</div>
+      </ms-text-chunk>
     </div>
   </ms-chat-turn>
 
   <ms-chat-turn>
     <div class="chat-turn-container user">
       <p id="user-raw-math">begin{aligned}x&amp;=\mathbf{y}\end{aligned}</p>
+      <p id="user-native-bold-math"></p>
     </div>
   </ms-chat-turn>
 </body>

@@ -32,10 +32,34 @@ async (page) => {
     });
   });
 
+  const fixtureOrigin = await page.evaluate(() => window.location.origin);
   await page.addStyleTag({
-    url: `${new URL(page.url()).origin}/node_modules/katex/dist/katex.min.css`
+    url: `${fixtureOrigin}/node_modules/katex/dist/katex.min.css`
   });
   await page.addScriptTag({ path: 'node_modules/katex/dist/katex.min.js' });
+  await page.evaluate(() => {
+    const options = {
+      displayMode: true,
+      output: 'htmlAndMathml',
+      throwOnError: true,
+      strict: 'ignore'
+    };
+    window.katex.render(
+      String.raw`\mathbf{+10,000\text{원 (처분이익)}}`,
+      document.getElementById('native-bold-math'),
+      options
+    );
+    window.katex.render(
+      String.raw`\mathbf{25,000\text{원}}`,
+      document.getElementById('partial-katex-slot'),
+      { ...options, displayMode: false }
+    );
+    window.katex.render(
+      String.raw`\mathbf{사용자\text{원문}}`,
+      document.getElementById('user-native-bold-math'),
+      options
+    );
+  });
   await page.addScriptTag({ path: 'aaa.user.js' });
   await page.waitForTimeout(4000);
 
@@ -55,7 +79,9 @@ async (page) => {
       'raw-matrix',
       'raw-display-bold',
       'raw-markdown-bold',
-      'raw-standalone-bold'
+      'raw-standalone-bold',
+      'mixed-partial-math',
+      'modern-raw-math'
     ];
     const rawMathNodes = rawMathIds.map((id) => document.getElementById(id));
     const sourceOf = (id) => document
@@ -111,6 +137,8 @@ async (page) => {
       casesSource: sourceOf('raw-cases'),
       matrixSource: sourceOf('raw-matrix'),
       standaloneSource: sourceOf('raw-standalone-bold'),
+      mixedSource: sourceOf('mixed-partial-math'),
+      modernSource: sourceOf('modern-raw-math'),
       alignedBoldCount: document.querySelectorAll(
         '#raw-aligned-equation .katex-html .mathbf'
       ).length,
@@ -126,9 +154,29 @@ async (page) => {
       inlineMathClass: document.querySelector(
         '#raw-standalone-bold .aistudio-raw-math-inline'
       ) !== null,
+      alignedNestedBoldWeight: Number(getComputedStyle(
+        Array.from(document.querySelectorAll(
+          '#raw-aligned-equation .hangul_fallback'
+        )).find((element) => element.textContent.includes('처분이익'))
+      ).fontWeight),
+      nativeBoldRepaired: document.querySelector(
+        '#native-bold-math .aistudio-rendered-math-bold-repaired'
+      ) !== null,
+      nativeBoldSource: sourceOf('native-bold-math'),
+      nativeBoldWeight: Number(getComputedStyle(
+        Array.from(document.querySelectorAll(
+          '#native-bold-math .hangul_fallback'
+        )).find((element) => element.textContent.includes('처분이익'))
+      ).fontWeight),
       invalidMathPreserved:
         document.getElementById('invalid-raw-math').textContent ===
         'begin{array}{cc}a&b\\end{matrix}',
+      mixedMissingSourcePreserved:
+        document.querySelector(
+          '#mixed-missing-source .aistudio-raw-math-repaired'
+        ) === null &&
+        document.getElementById('mixed-missing-source').textContent ===
+          'begin{aligned}x&=unknown sourceend{aligned}',
       existingMathPreserved:
         document.querySelector(
           '#existing-rendered-math > .katex:not(.aistudio-raw-math-repaired)'
@@ -136,6 +184,12 @@ async (page) => {
       userMathPreserved:
         document.getElementById('user-raw-math').textContent ===
         'begin{aligned}x&=\\mathbf{y}\\end{aligned}',
+      userNativeMathPreserved:
+        document.querySelector(
+          '#user-native-bold-math .aistudio-rendered-math-bold-repaired'
+        ) === null &&
+        sourceOf('user-native-bold-math') ===
+          String.raw`\mathbf{사용자\text{원문}}`,
       katexVersion: window.katex?.version,
       katexStylesheetInstalled:
         document.getElementById('aistudio-katex-0181-css')?.href.includes(
@@ -148,7 +202,7 @@ async (page) => {
         linkBoundaryBold.querySelectorAll('strong').length === 0 &&
         linkBoundaryBold.textContent.includes('**'),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-170'
+        'data-aistudio-mobile-safe-171'
       )
     };
   });
@@ -166,25 +220,34 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
-    rendering.rawMathCount !== 7 ||
-    rendering.rawMathKatexCount !== 7 ||
-    rendering.rawMathMathmlCount !== 7 ||
+    rendering.rawMathCount !== 9 ||
+    rendering.rawMathKatexCount !== 9 ||
+    rendering.rawMathMathmlCount !== 9 ||
     rendering.rawMathErrorCount !== 0 ||
     !rendering.arraySource?.startsWith('\\begin{array}{ll|ll}') ||
     !rendering.arraySource?.includes('\\\\') ||
     !rendering.alignedSource?.startsWith('\\begin{aligned}') ||
     !rendering.alignedSource?.includes('\\mathbf{+10,000') ||
+    !rendering.alignedSource?.includes('\\text{\\bf 원 (처분이익)}') ||
     !rendering.casesSource?.startsWith('\\begin{cases}') ||
     !rendering.matrixSource?.startsWith('\\begin{pmatrix}') ||
     !rendering.standaloneSource?.includes('\\boldsymbol{x}') ||
+    !rendering.mixedSource?.includes('\\text{\\bf 원}') ||
+    !rendering.modernSource?.includes('\\text{\\bf 원}') ||
     rendering.alignedBoldCount < 3 ||
     rendering.matrixBoldCount < 1 ||
     !rendering.markdownMathBold ||
     !rendering.displayMathClass ||
     !rendering.inlineMathClass ||
+    rendering.alignedNestedBoldWeight < 600 ||
+    !rendering.nativeBoldRepaired ||
+    !rendering.nativeBoldSource?.includes('\\text{\\bf 원 (처분이익)}') ||
+    rendering.nativeBoldWeight < 600 ||
     !rendering.invalidMathPreserved ||
+    !rendering.mixedMissingSourcePreserved ||
     !rendering.existingMathPreserved ||
     !rendering.userMathPreserved ||
+    !rendering.userNativeMathPreserved ||
     rendering.katexVersion !== '0.18.1' ||
     !rendering.katexStylesheetInstalled ||
     rendering.text.includes('<br>') ||
@@ -194,7 +257,7 @@ async (page) => {
     !rendering.preservedLinkBoundary ||
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
-    rendering.version !== '1.7.0'
+    rendering.version !== '1.7.1'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
