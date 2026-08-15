@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.6.5
-// @description  Mobile-safe display fixes, raw array/aligned recovery, Markdown repairs, and guarded session keepalive.
+// @version      1.7.0
+// @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
+// @require      https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.js
 // @run-at       document-idle
 // @inject-into  auto
 // @noframes
@@ -15,9 +16,13 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.5';
-  const STYLE_ID = 'aistudio-mobile-safe-165-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-165';
+  const VERSION = '1.7.0';
+  const STYLE_ID = 'aistudio-mobile-safe-170-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-170';
+  const KATEX_VERSION = '0.18.1';
+  const KATEX_CSS_ID = 'aistudio-katex-0181-css';
+  const KATEX_CSS_URL =
+    'https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.css';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
@@ -44,6 +49,44 @@
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
   const MAX_RAW_MATH_LENGTH = 12000;
+  const MAX_KATEX_EXPANSIONS = 1000;
+  const MAX_KATEX_SIZE = 20;
+
+  const RAW_MATH_ENVIRONMENTS = new Set([
+    'array',
+    'darray',
+    'subarray',
+    'aligned',
+    'alignedat',
+    'gathered',
+    'split',
+    'cases',
+    'dcases',
+    'rcases',
+    'drcases',
+    'matrix',
+    'matrix*',
+    'pmatrix',
+    'pmatrix*',
+    'bmatrix',
+    'bmatrix*',
+    'Bmatrix',
+    'Bmatrix*',
+    'vmatrix',
+    'vmatrix*',
+    'Vmatrix',
+    'Vmatrix*',
+    'smallmatrix',
+    'equation',
+    'equation*',
+    'align',
+    'align*',
+    'alignat',
+    'alignat*',
+    'gather',
+    'gather*',
+    'CD'
+  ]);
 
   const ENABLE_SESSION_KEEPALIVE = true;
   const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
@@ -137,7 +180,8 @@
     'b',
     '.aistudio-md-repaired',
     '.aistudio-array-repaired',
-    '.aistudio-aligned-repaired'
+    '.aistudio-aligned-repaired',
+    '.aistudio-raw-math-repaired'
   ].join(',');
 
   const INLINE_REPAIR_CONTAINER_SELECTOR = [
@@ -238,7 +282,8 @@
     'aistudio-mobile-safe-161-style',
     'aistudio-mobile-safe-162-style',
     'aistudio-mobile-safe-163-style',
-    'aistudio-mobile-safe-164-style'
+    'aistudio-mobile-safe-164-style',
+    'aistudio-mobile-safe-165-style'
   ];
 
   const CSS_TEXT = `
@@ -325,6 +370,39 @@ ${SCOPE} :where(strong, b, .aistudio-md-repaired) {
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
+}
+
+/*
+ * 원문으로 노출된 완전한 TeX 블록은 고정 버전 KaTeX로 다시 렌더한다.
+ * 파싱이 성공한 경우에만 이 래퍼가 만들어진다.
+ */
+${SCOPE} .aistudio-raw-math-repaired {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+${SCOPE} .aistudio-raw-math-display {
+  display: block !important;
+  margin: 0.65em 0 !important;
+}
+
+${SCOPE} .aistudio-raw-math-inline {
+  display: inline !important;
+  margin: 0 !important;
+}
+
+${SCOPE} .aistudio-raw-math-repaired :where(.katex, .katex *) {
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+/* Markdown **...**가 수식 바깥에 남은 경우의 시각적 굵기 fallback. */
+${SCOPE} .aistudio-raw-math-bold > .katex {
+  -webkit-text-stroke: 0.12px currentColor !important;
+  text-shadow: 0.01em 0 currentColor, -0.01em 0 currentColor !important;
 }
 
 /*
@@ -674,6 +752,23 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
+  function installKatexStylesheet(parent) {
+    let stylesheet = document.getElementById(KATEX_CSS_ID);
+
+    if (!stylesheet) {
+      stylesheet = document.createElement('link');
+      stylesheet.id = KATEX_CSS_ID;
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = KATEX_CSS_URL;
+      stylesheet.crossOrigin = 'anonymous';
+      stylesheet.referrerPolicy = 'no-referrer';
+      stylesheet.setAttribute('data-katex-version', KATEX_VERSION);
+      parent.appendChild(stylesheet);
+    } else if (!stylesheet.isConnected) {
+      parent.appendChild(stylesheet);
+    }
+  }
+
   function installStyle() {
     const parent =
       document.head ||
@@ -684,6 +779,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     cleanupLegacy();
+    installKatexStylesheet(parent);
 
     let style =
       document.getElementById(STYLE_ID);
@@ -722,6 +818,211 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function bracesAreBalanced(source) {
+    let depth = 0;
+
+    for (let index = 0; index < source.length; index += 1) {
+      if (isEscaped(source, index)) {
+        continue;
+      }
+
+      if (source[index] === '{') {
+        depth += 1;
+      } else if (source[index] === '}') {
+        depth -= 1;
+
+        if (depth < 0) {
+          return false;
+        }
+      }
+    }
+
+    return depth === 0;
+  }
+
+  function normalizeCollapsedRowSeparators(source) {
+    const normalizedLines = source
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => {
+        const ending = line.match(/^(.*?)(\\+)([ \t]*)$/);
+
+        if (!ending || ending[2].length !== 1) {
+          return line;
+        }
+
+        return `${ending[1]}\\\\${ending[3]}`;
+      });
+
+    return normalizedLines
+      .join('\n')
+      .replace(/(^|[^\\])\\([ \t]+)(?=&)/g, '$1\\\\$2');
+  }
+
+  function normalizeKatexCommands(source) {
+    return source
+      .replace(/\\bm(?=\s*\{)/g, '\\boldsymbol')
+      .replace(/\\bfseries\b/g, '\\bf');
+  }
+
+  function stripOuterMarkdownBold(source) {
+    const match = source.match(/^(\*\*|__)([\s\S]+)\1$/);
+
+    if (!match || !match[2].trim()) {
+      return { source, bold: false };
+    }
+
+    return {
+      source: match[2].trim(),
+      bold: true
+    };
+  }
+
+  function parseRawMathCandidate(text) {
+    if (
+      !text ||
+      text.length > MAX_RAW_MATH_LENGTH
+    ) {
+      return null;
+    }
+
+    const outer = stripOuterMarkdownBold(text.trim());
+    const source = outer.source;
+
+    if (!source || !bracesAreBalanced(source)) {
+      return null;
+    }
+
+    const opening = source.match(
+      /^(?:\\)?begin\s*\{([A-Za-z][A-Za-z*]*)\}/
+    );
+    const closing = source.match(
+      /(?:\\)?end\s*\{([A-Za-z][A-Za-z*]*)\}\s*$/
+    );
+
+    if (opening || closing) {
+      if (
+        !opening ||
+        !closing ||
+        opening[1] !== closing[1] ||
+        !RAW_MATH_ENVIRONMENTS.has(opening[1]) ||
+        typeof closing.index !== 'number' ||
+        closing.index < opening[0].length
+      ) {
+        return null;
+      }
+
+      const environment = opening[1];
+      const body = normalizeCollapsedRowSeparators(
+        source.slice(opening[0].length, closing.index)
+      );
+      let tex;
+
+      if (/^equation\*?$/.test(environment)) {
+        tex = body;
+      } else if (/^align\*?$/.test(environment)) {
+        tex = `\\begin{aligned}${body}\\end{aligned}`;
+      } else if (/^alignat\*?$/.test(environment)) {
+        tex = `\\begin{alignedat}${body}\\end{alignedat}`;
+      } else if (/^gather\*?$/.test(environment)) {
+        tex = `\\begin{gathered}${body}\\end{gathered}`;
+      } else {
+        tex = `\\begin{${environment}}${body}\\end{${environment}}`;
+      }
+
+      return {
+        bold: outer.bold,
+        displayMode: true,
+        environment,
+        kind: 'environment',
+        tex: normalizeKatexCommands(tex)
+      };
+    }
+
+    const delimiterPairs = [
+      { open: '$$', close: '$$', displayMode: true },
+      { open: '\\[', close: '\\]', displayMode: true },
+      { open: '\\(', close: '\\)', displayMode: false },
+      { open: '$', close: '$', displayMode: false }
+    ];
+
+    for (const delimiters of delimiterPairs) {
+      if (
+        !source.startsWith(delimiters.open) ||
+        !source.endsWith(delimiters.close) ||
+        source.length <= delimiters.open.length + delimiters.close.length
+      ) {
+        continue;
+      }
+
+      if (
+        delimiters.open === '$' &&
+        (source.startsWith('$$') || source.endsWith('$$'))
+      ) {
+        continue;
+      }
+
+      const tex = source.slice(
+        delimiters.open.length,
+        source.length - delimiters.close.length
+      ).trim();
+
+      if (!tex) {
+        return null;
+      }
+
+      return {
+        bold: outer.bold,
+        displayMode: delimiters.displayMode,
+        environment: null,
+        kind: 'delimited',
+        tex: normalizeKatexCommands(tex)
+      };
+    }
+
+    const standaloneBoldMath = (
+      /^(?:\\(?:mathbf|boldsymbol|bm|bold|pmb|textbf|text)\s*\{|\\(?:bf|bfseries)\b)/.test(source) ||
+      /^\{\s*\\(?:bf|bfseries)\b/.test(source)
+    );
+
+    if (!standaloneBoldMath) {
+      return null;
+    }
+
+    return {
+      bold: outer.bold,
+      displayMode: false,
+      environment: null,
+      kind: 'standalone-bold',
+      tex: normalizeKatexCommands(source)
+    };
+  }
+
+  function hasRawMathText(text) {
+    if (!text) {
+      return false;
+    }
+
+    if (parseRawMathCandidate(text)) {
+      return true;
+    }
+
+    const environmentMatch = text.match(
+      /(?:^|\s)(?:\\)?begin\s*\{([A-Za-z][A-Za-z*]*)\}/
+    );
+
+    return Boolean(
+      (
+        environmentMatch &&
+        RAW_MATH_ENVIRONMENTS.has(environmentMatch[1])
+      ) ||
+      /\\(?:\[|\()/.test(text) ||
+      /\\(?:mathbf|boldsymbol|bm|bold|pmb|textbf|bfseries|bf)\b/.test(text) ||
+      text.includes('$$') ||
+      hasUnescapedDollarPair(text)
+    );
+  }
+
   function hasRawArrayText(text) {
     return Boolean(
       text &&
@@ -744,8 +1045,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return (
       hasPair(text) ||
       hasLiteralTableBreak(text) ||
-      hasRawArrayText(text) ||
-      hasRawAlignedText(text)
+      hasRawMathText(text)
     );
   }
 
@@ -1334,7 +1634,89 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return array;
   }
 
-  function repairRawAlignedContainer(container) {
+  function availableKatex() {
+    const engine =
+      typeof globalThis === 'object'
+        ? globalThis.katex
+        : null;
+
+    return engine && typeof engine.render === 'function'
+      ? engine
+      : null;
+  }
+
+  function renderRawMathCandidate(candidate) {
+    const engine = availableKatex();
+
+    if (!engine || !candidate || !candidate.tex) {
+      return null;
+    }
+
+    const rendered = document.createElement('span');
+    rendered.className = [
+      'aistudio-raw-math-repaired',
+      candidate.displayMode
+        ? 'aistudio-raw-math-display'
+        : 'aistudio-raw-math-inline',
+      candidate.bold
+        ? 'aistudio-raw-math-bold'
+        : ''
+    ].filter(Boolean).join(' ');
+    rendered.setAttribute('data-aistudio-raw-math-repaired', '1');
+    rendered.setAttribute('data-aistudio-raw-math-kind', candidate.kind);
+    rendered.setAttribute('data-katex-version', KATEX_VERSION);
+
+    if (candidate.environment) {
+      rendered.setAttribute(
+        'data-aistudio-raw-math-environment',
+        candidate.environment
+      );
+    }
+
+    try {
+      engine.render(candidate.tex, rendered, {
+        displayMode: candidate.displayMode,
+        output: 'htmlAndMathml',
+        throwOnError: true,
+        strict: 'ignore',
+        trust: false,
+        maxExpand: MAX_KATEX_EXPANSIONS,
+        maxSize: MAX_KATEX_SIZE
+      });
+    } catch (_) {
+      return null;
+    }
+
+    if (
+      !rendered.querySelector ||
+      !rendered.querySelector('.katex') ||
+      rendered.querySelector('.katex-error')
+    ) {
+      return null;
+    }
+
+    return rendered;
+  }
+
+  function fallbackRawMath(source, candidate) {
+    if (!candidate || candidate.kind !== 'environment') {
+      return null;
+    }
+
+    if (candidate.environment === 'array') {
+      const parsedArray = parseRawArray(source);
+      return parsedArray ? createRepairedArray(parsedArray) : null;
+    }
+
+    if (candidate.environment === 'aligned') {
+      const parsedAligned = parseRawAligned(source);
+      return parsedAligned ? createRepairedAligned(parsedAligned) : null;
+    }
+
+    return null;
+  }
+
+  function repairRawMathContainer(container) {
     if (
       !container ||
       !container.isConnected ||
@@ -1345,37 +1727,44 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         container.querySelector(
           'a, code, pre, table, svg, math, .katex, ms-katex, ' +
           '.MathJax, mjx-container, .aistudio-array-repaired, ' +
-          '.aistudio-aligned-repaired'
+          '.aistudio-aligned-repaired, .aistudio-raw-math-repaired'
         )
-      )
+      ) ||
+      typeof container.replaceChildren !== 'function'
     ) {
       return 0;
     }
 
-    const sources = [
+    const sources = Array.from(new Set([
       container.textContent || '',
       typeof container.innerText === 'string'
         ? container.innerText
         : ''
-    ];
-    let parsed = null;
+    ].filter(Boolean)));
 
     for (const source of sources) {
-      parsed = parseRawAligned(source);
-      if (parsed) {
-        break;
+      const candidate = parseRawMathCandidate(source);
+
+      if (!candidate) {
+        continue;
       }
+
+      const replacement =
+        renderRawMathCandidate(candidate) ||
+        fallbackRawMath(source, candidate);
+
+      if (!replacement) {
+        continue;
+      }
+
+      container.replaceChildren(replacement);
+      return 1;
     }
 
-    if (!parsed || typeof container.replaceChildren !== 'function') {
-      return 0;
-    }
-
-    container.replaceChildren(createRepairedAligned(parsed));
-    return 1;
+    return 0;
   }
 
-  function repairRawAligned(root) {
+  function repairRawMath(root) {
     if (!root || !root.querySelectorAll) {
       return 0;
     }
@@ -1394,73 +1783,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let repaired = 0;
 
     for (const container of containers) {
-      repaired += repairRawAlignedContainer(container);
-    }
-
-    return repaired;
-  }
-
-  function repairRawArrayContainer(container) {
-    if (
-      !container ||
-      !container.isConnected ||
-      closest(container, USER_SELECTOR) ||
-      closest(container, SKIP_SELECTOR) ||
-      (
-        container.querySelector &&
-        container.querySelector(
-          'a, code, pre, table, svg, math, .katex, ms-katex, ' +
-          '.MathJax, mjx-container, .aistudio-array-repaired, ' +
-          '.aistudio-aligned-repaired'
-        )
-      )
-    ) {
-      return 0;
-    }
-
-    const sources = [
-      container.textContent || '',
-      typeof container.innerText === 'string'
-        ? container.innerText
-        : ''
-    ];
-    let parsed = null;
-
-    for (const source of sources) {
-      parsed = parseRawArray(source);
-      if (parsed) {
-        break;
-      }
-    }
-
-    if (!parsed || typeof container.replaceChildren !== 'function') {
-      return 0;
-    }
-
-    container.replaceChildren(createRepairedArray(parsed));
-    return 1;
-  }
-
-  function repairRawArrays(root) {
-    if (!root || !root.querySelectorAll) {
-      return 0;
-    }
-
-    const containers = Array.from(
-      root.querySelectorAll(RAW_MATH_CONTAINER_SELECTOR)
-    ).reverse();
-
-    if (
-      root.matches &&
-      root.matches(RAW_MATH_CONTAINER_SELECTOR)
-    ) {
-      containers.push(root);
-    }
-
-    let repaired = 0;
-
-    for (const container of containers) {
-      repaired += repairRawArrayContainer(container);
+      repaired += repairRawMathContainer(container);
     }
 
     return repaired;
@@ -2073,8 +2396,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    let repaired = repairRawAligned(root);
-    repaired += repairRawArrays(root);
+    let repaired = repairRawMath(root);
     repaired += repairSplitTableBreaks(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
@@ -2827,7 +3149,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'css-plus-safe-math-markdown-repair-session-keepalive'
+      'katex-engine-safe-math-markdown-repair-session-keepalive'
     );
 
     window.addEventListener(

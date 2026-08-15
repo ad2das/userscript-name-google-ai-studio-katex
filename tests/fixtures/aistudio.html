@@ -26,6 +26,19 @@
           &amp;= 30,000\text{원} - 20,000\text{원}(50,000 - 30,000) \
           &amp;= \mathbf{+10,000\text{원 (처분이익)}}
           end{aligned}</p>
+        <p id="raw-cases">begin{cases}
+          \mathbf{x^2} &amp; \textbf{if } x &gt; 0 \
+          -x &amp; \text{otherwise}
+          end{cases}</p>
+        <p id="raw-matrix">\begin{pmatrix}
+          \boldsymbol{\alpha} &amp; \mathbf{x} \\
+          y &amp; z
+          \end{pmatrix}</p>
+        <p id="raw-display-bold">$$\frac{\mathbf{x}}{\boldsymbol{\beta}}$$</p>
+        <p id="raw-markdown-bold">**\(\frac{x}{y}\)**</p>
+        <p id="raw-standalone-bold">\text{\bf 굵은 금액 }+\bm{x}</p>
+        <p id="invalid-raw-math">begin{array}{cc}a&amp;b\end{matrix}</p>
+        <p id="existing-rendered-math"><span class="katex">already rendered</span></p>
         <p id="code-boundary-bold"><span>**do not </span><code>cross code</code><span> here**</span></p>
         <p id="link-boundary-bold"><span>**do not </span><a href="#">cross links</a><span> here**</span></p>
         <table>
@@ -41,6 +54,12 @@
           </tbody>
         </table>
       </ms-cmark-node>
+    </div>
+  </ms-chat-turn>
+
+  <ms-chat-turn>
+    <div class="chat-turn-container user">
+      <p id="user-raw-math">begin{aligned}x&amp;=\mathbf{y}\end{aligned}</p>
     </div>
   </ms-chat-turn>
 </body>

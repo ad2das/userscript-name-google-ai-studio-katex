@@ -1,12 +1,17 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const katex = require('katex');
 const path = require('node:path');
 const vm = require('node:vm');
 
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.6\.5/);
+assert.match(source, /\/\/ @version\s+1\.7\.0/);
+assert.match(
+  source,
+  /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
+);
 assert.match(source, /\/\/ @inject-into\s+auto/);
 assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
@@ -22,7 +27,10 @@ const instrumented = source.replace(
   tail,
   `
   globalThis.__userscriptTest = {
+    availableKatex,
+    bracesAreBalanced,
     MODEL_ACTIVITY_SELECTOR,
+    RAW_MATH_ENVIRONMENTS,
     buttonLabel,
     canSubmit,
     findMatches,
@@ -33,9 +41,12 @@ const instrumented = source.replace(
     isPromptRunButton,
     isStopActionLabel,
     keepSessionFresh,
+    hasRawMathText,
+    normalizeCollapsedRowSeparators,
+    normalizeKatexCommands,
     parseRawAligned,
     parseRawArray,
-    repairRawArrayContainer,
+    parseRawMathCandidate,
     repairTableBreakTextNode,
     simpleTexRuns
   };
@@ -64,6 +75,7 @@ const context = {
   URL,
   WeakMap,
   WeakSet,
+  katex,
   clearTimeout,
   console,
   document: {
@@ -167,6 +179,7 @@ vm.runInNewContext(instrumented, context, { filename: scriptPath });
 
 const api = context.__userscriptTest;
 assert.ok(api);
+assert.equal(api.availableKatex().version, '0.18.1');
 assert.ok(
   api.MODEL_ACTIVITY_SELECTOR.split(',').every((selector) => (
     /(?:aria-busy|progress-spinner|mat-spinner|progressbar)/.test(selector)
@@ -267,6 +280,303 @@ assert.deepEqual(plainRuns(parsedAligned.rows[2][1]), [
   { text: '+10,000원 (처분이익)', bold: true }
 ]);
 assert.equal(api.parseRawAligned('begin{aligned} no alignment end{aligned}'), null);
+
+assert.equal(api.bracesAreBalanced(String.raw`\mathbf{x_{1}}`), true);
+assert.equal(api.bracesAreBalanced(String.raw`\mathbf{x_{1}`), false);
+assert.equal(
+  api.normalizeCollapsedRowSeparators(String.raw`a &= b \
+&= c \\
+&= d \cr
+&= e`),
+  String.raw`a &= b \\
+&= c \\
+&= d \cr
+&= e`
+);
+assert.equal(
+  api.normalizeCollapsedRowSeparators(String.raw`a &= b \ &= c`),
+  String.raw`a &= b \\ &= c`
+);
+assert.equal(
+  api.normalizeKatexCommands(String.raw`\bm{x}+{\bfseries y}`),
+  String.raw`\boldsymbol{x}+{\bf y}`
+);
+
+const rawMathCases = [
+  {
+    name: 'lost array commands and row separators',
+    input: brokenArray,
+    environment: 'array',
+    kind: 'environment'
+  },
+  {
+    name: 'lost aligned commands with nested bold text',
+    input: brokenAligned,
+    environment: 'aligned',
+    kind: 'environment'
+  },
+  {
+    name: 'matrix with mathematical bold commands',
+    input: String.raw`\begin{pmatrix}
+\mathbf{x} & \boldsymbol{\alpha} \\
+y & z
+\end{pmatrix}`,
+    environment: 'pmatrix',
+    kind: 'environment'
+  },
+  {
+    name: 'cases with missing begin and end slashes',
+    input: String.raw`begin{cases}
+\mathbf{x^2} & \textbf{if } x > 0 \
+-x & \text{otherwise}
+end{cases}`,
+    environment: 'cases',
+    kind: 'environment'
+  },
+  {
+    name: 'starred matrix with alignment option',
+    input: String.raw`begin{Bmatrix*}[r]
+1 & \mathbf{2} \
+\boldsymbol{\beta} & 4
+end{Bmatrix*}`,
+    environment: 'Bmatrix*',
+    kind: 'environment'
+  },
+  {
+    name: 'equation containing split',
+    input: String.raw`begin{equation}
+\begin{split}
+a &= \mathbf{b} \
+&= \boldsymbol{\gamma}
+\end{split}
+end{equation}`,
+    environment: 'equation',
+    kind: 'environment'
+  },
+  {
+    name: 'top-level align converted to aligned',
+    input: String.raw`begin{align*}
+a &= \mathbf{b} \
+c &= \boldsymbol{d}
+end{align*}`,
+    environment: 'align*',
+    kind: 'environment',
+    texPattern: /\\begin\{aligned\}/
+  },
+  {
+    name: 'top-level alignat converted to alignedat',
+    input: String.raw`begin{alignat*}{2}
+10&x+&3&y=2 \
+3&x+&13&y=4
+end{alignat*}`,
+    environment: 'alignat*',
+    kind: 'environment',
+    texPattern: /\\begin\{alignedat\}\{2\}/
+  },
+  {
+    name: 'top-level gather converted to gathered',
+    input: String.raw`begin{gather*}
+\mathbf{a}=b \
+c=\boldsymbol{d}
+end{gather*}`,
+    environment: 'gather*',
+    kind: 'environment',
+    texPattern: /\\begin\{gathered\}/
+  },
+  {
+    name: 'display delimiters',
+    input: String.raw`$$\frac{\mathbf{x}}{\boldsymbol{\alpha}}$$`,
+    environment: null,
+    kind: 'delimited',
+    displayMode: true
+  },
+  {
+    name: 'inline delimiters',
+    input: String.raw`\(\sqrt{\mathbf{x_1}}\)`,
+    environment: null,
+    kind: 'delimited',
+    displayMode: false
+  },
+  {
+    name: 'markdown bold around delimited math',
+    input: String.raw`**\(\frac{x}{y}\)**`,
+    environment: null,
+    kind: 'delimited',
+    displayMode: false,
+    bold: true
+  },
+  {
+    name: 'standalone nested text bold',
+    input: String.raw`\text{\bf 굵은 금액 }+\mathbf{10,000}`,
+    environment: null,
+    kind: 'standalone-bold',
+    displayMode: false
+  },
+  {
+    name: 'bm alias normalized to boldsymbol',
+    input: String.raw`\bm{x}+\textbf{bold}`,
+    environment: null,
+    kind: 'standalone-bold',
+    displayMode: false,
+    texPattern: /\\boldsymbol\{x\}/
+  },
+  {
+    name: 'bold and poor mans bold commands',
+    input: String.raw`\bold{x}+\pmb{y}`,
+    environment: null,
+    kind: 'standalone-bold',
+    displayMode: false
+  }
+];
+
+for (const testCase of rawMathCases) {
+  const candidate = api.parseRawMathCandidate(testCase.input);
+  assert.ok(candidate, `${testCase.name}: candidate must be detected`);
+  assert.equal(candidate.environment, testCase.environment, testCase.name);
+  assert.equal(candidate.kind, testCase.kind, testCase.name);
+  assert.equal(
+    candidate.displayMode,
+    testCase.displayMode ?? true,
+    testCase.name
+  );
+  assert.equal(candidate.bold, testCase.bold ?? false, testCase.name);
+
+  if (testCase.texPattern) {
+    assert.match(candidate.tex, testCase.texPattern, testCase.name);
+  }
+
+  const renderedMath = katex.renderToString(candidate.tex, {
+    displayMode: candidate.displayMode,
+    output: 'htmlAndMathml',
+    throwOnError: true,
+    strict: 'ignore',
+    trust: false,
+    maxExpand: 1000,
+    maxSize: 20
+  });
+  assert.match(renderedMath, /class="katex"/, testCase.name);
+  assert.match(renderedMath, /<math/, testCase.name);
+}
+
+const allSupportedEnvironments = [
+  'array', 'darray', 'subarray', 'aligned', 'alignedat', 'gathered', 'split',
+  'cases', 'dcases', 'rcases', 'drcases', 'matrix', 'matrix*', 'pmatrix',
+  'pmatrix*', 'bmatrix', 'bmatrix*', 'Bmatrix', 'Bmatrix*', 'vmatrix',
+  'vmatrix*', 'Vmatrix', 'Vmatrix*', 'smallmatrix', 'equation', 'equation*',
+  'align', 'align*', 'alignat', 'alignat*', 'gather', 'gather*', 'CD'
+];
+assert.deepEqual(
+  Array.from(api.RAW_MATH_ENVIRONMENTS).sort(),
+  allSupportedEnvironments.slice().sort(),
+  'every allowlisted environment must stay in the real KaTeX coverage matrix'
+);
+
+const arrayEnvironments = new Set(['array', 'darray']);
+const caseEnvironments = new Set(['cases', 'dcases', 'rcases', 'drcases']);
+const matrixEnvironments = new Set([
+  'matrix', 'matrix*', 'pmatrix', 'pmatrix*', 'bmatrix', 'bmatrix*',
+  'Bmatrix', 'Bmatrix*', 'vmatrix', 'vmatrix*', 'Vmatrix', 'Vmatrix*',
+  'smallmatrix'
+]);
+const gatherEnvironments = new Set(['gathered', 'gather', 'gather*']);
+const alignedatEnvironments = new Set(['alignedat', 'alignat', 'alignat*']);
+
+for (const environment of allSupportedEnvironments) {
+  let argument = '';
+  let body = String.raw`a &= \mathbf{b} \\
+c &= \boldsymbol{d}`;
+
+  if (arrayEnvironments.has(environment)) {
+    argument = '{cc}';
+    body = String.raw`a & \mathbf{b} \\
+c & d`;
+  } else if (environment === 'subarray') {
+    argument = '{c}';
+    body = String.raw`a \\
+\mathbf{b}`;
+  } else if (alignedatEnvironments.has(environment)) {
+    argument = '{2}';
+    body = String.raw`a&=b&c&=\mathbf{d} \\
+e&=f&g&=h`;
+  } else if (caseEnvironments.has(environment)) {
+    body = String.raw`\mathbf{x} & x>0 \\
+-x & x\leq0`;
+  } else if (matrixEnvironments.has(environment)) {
+    argument = environment.endsWith('*') ? '[r]' : '';
+    body = String.raw`\mathbf{a} & b \\
+c & \boldsymbol{d}`;
+  } else if (gatherEnvironments.has(environment)) {
+    body = String.raw`a=\mathbf{b} \\
+c=\boldsymbol{d}`;
+  } else if (/^equation\*?$/.test(environment)) {
+    body = String.raw`a+\mathbf{b}=c`;
+  } else if (environment === 'CD') {
+    body = String.raw`A @>\mathbf{a}>> B \\
+@VbVV @AAcA \\
+C @>>d> D`;
+  }
+
+  const sourceForEnvironment = `begin{${environment}}${argument}\n${body}\nend{${environment}}`;
+  const candidate = api.parseRawMathCandidate(sourceForEnvironment);
+  assert.ok(candidate, `${environment}: allowlisted candidate must be detected`);
+  assert.equal(candidate.environment, environment, environment);
+  const rendered = katex.renderToString(candidate.tex, {
+    displayMode: true,
+    output: 'htmlAndMathml',
+    throwOnError: true,
+    strict: 'ignore',
+    trust: false,
+    maxExpand: 1000,
+    maxSize: 20
+  });
+  assert.match(rendered, /class="katex"/, environment);
+  assert.match(rendered, /<math/, environment);
+}
+
+assert.equal(
+  api.parseRawMathCandidate(String.raw`begin{array}{cc}a&b\end{matrix}`),
+  null
+);
+assert.equal(
+  api.parseRawMathCandidate(String.raw`begin{tikzpicture}x\end{tikzpicture}`),
+  null
+);
+assert.equal(
+  api.parseRawMathCandidate(String.raw`\mathbf{x_{1}`),
+  null
+);
+assert.equal(
+  api.parseRawMathCandidate(String.raw`Use \mathbf{x} in this sentence.`),
+  null
+);
+assert.equal(
+  api.parseRawMathCandidate(`\\mathbf{${'x'.repeat(12001)}}`),
+  null
+);
+assert.equal(
+  api.parseRawMathCandidate(
+    String.raw`Explanation before begin{aligned}a&=b\end{aligned}`
+  ),
+  null
+);
+assert.equal(
+  api.hasRawMathText(
+    String.raw`Explanation paragraph
+begin{cases}x&1\end{cases}`
+  ),
+  true
+);
+
+const untrustedLink = api.parseRawMathCandidate(
+  String.raw`$\href{javascript:alert(1)}{x}$`
+);
+assert.ok(untrustedLink);
+const untrustedHtml = katex.renderToString(untrustedLink.tex, {
+  throwOnError: true,
+  strict: 'ignore',
+  trust: false
+});
+assert.doesNotMatch(untrustedHtml, /href="javascript:/i);
 
 let replacement = null;
 const tableCell = {
