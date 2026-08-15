@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.6.4
-// @description  Mobile-safe display fixes, raw array recovery, Markdown repairs, and guarded AI Studio session keepalive.
+// @version      1.6.5
+// @description  Mobile-safe display fixes, raw array/aligned recovery, Markdown repairs, and guarded session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,9 +15,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.4';
-  const STYLE_ID = 'aistudio-mobile-safe-164-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-164';
+  const VERSION = '1.6.5';
+  const STYLE_ID = 'aistudio-mobile-safe-165-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-165';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
@@ -43,7 +43,7 @@
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
-  const MAX_RAW_ARRAY_LENGTH = 12000;
+  const MAX_RAW_MATH_LENGTH = 12000;
 
   const ENABLE_SESSION_KEEPALIVE = true;
   const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
@@ -136,7 +136,8 @@
     'strong',
     'b',
     '.aistudio-md-repaired',
-    '.aistudio-array-repaired'
+    '.aistudio-array-repaired',
+    '.aistudio-aligned-repaired'
   ].join(',');
 
   const INLINE_REPAIR_CONTAINER_SELECTOR = [
@@ -158,7 +159,7 @@
     'td'
   ].join(',');
 
-  const RAW_ARRAY_CONTAINER_SELECTOR = [
+  const RAW_MATH_CONTAINER_SELECTOR = [
     'p',
     'li',
     'blockquote',
@@ -236,7 +237,8 @@
     'aistudio-mobile-safe-160-style',
     'aistudio-mobile-safe-161-style',
     'aistudio-mobile-safe-162-style',
-    'aistudio-mobile-safe-163-style'
+    'aistudio-mobile-safe-163-style',
+    'aistudio-mobile-safe-164-style'
   ];
 
   const CSS_TEXT = `
@@ -367,6 +369,47 @@ ${SCOPE} .aistudio-array-align-r {
 
 ${SCOPE} .aistudio-array-divider {
   border-left: 1px solid currentColor !important;
+}
+
+/*
+ * 깨진 \\begin{aligned} 블록을 수식의 & 정렬점에 맞춰 복원한다.
+ */
+${SCOPE} .aistudio-aligned-repaired {
+  display: inline-table !important;
+  max-width: 100% !important;
+  margin: 0.65em auto !important;
+  border-collapse: collapse !important;
+  font-family: var(--as-font) !important;
+  font-size: 1em !important;
+  line-height: 1.55 !important;
+  vertical-align: middle !important;
+}
+
+${SCOPE} .aistudio-aligned-row {
+  display: table-row !important;
+}
+
+${SCOPE} .aistudio-aligned-cell {
+  display: table-cell !important;
+  padding: 0.12em 0 !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+  vertical-align: baseline !important;
+}
+
+${SCOPE} .aistudio-aligned-anchor {
+  padding-right: 0.22em !important;
+  text-align: right !important;
+}
+
+${SCOPE} .aistudio-aligned-expression {
+  padding-left: 0.08em !important;
+  text-align: left !important;
+}
+
+${SCOPE} .aistudio-tex-bold {
+  font-weight: var(--as-bold) !important;
 }
 
 ${SCOPE} .aistudio-md-bold-italic {
@@ -682,9 +725,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function hasRawArrayText(text) {
     return Boolean(
       text &&
-      text.length <= MAX_RAW_ARRAY_LENGTH &&
+      text.length <= MAX_RAW_MATH_LENGTH &&
       /(?:^|\s)(?:\\)?begin\s*\{array\}\s*\{[lcr|\s]+\}/i.test(text) &&
       /(?:\\)?end\s*\{array\}(?:\s|$)/i.test(text)
+    );
+  }
+
+  function hasRawAlignedText(text) {
+    return Boolean(
+      text &&
+      text.length <= MAX_RAW_MATH_LENGTH &&
+      /(?:^|\s)(?:\\)?begin\s*\{aligned\}/i.test(text) &&
+      /(?:\\)?end\s*\{aligned\}(?:\s|$)/i.test(text)
     );
   }
 
@@ -692,7 +744,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return (
       hasPair(text) ||
       hasLiteralTableBreak(text) ||
-      hasRawArrayText(text)
+      hasRawArrayText(text) ||
+      hasRawAlignedText(text)
     );
   }
 
@@ -779,7 +832,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return { alignments, dividers };
   }
 
-  function splitRawArrayRows(body) {
+  function splitRawMathRows(body) {
     const rows = [];
     let current = '';
     let depth = 0;
@@ -835,7 +888,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return rows;
   }
 
-  function splitRawArrayCells(row) {
+  function splitRawMathCells(row) {
     const cells = [];
     let current = '';
     let depth = 0;
@@ -887,6 +940,317 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       .trim();
   }
 
+  function readTexGroup(source, openingIndex) {
+    if (!source || source[openingIndex] !== '{') {
+      return null;
+    }
+
+    let depth = 0;
+
+    for (
+      let index = openingIndex;
+      index < source.length;
+      index += 1
+    ) {
+      if (isEscaped(source, index)) {
+        continue;
+      }
+
+      if (source[index] === '{') {
+        depth += 1;
+      } else if (source[index] === '}') {
+        depth -= 1;
+
+        if (depth === 0) {
+          return {
+            content: source.slice(openingIndex + 1, index),
+            end: index
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function appendTexRun(runs, text, bold) {
+    if (!text) {
+      return;
+    }
+
+    const previous = runs[runs.length - 1];
+
+    if (previous && previous.bold === bold) {
+      previous.text += text;
+      return;
+    }
+
+    runs.push({ text, bold });
+  }
+
+  function simpleTexRuns(source, inheritedBold = false) {
+    const runs = [];
+    let bold = inheritedBold;
+    let index = 0;
+
+    const appendChildRuns = (childRuns) => {
+      for (const run of childRuns) {
+        appendTexRun(runs, run.text, run.bold);
+      }
+    };
+
+    while (index < source.length) {
+      const character = source[index];
+
+      if (character === '{') {
+        const group = readTexGroup(source, index);
+
+        if (group) {
+          appendChildRuns(simpleTexRuns(group.content, bold));
+          index = group.end + 1;
+          continue;
+        }
+      }
+
+      if (character !== '\\') {
+        if (character !== '}') {
+          appendTexRun(runs, character, bold);
+        }
+        index += 1;
+        continue;
+      }
+
+      const commandMatch = source.slice(index + 1).match(/^([A-Za-z]+|.)/);
+
+      if (!commandMatch) {
+        appendTexRun(runs, '\\', bold);
+        index += 1;
+        continue;
+      }
+
+      const command = commandMatch[1];
+      const lowerCommand = command.toLowerCase();
+      let next = index + 1 + command.length;
+
+      while (/\s/.test(source[next] || '')) {
+        next += 1;
+      }
+
+      if (lowerCommand === 'bf' || lowerCommand === 'bfseries') {
+        bold = true;
+        index = next;
+        continue;
+      }
+
+      const normalGroupCommands = new Set([
+        'text',
+        'textrm',
+        'textnormal',
+        'mathrm',
+        'operatorname',
+        'mbox'
+      ]);
+      const boldGroupCommands = new Set([
+        'textbf',
+        'mathbf',
+        'boldsymbol'
+      ]);
+
+      if (
+        source[next] === '{' &&
+        (
+          normalGroupCommands.has(lowerCommand) ||
+          boldGroupCommands.has(lowerCommand)
+        )
+      ) {
+        const group = readTexGroup(source, next);
+
+        if (group) {
+          appendChildRuns(simpleTexRuns(
+            group.content,
+            bold || boldGroupCommands.has(lowerCommand)
+          ));
+          index = group.end + 1;
+          continue;
+        }
+      }
+
+      if (lowerCommand === 'frac' && source[next] === '{') {
+        const numerator = readTexGroup(source, next);
+        let denominatorStart = numerator ? numerator.end + 1 : next;
+
+        while (/\s/.test(source[denominatorStart] || '')) {
+          denominatorStart += 1;
+        }
+
+        const denominator = source[denominatorStart] === '{'
+          ? readTexGroup(source, denominatorStart)
+          : null;
+
+        if (numerator && denominator) {
+          appendTexRun(runs, '(', bold);
+          appendChildRuns(simpleTexRuns(numerator.content, bold));
+          appendTexRun(runs, ')/(', bold);
+          appendChildRuns(simpleTexRuns(denominator.content, bold));
+          appendTexRun(runs, ')', bold);
+          index = denominator.end + 1;
+          continue;
+        }
+      }
+
+      if (lowerCommand === 'sqrt' && source[next] === '{') {
+        const group = readTexGroup(source, next);
+
+        if (group) {
+          appendTexRun(runs, '√(', bold);
+          appendChildRuns(simpleTexRuns(group.content, bold));
+          appendTexRun(runs, ')', bold);
+          index = group.end + 1;
+          continue;
+        }
+      }
+
+      const symbols = {
+        approx: '≈',
+        cdot: '·',
+        ge: '≥',
+        geq: '≥',
+        infty: '∞',
+        le: '≤',
+        leq: '≤',
+        neq: '≠',
+        pm: '±',
+        times: '×',
+        to: '→'
+      };
+
+      if (Object.prototype.hasOwnProperty.call(symbols, lowerCommand)) {
+        appendTexRun(runs, symbols[lowerCommand], bold);
+        index = next;
+        continue;
+      }
+
+      if (lowerCommand === 'quad' || lowerCommand === 'qquad') {
+        appendTexRun(runs, ' ', bold);
+        index = next;
+        continue;
+      }
+
+      if ([',', ';', ':', '!'].includes(command)) {
+        appendTexRun(runs, ' ', bold);
+        index = next;
+        continue;
+      }
+
+      if (['left', 'right'].includes(lowerCommand)) {
+        index = next;
+        continue;
+      }
+
+      if (/^[&%_#$\\{}]$/.test(command)) {
+        appendTexRun(runs, command, bold);
+        index = next;
+        continue;
+      }
+
+      appendTexRun(runs, `\\${command}`, bold);
+      index = next;
+    }
+
+    return runs;
+  }
+
+  function appendSimpleTex(parent, source) {
+    for (const run of simpleTexRuns(source)) {
+      if (run.bold) {
+        const strong = document.createElement('strong');
+        strong.className = 'aistudio-tex-bold';
+        strong.textContent = run.text;
+        parent.appendChild(strong);
+      } else {
+        parent.appendChild(document.createTextNode(run.text));
+      }
+    }
+  }
+
+  function parseRawAligned(text) {
+    if (!hasRawAlignedText(text)) {
+      return null;
+    }
+
+    const source = text.trim();
+    const opening = source.match(
+      /^(?:\\)?begin\s*\{aligned\}/i
+    );
+
+    if (!opening) {
+      return null;
+    }
+
+    const remainder = source.slice(opening[0].length);
+    const closing = remainder.match(
+      /(?:\\)?end\s*\{aligned\}\s*$/i
+    );
+
+    if (!closing || typeof closing.index !== 'number') {
+      return null;
+    }
+
+    const body = remainder.slice(0, closing.index).trim();
+
+    if (!body || !body.includes('&')) {
+      return null;
+    }
+
+    const rows = splitRawMathRows(body).map(splitRawMathCells);
+    const columnCount = Math.max(0, ...rows.map((row) => row.length));
+
+    if (
+      !rows.length ||
+      columnCount < 2 ||
+      columnCount > 8
+    ) {
+      return null;
+    }
+
+    for (const row of rows) {
+      while (row.length < columnCount) {
+        row.push('');
+      }
+    }
+
+    return { rows };
+  }
+
+  function createRepairedAligned(parsed) {
+    const aligned = document.createElement('span');
+    aligned.className = 'aistudio-aligned-repaired';
+    aligned.setAttribute('data-aistudio-aligned-repaired', '1');
+    aligned.setAttribute('role', 'table');
+
+    for (const rowValues of parsed.rows) {
+      const row = document.createElement('span');
+      row.className = 'aistudio-aligned-row';
+      row.setAttribute('role', 'row');
+
+      rowValues.forEach((value, index) => {
+        const cell = document.createElement('span');
+        const alignmentClass = index % 2 === 0
+          ? 'aistudio-aligned-anchor'
+          : 'aistudio-aligned-expression';
+
+        cell.className = `aistudio-aligned-cell ${alignmentClass}`;
+        cell.setAttribute('role', 'cell');
+        appendSimpleTex(cell, value);
+        row.appendChild(cell);
+      });
+
+      aligned.appendChild(row);
+    }
+
+    return aligned;
+  }
+
   function parseRawArray(text) {
     if (!hasRawArrayText(text)) {
       return null;
@@ -917,7 +1281,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return null;
     }
 
-    const rows = splitRawArrayRows(body).map(splitRawArrayCells);
+    const rows = splitRawMathRows(body).map(splitRawMathCells);
 
     if (
       !rows.length ||
@@ -970,6 +1334,72 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return array;
   }
 
+  function repairRawAlignedContainer(container) {
+    if (
+      !container ||
+      !container.isConnected ||
+      closest(container, USER_SELECTOR) ||
+      closest(container, SKIP_SELECTOR) ||
+      (
+        container.querySelector &&
+        container.querySelector(
+          'a, code, pre, table, svg, math, .katex, ms-katex, ' +
+          '.MathJax, mjx-container, .aistudio-array-repaired, ' +
+          '.aistudio-aligned-repaired'
+        )
+      )
+    ) {
+      return 0;
+    }
+
+    const sources = [
+      container.textContent || '',
+      typeof container.innerText === 'string'
+        ? container.innerText
+        : ''
+    ];
+    let parsed = null;
+
+    for (const source of sources) {
+      parsed = parseRawAligned(source);
+      if (parsed) {
+        break;
+      }
+    }
+
+    if (!parsed || typeof container.replaceChildren !== 'function') {
+      return 0;
+    }
+
+    container.replaceChildren(createRepairedAligned(parsed));
+    return 1;
+  }
+
+  function repairRawAligned(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const containers = Array.from(
+      root.querySelectorAll(RAW_MATH_CONTAINER_SELECTOR)
+    ).reverse();
+
+    if (
+      root.matches &&
+      root.matches(RAW_MATH_CONTAINER_SELECTOR)
+    ) {
+      containers.push(root);
+    }
+
+    let repaired = 0;
+
+    for (const container of containers) {
+      repaired += repairRawAlignedContainer(container);
+    }
+
+    return repaired;
+  }
+
   function repairRawArrayContainer(container) {
     if (
       !container ||
@@ -980,7 +1410,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         container.querySelector &&
         container.querySelector(
           'a, code, pre, table, svg, math, .katex, ms-katex, ' +
-          '.MathJax, mjx-container, .aistudio-array-repaired'
+          '.MathJax, mjx-container, .aistudio-array-repaired, ' +
+          '.aistudio-aligned-repaired'
         )
       )
     ) {
@@ -1016,12 +1447,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const containers = Array.from(
-      root.querySelectorAll(RAW_ARRAY_CONTAINER_SELECTOR)
+      root.querySelectorAll(RAW_MATH_CONTAINER_SELECTOR)
     ).reverse();
 
     if (
       root.matches &&
-      root.matches(RAW_ARRAY_CONTAINER_SELECTOR)
+      root.matches(RAW_MATH_CONTAINER_SELECTOR)
     ) {
       containers.push(root);
     }
@@ -1642,7 +2073,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    let repaired = repairRawArrays(root);
+    let repaired = repairRawAligned(root);
+    repaired += repairRawArrays(root);
     repaired += repairSplitTableBreaks(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
@@ -2395,7 +2827,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'css-plus-safe-array-markdown-repair-session-keepalive'
+      'css-plus-safe-math-markdown-repair-session-keepalive'
     );
 
     window.addEventListener(
