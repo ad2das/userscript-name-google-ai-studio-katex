@@ -112,6 +112,28 @@ async (page) => {
     const proseCodeStrong = proseCodeBlock.querySelector(
       'strong.aistudio-md-repaired'
     );
+    const rawBoldLeafSelector = [
+      'p',
+      'li',
+      'blockquote',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+      'pre',
+      'td',
+      '.very-large-text-container'
+    ].join(',');
+    const rawBoldRemainderIds = Array.from(
+      document.querySelectorAll(
+        `.chat-turn-container.model :is(${rawBoldLeafSelector})`
+      )
+    ).filter((element) => (
+      /(?:\*\*|__)/.test(element.textContent || '') &&
+      !element.querySelector(rawBoldLeafSelector)
+    )).map((element) => element.id).sort();
     return {
       boldCount: cell.querySelectorAll('strong.aistudio-md-repaired').length,
       boldText: cell.querySelector('strong.aistudio-md-repaired')?.textContent,
@@ -142,6 +164,19 @@ async (page) => {
       mathAdjacentBoldText: mathAdjacentBold.querySelector(
         'strong.aistudio-md-repaired'
       )?.textContent,
+      boldContainerMatrixRepaired: [
+        ['heading-bold', '항상 충족'],
+        ['blockquote-bold', '신뢰성 있게 측정'],
+        ['korean-underscore-bold', '필수 조건'],
+        ['modern-chunk-bold', '공정가치를 측정']
+      ].every(([id, expected]) => {
+        const element = document.getElementById(id);
+        const strong = element.querySelector('strong.aistudio-md-repaired');
+        return strong?.textContent === expected &&
+          fontWeightOf(strong) >= 600 &&
+          !element.textContent.includes('**') &&
+          !element.textContent.includes('__');
+      }),
       underlineCount: repairedUnderlines.length,
       underlineTexts: repairedUnderlines.map((element) => element.textContent),
       underlineMarkersRemoved: !underlineRoot.textContent.includes('<u>') &&
@@ -305,6 +340,21 @@ async (page) => {
         ).length === 1 &&
         !document.getElementById('reported-prose-code-split')
           .textContent.includes('**'),
+      multiParagraphProseCodeRepaired:
+        document.querySelectorAll(
+          '#reported-ma-prose-code strong.aistudio-md-repaired'
+        ).length === 1 &&
+        document.querySelector(
+          '#reported-ma-prose-code strong.aistudio-md-repaired'
+        )?.textContent ===
+          '"M&A로 취득하는 무형자산은 유입가능성과 신뢰성 있는 측정 기준 둘 다 항상 충족하는 것으로 본다!"' &&
+        !document.getElementById('reported-ma-prose-code')
+          .textContent.includes('**') &&
+        document.getElementById('reported-ma-prose-code')
+          .textContent.includes("취득일의 '공정가치'를 무조건 산출해 냅니다.\n\n그래서") &&
+        getComputedStyle(
+          document.querySelector('#reported-ma-prose-code > code')
+        ).whiteSpace === 'pre-line',
       actualCodePreserved:
         document.getElementById('actual-code-bold').textContent ===
           'const label = "**literal markdown**";' &&
@@ -325,6 +375,7 @@ async (page) => {
         document.getElementById('user-prose-code-bold').textContent ===
           '사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.' &&
         document.querySelectorAll('#user-prose-code-bold strong').length === 0,
+      rawBoldRemainderIds,
       fencedMathPreserved:
         document.querySelector(
           '#fenced-raw-math .aistudio-raw-math-repaired'
@@ -335,7 +386,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-183'
+        'data-aistudio-mobile-safe-184'
       )
     };
   });
@@ -353,6 +404,7 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
+    !rendering.boldContainerMatrixRepaired ||
     rendering.underlineCount !== 3 ||
     JSON.stringify(rendering.underlineTexts) !==
       JSON.stringify(['어렵다', '없다', '필요조건이다']) ||
@@ -420,14 +472,23 @@ async (page) => {
     !rendering.proseCodeMarkersRemoved ||
     !rendering.proseCodeBlockRepaired ||
     !rendering.splitProseCodeRepaired ||
+    !rendering.multiParagraphProseCodeRepaired ||
     !rendering.actualCodePreserved ||
     !rendering.koreanCodePreserved ||
     !rendering.markdownSyntaxPreserved ||
     !rendering.languageCodePreserved ||
     !rendering.userProseCodePreserved ||
+    JSON.stringify(rendering.rawBoldRemainderIds) !== JSON.stringify([
+      'actual-code-bold',
+      'code-boundary-bold',
+      'korean-code-bold',
+      'language-code-bold',
+      'link-boundary-bold',
+      'markdown-syntax-example'
+    ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.3'
+    rendering.version !== '1.8.4'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

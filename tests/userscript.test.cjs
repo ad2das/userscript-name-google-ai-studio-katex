@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.8\.3/);
+assert.match(source, /\/\/ @version\s+1\.8\.4/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -233,6 +233,8 @@ assert.equal(adjacentMathMatch[0].inner, 'this is bold');
 assert.equal(api.findMatches('Keep **$x$** math untouched.').length, 0);
 assert.equal(api.findMatches('Keep \\**escaped** markers.').length, 0);
 assert.equal(api.findMatches('foo__bar__baz').length, 0);
+assert.equal(api.findMatches('__dunder__name').length, 0);
+assert.equal(api.findMatches('목록에서는 __필수 조건__입니다.').length, 1);
 assert.equal(api.findMatches('Render ***bold italic*** too.').length, 1);
 assert.equal(
   api.findMatches('Render ***bold italic*** too.')[0].marker,
@@ -261,7 +263,36 @@ assert.equal(
 );
 assert.equal(
   api.isLikelyProseCodeText('설명입니다.\n\n**중요합니다.**\n\n끝입니다.'),
+  true
+);
+const reportedMaProseCode =
+  "회사를 통째로 M&A할 때는 전문 감정평가법인이 피인수 회사의 모든 " +
+  "특허와 브랜드를 샅샅이 뒤져서 취득일의 '공정가치'를 무조건 산출해 " +
+  '냅니다.\n\n그래서 기준서(제1038호 문단 33)는 **"M&A로 취득하는 ' +
+  '무형자산은 유입가능성과 신뢰성 있는 측정 기준 둘 다 항상 충족하는 ' +
+  '것으로 본다!"**라고 못을 박아두었습니다.';
+assert.equal(api.isLikelyProseCodeText(reportedMaProseCode), true);
+assert.equal(
+  api.isLikelyProseCodeText(
+    '설명입니다.\n\nconst label = "**정답입니다.**";'
+  ),
   false
+);
+for (const codeSample of [
+  'x = "**긴 한국어 문자열입니다.**"',
+  'SELECT "**한국어 열 이름입니다.**" FROM records',
+  '# **한국어 주석입니다.**',
+  'title: "**한국어 설정입니다.**"',
+  '<p>**한국어 HTML입니다.**</p>',
+  '"**따옴표로 감싼 실제 문자열입니다.**"'
+]) {
+  assert.equal(api.isLikelyProseCodeText(codeSample), false);
+}
+assert.equal(
+  api.isLikelyProseCodeText(
+    '첫 문장입니다.\n이어지는 줄에서도 **강조 문장입니다.**'
+  ),
+  true
 );
 
 const brokenArray = String.raw`begin{array}{ll|ll}
