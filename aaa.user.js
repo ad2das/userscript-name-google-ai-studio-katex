@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.4
+// @version      1.8.5
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.4';
-  const STYLE_ID = 'aistudio-mobile-safe-184-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-184';
+  const VERSION = '1.8.5';
+  const STYLE_ID = 'aistudio-mobile-safe-185-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-185';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -138,44 +138,79 @@
     'button.run-button'
   ].join(',');
 
+  /*
+   * AI Studio has used both Model/model and assistant role values. Attribute
+   * value matching is explicitly case-insensitive so a casing-only rollout
+   * cannot make every Markdown repair silently miss the response.
+   */
+  const MODEL_ROLE_SELECTORS = [
+    '[data-turn-role="model" i]',
+    '[data-turn-role="assistant" i]',
+    '[data-message-author-role="assistant" i]',
+    '[data-message-author-role="model" i]'
+  ];
+
+  const USER_ROLE_SELECTORS = [
+    '[data-turn-role="user" i]',
+    '[data-turn-role="human" i]',
+    '[data-message-author-role="user" i]',
+    '[data-message-author-role="human" i]'
+  ];
+
+  /*
+   * Response renderer elements are the stable fallback when the surrounding
+   * turn has not received a role/class yet. Restrict this fallback to chat
+   * turns; user turns are excluded separately by USER_SELECTOR.
+   */
+  const MODEL_RENDERER_SELECTOR = [
+    'ms-chat-turn ms-cmark-node',
+    'ms-chat-turn ms-text-chunk'
+  ].join(',');
+
   const STYLE_ROOT_SELECTOR = [
-    'ms-chat-turn .chat-turn-container.model ms-cmark-node',
-    'ms-chat-turn .chat-turn-container.model ms-text-chunk',
-    'ms-chat-turn [data-turn-role="Model"] ms-cmark-node',
-    'ms-chat-turn [data-turn-role="Model"] ms-text-chunk',
+    MODEL_RENDERER_SELECTOR,
     '.chat-turn-container.model ms-cmark-node',
     '.chat-turn-container.model ms-text-chunk',
-    '[data-turn-role="Model"] ms-cmark-node',
-    '[data-turn-role="Model"] ms-text-chunk',
-    '[data-message-author-role="assistant"] ms-cmark-node',
-    '[data-message-author-role="assistant"] ms-text-chunk',
+    ...MODEL_ROLE_SELECTORS.flatMap((roleSelector) => [
+      `${roleSelector} ms-cmark-node`,
+      `${roleSelector} ms-text-chunk`,
+      `${roleSelector} .markdown`,
+      `${roleSelector} .markdown-body`
+    ]),
     '.model-prompt-container ms-cmark-node',
     '.model-prompt-container ms-text-chunk',
     '.model-prompt-container .very-large-text-container',
     '.chat-turn-container.model .markdown',
-    '.chat-turn-container.model .markdown-body',
-    '[data-message-author-role="assistant"] .markdown',
-    '[data-message-author-role="assistant"] .markdown-body'
+    '.chat-turn-container.model .markdown-body'
   ].join(',');
 
   const MODEL_TURN_SELECTOR = [
     'ms-chat-turn .chat-turn-container.model',
-    'ms-chat-turn [data-turn-role="Model"]',
-    '[data-message-author-role="assistant"]',
+    ...MODEL_ROLE_SELECTORS,
     '.model-prompt-container',
     '.chat-turn-container.model'
   ].join(',');
 
-  const MODEL_ACTIVITY_SELECTOR = MODEL_TURN_SELECTOR
-    .split(',')
-    .flatMap((turnSelector) => [
-      '[aria-busy="true"]',
-      'mat-progress-spinner',
-      'mat-spinner',
-      '[role="progressbar"]'
-    ].map((activitySelector) => (
-      `${turnSelector.trim()} ${activitySelector}`
-    )))
+  const MODEL_ACTIVITY_INDICATORS = [
+    '[aria-busy="true"]',
+    'mat-progress-spinner',
+    'mat-spinner',
+    '[role="progressbar"]'
+  ];
+
+  const MODEL_ACTIVITY_SELECTOR = [
+    ...MODEL_TURN_SELECTOR
+      .split(',')
+      .flatMap((turnSelector) => MODEL_ACTIVITY_INDICATORS.map(
+        (activitySelector) => (
+          `${turnSelector.trim()} ${activitySelector}`
+        )
+      )),
+    /* 역할이 아직 없는 최신 turn도 생성 중에는 절대 수정하지 않는다. */
+    ...MODEL_ACTIVITY_INDICATORS.map((activitySelector) => (
+      `ms-chat-turn ${activitySelector}`
+    ))
+  ]
     .join(',');
 
   const REPAIR_ROOT_SELECTOR = [
@@ -184,8 +219,7 @@
   ].join(',');
 
   const USER_SELECTOR = [
-    '[data-turn-role="User"]',
-    '[data-message-author-role="user"]',
+    ...USER_ROLE_SELECTORS,
     '.user-prompt-container',
     '.chat-turn-container.user',
     'ms-prompt-input',
@@ -373,7 +407,8 @@
     'aistudio-mobile-safe-180-style',
     'aistudio-mobile-safe-181-style',
     'aistudio-mobile-safe-182-style',
-    'aistudio-mobile-safe-183-style'
+    'aistudio-mobile-safe-183-style',
+    'aistudio-mobile-safe-184-style'
   ];
 
   const CSS_TEXT = `
@@ -3890,15 +3925,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function lastModelTurn() {
-    const models = document.querySelectorAll(
-      [
-        'ms-chat-turn .chat-turn-container.model',
-        'ms-chat-turn [data-turn-role="Model"]',
-        '[data-message-author-role="assistant"]',
-        '.model-prompt-container',
-        '.chat-turn-container.model'
-      ].join(',')
-    );
+    const models = Array.from(
+      document.querySelectorAll(REPAIR_ROOT_SELECTOR)
+    ).filter((root) => (
+      root.isConnected &&
+      !closest(root, USER_SELECTOR)
+    ));
 
     const last = models[models.length - 1];
 
@@ -4478,17 +4510,41 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }, delay);
   }
 
-  function shouldObserveMutationTarget(node) {
+  function shouldObserveMutationTarget(
+    node,
+    includeDescendants = false
+  ) {
     const element = elementOf(node);
 
-    return Boolean(
-      element &&
-      !closest(element, USER_SELECTOR) &&
-      (
-        closest(element, MODEL_TURN_SELECTOR) ||
-        closest(element, REPAIR_ROOT_SELECTOR)
-      )
-    );
+    if (
+      !element ||
+      closest(element, USER_SELECTOR)
+    ) {
+      return false;
+    }
+
+    if (
+      closest(element, MODEL_TURN_SELECTOR) ||
+      closest(element, REPAIR_ROOT_SELECTOR)
+    ) {
+      return true;
+    }
+
+    if (
+      !includeDescendants ||
+      typeof element.querySelectorAll !== 'function'
+    ) {
+      return false;
+    }
+
+    /*
+     * Angular가 완성된 role 없는 ms-chat-turn을 한 번에 삽입하면 mutation의
+     * addedNode는 바깥 turn이다. 내부 renderer까지 확인해 10초 주기 스캔을
+     * 기다리지 않고 안정화 타이머를 시작한다.
+     */
+    return Array.from(
+      element.querySelectorAll(REPAIR_ROOT_SELECTOR)
+    ).some((candidate) => !closest(candidate, USER_SELECTOR));
   }
 
   function installObserver() {
@@ -4516,7 +4572,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         }
 
         for (const node of mutation.addedNodes || []) {
-          if (shouldObserveMutationTarget(node)) {
+          if (shouldObserveMutationTarget(node, true)) {
             schedule(MUTATION_SCAN_DELAY_MS);
             return;
           }
