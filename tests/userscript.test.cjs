@@ -7,10 +7,14 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.7\.0/);
+assert.match(source, /\/\/ @version\s+1\.7\.1/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
+);
+assert.match(
+  source,
+  /\/\/ @updateURL\s+https:\/\/raw\.githubusercontent\.com\/ad2das\/userscript-name-google-ai-studio-katex\/main\/aaa\.user\.js/
 );
 assert.match(source, /\/\/ @inject-into\s+auto/);
 assert.match(source, /\/\/ @grant\s+none/);
@@ -44,6 +48,7 @@ const instrumented = source.replace(
     hasRawMathText,
     normalizeCollapsedRowSeparators,
     normalizeKatexCommands,
+    propagateBoldIntoText,
     parseRawAligned,
     parseRawArray,
     parseRawMathCandidate,
@@ -300,6 +305,52 @@ assert.equal(
 assert.equal(
   api.normalizeKatexCommands(String.raw`\bm{x}+{\bfseries y}`),
   String.raw`\boldsymbol{x}+{\bf y}`
+);
+assert.equal(
+  api.normalizeKatexCommands(
+    String.raw`\mathbf{+10,000\text{원 (처분이익)}}`
+  ),
+  String.raw`\mathbf{+10,000\text{\bf 원 (처분이익)}}`
+);
+assert.equal(
+  api.normalizeKatexCommands(
+    String.raw`\boldsymbol{x+\text{단위}}+\textbf{\text{설명}}`
+  ),
+  String.raw`\boldsymbol{x+\text{\bf 단위}}+\textbf{\text{\bf 설명}}`
+);
+assert.equal(
+  api.normalizeKatexCommands(String.raw`{\bf x+\text{단위}}`),
+  String.raw`{\bf x+\text{\bf 단위}}`
+);
+assert.equal(
+  api.normalizeKatexCommands(String.raw`x+\text{일반}`),
+  String.raw`x+\text{일반}`
+);
+assert.equal(
+  api.normalizeKatexCommands(String.raw`\mathbf{x+\text{\bf 이미 굵음}}`),
+  String.raw`\mathbf{x+\text{\bf 이미 굵음}}`
+);
+assert.equal(
+  api.normalizeKatexCommands(
+    String.raw`\mathbf{x+\mathrm{\text{일반}}+\text{굵음}}`
+  ),
+  String.raw`\mathbf{x+\mathrm{\text{일반}}+\text{\bf 굵음}}`
+);
+
+const nestedBoldHtml = katex.renderToString(
+  api.normalizeKatexCommands(
+    String.raw`\mathbf{+10,000\text{원 (처분이익)}}`
+  ),
+  {
+    output: 'htmlAndMathml',
+    throwOnError: true,
+    strict: 'ignore'
+  }
+);
+assert.match(
+  nestedBoldHtml,
+  /class="mord mathbf hangul_fallback">처분이익<\/span>/,
+  'Hangul nested in mathbf must receive an actual bold KaTeX class'
 );
 
 const rawMathCases = [

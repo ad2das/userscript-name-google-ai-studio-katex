@@ -1,12 +1,16 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.7.0
+// @version      1.7.1
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
 // @require      https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.js
+// @downloadURL  https://raw.githubusercontent.com/ad2das/userscript-name-google-ai-studio-katex/main/aaa.user.js
+// @updateURL    https://raw.githubusercontent.com/ad2das/userscript-name-google-ai-studio-katex/main/aaa.user.js
+// @homepageURL  https://github.com/ad2das/userscript-name-google-ai-studio-katex
+// @supportURL   https://github.com/ad2das/userscript-name-google-ai-studio-katex/issues
 // @run-at       document-idle
 // @inject-into  auto
 // @noframes
@@ -16,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.7.0';
-  const STYLE_ID = 'aistudio-mobile-safe-170-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-170';
+  const VERSION = '1.7.1';
+  const STYLE_ID = 'aistudio-mobile-safe-171-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-171';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -88,6 +92,36 @@
     'CD'
   ]);
 
+  const BOLD_TEX_GROUP_COMMANDS = new Set([
+    'mathbf',
+    'boldsymbol',
+    'bold',
+    'pmb',
+    'textbf'
+  ]);
+
+  const NORMAL_TEX_GROUP_COMMANDS = new Set([
+    'mathnormal',
+    'mathrm',
+    'textnormal',
+    'textrm'
+  ]);
+
+  const NORMAL_TEX_DECLARATIONS = new Set([
+    'md',
+    'mdseries',
+    'normalfont',
+    'rm'
+  ]);
+
+  const RENDERED_MATH_SELECTOR = [
+    'ms-katex',
+    '.katex-display',
+    '.katex',
+    '.MathJax',
+    'mjx-container'
+  ].join(',');
+
   const ENABLE_SESSION_KEEPALIVE = true;
   const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
   const AUTH_HEARTBEAT_MS = 5 * 60 * 1000;
@@ -103,11 +137,18 @@
 
   const STYLE_ROOT_SELECTOR = [
     'ms-chat-turn .chat-turn-container.model ms-cmark-node',
+    'ms-chat-turn .chat-turn-container.model ms-text-chunk',
     'ms-chat-turn [data-turn-role="Model"] ms-cmark-node',
+    'ms-chat-turn [data-turn-role="Model"] ms-text-chunk',
     '.chat-turn-container.model ms-cmark-node',
+    '.chat-turn-container.model ms-text-chunk',
     '[data-turn-role="Model"] ms-cmark-node',
+    '[data-turn-role="Model"] ms-text-chunk',
     '[data-message-author-role="assistant"] ms-cmark-node',
+    '[data-message-author-role="assistant"] ms-text-chunk',
     '.model-prompt-container ms-cmark-node',
+    '.model-prompt-container ms-text-chunk',
+    '.model-prompt-container .very-large-text-container',
     '.chat-turn-container.model .markdown',
     '.chat-turn-container.model .markdown-body',
     '[data-message-author-role="assistant"] .markdown',
@@ -186,6 +227,8 @@
 
   const INLINE_REPAIR_CONTAINER_SELECTOR = [
     'ms-cmark-node',
+    'ms-text-chunk',
+    '.very-large-text-container',
     'p',
     'li',
     'dd',
@@ -208,7 +251,13 @@
     'li',
     'blockquote',
     'figcaption',
-    'ms-cmark-node'
+    'dd',
+    'dt',
+    'th',
+    'td',
+    'ms-cmark-node',
+    'ms-text-chunk',
+    '.very-large-text-container'
   ].join(',');
 
   const INLINE_REPAIR_BOUNDARY_SELECTOR = [
@@ -283,7 +332,8 @@
     'aistudio-mobile-safe-162-style',
     'aistudio-mobile-safe-163-style',
     'aistudio-mobile-safe-164-style',
-    'aistudio-mobile-safe-165-style'
+    'aistudio-mobile-safe-165-style',
+    'aistudio-mobile-safe-170-style'
   ];
 
   const CSS_TEXT = `
@@ -403,6 +453,25 @@ ${SCOPE} .aistudio-raw-math-repaired :where(.katex, .katex *) {
 ${SCOPE} .aistudio-raw-math-bold > .katex {
   -webkit-text-stroke: 0.12px currentColor !important;
   text-shadow: 0.01em 0 currentColor, -0.01em 0 currentColor !important;
+}
+
+/*
+ * KaTeX는 굵은 수학 그룹 안의 텍스트 그룹에 굵기를 상속하지 않는다.
+ * 정규화된 한글 fallback 글꼴에도 굵기를 명시해 페이지 CSS의 간섭을 막는다.
+ */
+${SCOPE} :where(
+  .aistudio-raw-math-repaired,
+  .aistudio-rendered-math-bold-repaired
+) .katex :where(.mathbf, .textbf, .boldsymbol).hangul_fallback {
+  font-family: var(--as-font) !important;
+  font-weight: 700 !important;
+  font-synthesis: weight !important;
+}
+
+${SCOPE} .aistudio-rendered-math-bold-repaired {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
 }
 
 /*
@@ -859,10 +928,100 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       .replace(/(^|[^\\])\\([ \t]+)(?=&)/g, '$1\\\\$2');
   }
 
+  function propagateBoldIntoText(source, inheritedBold = false) {
+    let output = '';
+    let bold = inheritedBold;
+    let index = 0;
+
+    while (index < source.length) {
+      if (source[index] === '{' && !isEscaped(source, index)) {
+        const group = readTexGroup(source, index);
+
+        if (group) {
+          output += `{${propagateBoldIntoText(group.content, bold)}}`;
+          index = group.end + 1;
+          continue;
+        }
+      }
+
+      if (source[index] !== '\\' || isEscaped(source, index)) {
+        output += source[index];
+        index += 1;
+        continue;
+      }
+
+      const commandMatch = source.slice(index + 1).match(/^([A-Za-z]+|.)/);
+
+      if (!commandMatch) {
+        output += source[index];
+        index += 1;
+        continue;
+      }
+
+      const command = commandMatch[1];
+      const lowerCommand = command.toLowerCase();
+      let next = index + 1 + command.length;
+
+      while (/\s/.test(source[next] || '')) {
+        next += 1;
+      }
+
+      const commandPrefix = source.slice(index, next);
+
+      if (lowerCommand === 'bf') {
+        output += commandPrefix;
+        bold = true;
+        index = next;
+        continue;
+      }
+
+      if (NORMAL_TEX_DECLARATIONS.has(lowerCommand)) {
+        output += commandPrefix;
+        bold = false;
+        index = next;
+        continue;
+      }
+
+      if (source[next] !== '{') {
+        output += commandPrefix;
+        index = next;
+        continue;
+      }
+
+      const group = readTexGroup(source, next);
+
+      if (!group) {
+        output += commandPrefix;
+        index = next;
+        continue;
+      }
+
+      const groupIsBold = NORMAL_TEX_GROUP_COMMANDS.has(lowerCommand)
+        ? false
+        : bold || BOLD_TEX_GROUP_COMMANDS.has(lowerCommand);
+      let content = propagateBoldIntoText(group.content, groupIsBold);
+
+      if (
+        lowerCommand === 'text' &&
+        bold &&
+        !/^\s*\\(?:bf|rm|md|textnormal|normalfont)\b/.test(content)
+      ) {
+        content = `\\bf ${content}`;
+      }
+
+      output += `${commandPrefix}{${content}}`;
+      index = group.end + 1;
+    }
+
+    return output;
+  }
+
   function normalizeKatexCommands(source) {
-    return source
+    const aliasesNormalized = source
       .replace(/\\bm(?=\s*\{)/g, '\\boldsymbol')
       .replace(/\\bfseries\b/g, '\\bf');
+
+    return propagateBoldIntoText(aliasesNormalized);
   }
 
   function stripOuterMarkdownBold(source) {
@@ -1645,37 +1804,143 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       : null;
   }
 
-  function renderRawMathCandidate(candidate) {
+  function renderedMathSource(element) {
+    if (!element || !element.querySelector) {
+      return '';
+    }
+
+    const annotation = element.querySelector(
+      'annotation[encoding="application/x-tex"]'
+    );
+
+    if (annotation && (annotation.textContent || '').trim()) {
+      return annotation.textContent.trim();
+    }
+
+    for (const attribute of [
+      'data-tex',
+      'data-latex',
+      'data-math',
+      'latex',
+      'expression',
+      'formula'
+    ]) {
+      const value = element.getAttribute
+        ? element.getAttribute(attribute)
+        : null;
+
+      if (value && value.trim()) {
+        return value.trim();
+      }
+    }
+
+    return '';
+  }
+
+  function hasTextOutsideRenderedMath(container) {
+    if (
+      !container ||
+      !container.querySelector ||
+      !container.querySelector(RENDERED_MATH_SELECTOR)
+    ) {
+      return true;
+    }
+
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT
+    );
+
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      const value = textNode.nodeValue || '';
+      const parent = textNode.parentElement;
+
+      if (
+        value.trim() &&
+        !(
+          parent &&
+          closest(parent, RENDERED_MATH_SELECTOR)
+        )
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function sourceFromMixedMathDom(container) {
+    const blockSelector = [
+      'p',
+      'li',
+      'blockquote',
+      'figcaption',
+      'dd',
+      'dt',
+      'th',
+      'td',
+      'div'
+    ].join(',');
+    let missingRenderedSource = false;
+
+    const visit = (node) => {
+      if (!node) {
+        return '';
+      }
+
+      if (node.nodeType === 3) {
+        return node.nodeValue || '';
+      }
+
+      if (node.nodeType !== 1) {
+        return '';
+      }
+
+      if (node.matches && node.matches(RENDERED_MATH_SELECTOR)) {
+        const source = renderedMathSource(node);
+
+        if (!source) {
+          missingRenderedSource = true;
+        }
+
+        return source;
+      }
+
+      if (node.matches && node.matches('br')) {
+        return '\n';
+      }
+
+      const content = Array.from(node.childNodes || [], visit).join('');
+
+      return node !== container && node.matches && node.matches(blockSelector)
+        ? `\n${content}\n`
+        : content;
+    };
+
+    const source = visit(container).trim();
+
+    return missingRenderedSource ? '' : source;
+  }
+
+  function renderKatexSource(source, displayMode, className) {
     const engine = availableKatex();
 
-    if (!engine || !candidate || !candidate.tex) {
+    if (
+      !engine ||
+      !source ||
+      source.length > MAX_RAW_MATH_LENGTH ||
+      !bracesAreBalanced(source)
+    ) {
       return null;
     }
 
     const rendered = document.createElement('span');
-    rendered.className = [
-      'aistudio-raw-math-repaired',
-      candidate.displayMode
-        ? 'aistudio-raw-math-display'
-        : 'aistudio-raw-math-inline',
-      candidate.bold
-        ? 'aistudio-raw-math-bold'
-        : ''
-    ].filter(Boolean).join(' ');
-    rendered.setAttribute('data-aistudio-raw-math-repaired', '1');
-    rendered.setAttribute('data-aistudio-raw-math-kind', candidate.kind);
-    rendered.setAttribute('data-katex-version', KATEX_VERSION);
-
-    if (candidate.environment) {
-      rendered.setAttribute(
-        'data-aistudio-raw-math-environment',
-        candidate.environment
-      );
-    }
+    rendered.className = className;
 
     try {
-      engine.render(candidate.tex, rendered, {
-        displayMode: candidate.displayMode,
+      engine.render(source, rendered, {
+        displayMode,
         output: 'htmlAndMathml',
         throwOnError: true,
         strict: 'ignore',
@@ -1696,6 +1961,122 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     return rendered;
+  }
+
+  function renderRawMathCandidate(candidate) {
+    if (!candidate || !candidate.tex) {
+      return null;
+    }
+
+    const rendered = renderKatexSource(
+      candidate.tex,
+      candidate.displayMode,
+      [
+        'aistudio-raw-math-repaired',
+        candidate.displayMode
+          ? 'aistudio-raw-math-display'
+          : 'aistudio-raw-math-inline',
+        candidate.bold
+          ? 'aistudio-raw-math-bold'
+          : ''
+      ].filter(Boolean).join(' ')
+    );
+
+    if (!rendered) {
+      return null;
+    }
+
+    rendered.setAttribute('data-aistudio-raw-math-repaired', '1');
+    rendered.setAttribute('data-aistudio-raw-math-kind', candidate.kind);
+    rendered.setAttribute('data-katex-version', KATEX_VERSION);
+
+    if (candidate.environment) {
+      rendered.setAttribute(
+        'data-aistudio-raw-math-environment',
+        candidate.environment
+      );
+    }
+
+    return rendered;
+  }
+
+  function repairRenderedMathBold(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const hosts = Array.from(
+      root.querySelectorAll(RENDERED_MATH_SELECTOR)
+    );
+
+    if (root.matches && root.matches(RENDERED_MATH_SELECTOR)) {
+      hosts.unshift(root);
+    }
+
+    let repaired = 0;
+
+    for (const host of hosts) {
+      if (
+        !host.isConnected ||
+        closest(host, USER_SELECTOR) ||
+        closest(host, '.aistudio-raw-math-repaired') ||
+        closest(host, '.aistudio-rendered-math-bold-repaired') ||
+        (
+          host.matches('.katex') &&
+          host.parentElement &&
+          closest(host.parentElement, RENDERED_MATH_SELECTOR)
+        )
+      ) {
+        continue;
+      }
+
+      const source = renderedMathSource(host);
+
+      if (
+        !source ||
+        source.length > MAX_RAW_MATH_LENGTH ||
+        !bracesAreBalanced(source)
+      ) {
+        continue;
+      }
+
+      const normalized = normalizeKatexCommands(source);
+
+      if (normalized === source) {
+        continue;
+      }
+
+      const displayMode = Boolean(
+        host.matches('ms-katex.display, .katex-display') ||
+        host.matches('[display], [display="true"]') ||
+        closest(host, '.katex-display') ||
+        (host.querySelector && host.querySelector('.katex-display'))
+      );
+      const replacement = renderKatexSource(
+        normalized,
+        displayMode,
+        [
+          'aistudio-rendered-math-bold-repaired',
+          displayMode
+            ? 'aistudio-raw-math-display'
+            : 'aistudio-raw-math-inline'
+        ].join(' ')
+      );
+
+      if (!replacement || typeof host.replaceWith !== 'function') {
+        continue;
+      }
+
+      replacement.setAttribute(
+        'data-aistudio-rendered-math-bold-repaired',
+        '1'
+      );
+      replacement.setAttribute('data-katex-version', KATEX_VERSION);
+      host.replaceWith(replacement);
+      repaired += 1;
+    }
+
+    return repaired;
   }
 
   function fallbackRawMath(source, candidate) {
@@ -1725,9 +2106,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       (
         container.querySelector &&
         container.querySelector(
-          'a, code, pre, table, svg, math, .katex, ms-katex, ' +
-          '.MathJax, mjx-container, .aistudio-array-repaired, ' +
-          '.aistudio-aligned-repaired, .aistudio-raw-math-repaired'
+          'a, code, pre, table, .aistudio-array-repaired, ' +
+          '.aistudio-aligned-repaired, .aistudio-raw-math-repaired, ' +
+          '.aistudio-rendered-math-bold-repaired'
         )
       ) ||
       typeof container.replaceChildren !== 'function'
@@ -1735,12 +2116,26 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const sources = Array.from(new Set([
-      container.textContent || '',
-      typeof container.innerText === 'string'
-        ? container.innerText
-        : ''
-    ].filter(Boolean)));
+    const containsRenderedMath = Boolean(
+      container.querySelector &&
+      container.querySelector(RENDERED_MATH_SELECTOR)
+    );
+
+    if (
+      containsRenderedMath &&
+      !hasTextOutsideRenderedMath(container)
+    ) {
+      return 0;
+    }
+
+    const sources = containsRenderedMath
+      ? [sourceFromMixedMathDom(container)].filter(Boolean)
+      : Array.from(new Set([
+        container.textContent || '',
+        typeof container.innerText === 'string'
+          ? container.innerText
+          : ''
+      ].filter(Boolean)));
 
     for (const source of sources) {
       const candidate = parseRawMathCandidate(source);
@@ -2397,6 +2792,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     let repaired = repairRawMath(root);
+    repaired += repairRenderedMathBold(root);
     repaired += repairSplitTableBreaks(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
