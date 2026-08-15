@@ -44,6 +44,7 @@ async (page) => {
     const multipleBold = document.getElementById('multiple-bold');
     const splitBoldItalic = document.getElementById('split-bold-italic');
     const mathAdjacentBold = document.getElementById('math-adjacent-bold');
+    const rawAccountingArray = document.getElementById('raw-accounting-array');
     const codeBoundaryBold = document.getElementById('code-boundary-bold');
     const linkBoundaryBold = document.getElementById('link-boundary-bold');
     return {
@@ -76,6 +77,16 @@ async (page) => {
       mathAdjacentBoldText: mathAdjacentBold.querySelector(
         'strong.aistudio-md-repaired'
       )?.textContent,
+      arrayRowCount: rawAccountingArray.querySelectorAll(
+        '.aistudio-array-row'
+      ).length,
+      arrayCellCount: rawAccountingArray.querySelectorAll(
+        '.aistudio-array-cell'
+      ).length,
+      arrayText: rawAccountingArray.textContent.replace(/\s+/g, ' ').trim(),
+      arrayDividerCount: rawAccountingArray.querySelectorAll(
+        '.aistudio-array-divider'
+      ).length,
       preservedCodeBoundary:
         codeBoundaryBold.querySelectorAll('strong').length === 0 &&
         codeBoundaryBold.textContent.includes('**'),
@@ -83,7 +94,7 @@ async (page) => {
         linkBoundaryBold.querySelectorAll('strong').length === 0 &&
         linkBoundaryBold.textContent.includes('**'),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-163'
+        'data-aistudio-mobile-safe-164'
       )
     };
   });
@@ -101,6 +112,12 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
+    rendering.arrayRowCount !== 3 ||
+    rendering.arrayCellCount !== 12 ||
+    rendering.arrayDividerCount !== 3 ||
+    rendering.arrayText.includes('begin{array}') ||
+    !rendering.arrayText.includes('(차) 기계장치(신)') ||
+    !rendering.arrayText.includes('(대) 기계장치(구)') ||
     rendering.text.includes('<br>') ||
     rendering.text.includes('**') ||
     !rendering.preservedBlockBoundary ||
@@ -108,7 +125,7 @@ async (page) => {
     !rendering.preservedLinkBoundary ||
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
-    rendering.version !== '1.6.3'
+    rendering.version !== '1.6.4'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

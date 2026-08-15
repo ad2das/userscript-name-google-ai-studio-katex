@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.6\.3/);
+assert.match(source, /\/\/ @version\s+1\.6\.4/);
 assert.match(source, /\/\/ @inject-into\s+auto/);
 assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
@@ -33,6 +33,8 @@ const instrumented = source.replace(
     isPromptRunButton,
     isStopActionLabel,
     keepSessionFresh,
+    parseRawArray,
+    repairRawArrayContainer,
     repairTableBreakTextNode
   };
 }());`
@@ -190,6 +192,34 @@ assert.equal(
   api.findMatches('Render ***bold italic*** too.')[0].marker,
   '***'
 );
+
+const brokenArray = String.raw`begin{array}{ll|ll}
+\text{(차) 기계장치(신)} & 55,000 & \text{(대) 기계장치(구)} & 100,000 \
+\text{(차) 감가상각누계액} & 20,000 & & \
+\text{(차) 현금} & 25,000 & &
+end{array}`;
+const parsedArray = api.parseRawArray(brokenArray);
+assert.ok(parsedArray);
+assert.deepEqual(Array.from(parsedArray.alignments), ['l', 'l', 'l', 'l']);
+assert.deepEqual(Array.from(parsedArray.dividers), [2]);
+assert.deepEqual(Array.from(parsedArray.rows, (row) => Array.from(row)), [
+  ['(차) 기계장치(신)', '55,000', '(대) 기계장치(구)', '100,000'],
+  ['(차) 감가상각누계액', '20,000', '', ''],
+  ['(차) 현금', '25,000', '', '']
+]);
+
+const validRawArray = String.raw`\begin{array}{lr}
+\text{현금} & 25,000 \\
+\text{합계} & 25,000
+\end{array}`;
+assert.deepEqual(
+  Array.from(api.parseRawArray(validRawArray).rows, (row) => Array.from(row)),
+  [
+    ['현금', '25,000'],
+    ['합계', '25,000']
+  ]
+);
+assert.equal(api.parseRawArray('begin{array}{ll} no columns end{array}'), null);
 
 let replacement = null;
 const tableCell = {
