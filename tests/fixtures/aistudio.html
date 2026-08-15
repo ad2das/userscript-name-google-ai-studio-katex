@@ -16,6 +16,14 @@
         <p id="multiple-bold">**first** and <span>**sec</span><span>ond**</span></p>
         <p id="split-bold-italic"><span>**</span><span>*very important</span><span>***</span></p>
         <p id="math-adjacent-bold">Formula $x$ remains raw while **this is bold**.</p>
+        <div id="raw-underline-passages">
+          <p id="underline-correct">맞는 지문: "법적 권리가 없는 경우에는 통제를 제시하기 &lt;<span>u&gt;어렵</span><span>다&lt;/u</span><span>&gt;.</span>" ( O )</p>
+          <p id="underline-wrong-absolute">틀린 지문: "법적 권리가 없는 경우에는 통제를 제시할 수 &lt;u&gt;없다&lt;/u&gt;." ( ❌ )</p>
+          <p id="underline-wrong-condition">"권리의 법적 집행가능성은 통제의 &lt;u&gt;필요조건이다&lt;/u&gt;." ( ❌ )</p>
+        </div>
+        <p id="underline-link-boundary">&lt;u&gt;do not <a href="#">cross links</a> here&lt;/u&gt;</p>
+        <p id="underline-attribute-preserved">&lt;u onclick="alert(1)"&gt;unsafe&lt;/u&gt;</p>
+        <p id="native-underline-preserved"><u>already underlined</u></p>
         <p id="raw-accounting-array">be<span>gin{array}{ll|ll}</span>
           \text{(차) 기계장치(신)} &amp; 55,000 &amp; \text{(대) 기계장치(구)} &amp; 100,000 \
           \text{(차) 감가상각누계액} &amp; 20,000 &amp; &amp; \
@@ -98,6 +106,7 @@
     <div class="chat-turn-container user">
       <p id="user-raw-math">begin{aligned}x&amp;=\mathbf{y}\end{aligned}</p>
       <p id="user-native-bold-math"></p>
+      <p id="user-raw-underline">&lt;u&gt;사용자 원문&lt;/u&gt;</p>
     </div>
   </ms-chat-turn>
 </body>

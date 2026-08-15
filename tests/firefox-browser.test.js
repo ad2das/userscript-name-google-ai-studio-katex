@@ -81,6 +81,10 @@ async (page) => {
     const multipleBold = document.getElementById('multiple-bold');
     const splitBoldItalic = document.getElementById('split-bold-italic');
     const mathAdjacentBold = document.getElementById('math-adjacent-bold');
+    const underlineRoot = document.getElementById('raw-underline-passages');
+    const repairedUnderlines = Array.from(underlineRoot.querySelectorAll(
+      'u.aistudio-underline-repaired'
+    ));
     const rawMathIds = [
       'raw-accounting-array',
       'raw-aligned-equation',
@@ -134,6 +138,29 @@ async (page) => {
       mathAdjacentBoldText: mathAdjacentBold.querySelector(
         'strong.aistudio-md-repaired'
       )?.textContent,
+      underlineCount: repairedUnderlines.length,
+      underlineTexts: repairedUnderlines.map((element) => element.textContent),
+      underlineMarkersRemoved: !underlineRoot.textContent.includes('<u>') &&
+        !underlineRoot.textContent.includes('</u>'),
+      underlineDecoration: repairedUnderlines[0]
+        ? getComputedStyle(repairedUnderlines[0]).textDecorationLine
+        : '',
+      underlineLinkBoundaryPreserved:
+        document.querySelectorAll('#underline-link-boundary u').length === 0 &&
+        document.getElementById('underline-link-boundary').textContent ===
+          '<u>do not cross links here</u>',
+      underlineAttributePreserved:
+        document.querySelectorAll('#underline-attribute-preserved u').length === 0 &&
+        document.getElementById('underline-attribute-preserved').textContent ===
+          '<u onclick="alert(1)">unsafe</u>',
+      nativeUnderlinePreserved:
+        document.querySelectorAll(
+          '#native-underline-preserved > u:not(.aistudio-underline-repaired)'
+        ).length === 1,
+      userUnderlinePreserved:
+        document.getElementById('user-raw-underline').textContent ===
+        '<u>사용자 원문</u>' &&
+        document.querySelectorAll('#user-raw-underline u').length === 0,
       rawMathCount: rawMathNodes.filter((node) => (
         node.querySelector('.aistudio-raw-math-repaired')
       )).length,
@@ -269,7 +296,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-181'
+        'data-aistudio-mobile-safe-182'
       )
     };
   });
@@ -287,6 +314,15 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
+    rendering.underlineCount !== 3 ||
+    JSON.stringify(rendering.underlineTexts) !==
+      JSON.stringify(['어렵다', '없다', '필요조건이다']) ||
+    !rendering.underlineMarkersRemoved ||
+    !rendering.underlineDecoration.includes('underline') ||
+    !rendering.underlineLinkBoundaryPreserved ||
+    !rendering.underlineAttributePreserved ||
+    !rendering.nativeUnderlinePreserved ||
+    !rendering.userUnderlinePreserved ||
     rendering.rawMathCount !== 11 ||
     rendering.rawMathKatexCount !== 11 ||
     rendering.rawMathMathmlCount !== 11 ||
@@ -340,7 +376,7 @@ async (page) => {
     !rendering.preservedLinkBoundaryBold ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.1'
+    rendering.version !== '1.8.2'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

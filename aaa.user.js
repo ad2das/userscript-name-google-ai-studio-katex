@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.1
+// @version      1.8.2
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.1';
-  const STYLE_ID = 'aistudio-mobile-safe-181-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-181';
+  const VERSION = '1.8.2';
+  const STYLE_ID = 'aistudio-mobile-safe-182-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-182';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -295,6 +295,8 @@
     'a',
     'strong',
     'b',
+    'u',
+    'ins',
     'code',
     'pre',
     'kbd',
@@ -314,6 +316,7 @@
     'ms-katex',
     '.MathJax',
     'mjx-container',
+    '.aistudio-underline-repaired',
     'ms-cmark-node',
     'p',
     'div',
@@ -364,7 +367,8 @@
     'aistudio-mobile-safe-165-style',
     'aistudio-mobile-safe-170-style',
     'aistudio-mobile-safe-171-style',
-    'aistudio-mobile-safe-180-style'
+    'aistudio-mobile-safe-180-style',
+    'aistudio-mobile-safe-181-style'
   ];
 
   const CSS_TEXT = `
@@ -451,6 +455,17 @@ ${SCOPE} :where(strong, b, .aistudio-md-repaired) {
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
+}
+
+/* AI Studio가 문자로 노출한 속성 없는 <u>...</u>의 안전한 fallback. */
+${SCOPE} u.aistudio-underline-repaired {
+  font: inherit !important;
+  color: inherit !important;
+  text-decoration-line: underline !important;
+  text-decoration-style: solid !important;
+  text-decoration-thickness: 0.08em !important;
+  text-underline-offset: 0.12em !important;
+  text-decoration-skip-ink: auto !important;
 }
 
 /*
@@ -926,6 +941,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return Boolean(
       text &&
       /<br\s*\/?\s*>/i.test(text)
+    );
+  }
+
+  function hasLiteralUnderline(text) {
+    return Boolean(
+      text &&
+      /<u\s*>[\s\S]*?<\/u\s*>/i.test(text)
     );
   }
 
@@ -1514,6 +1536,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return (
       hasPair(text) ||
       hasLiteralTableBreak(text) ||
+      hasLiteralUnderline(text) ||
       hasRawMathText(text)
     );
   }
@@ -2833,6 +2856,54 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return result;
   }
 
+  function findUnderlineMatches(text) {
+    const result = [];
+    const regex = /<u\s*>([\s\S]*?)<\/u\s*>/gi;
+    let match;
+
+    while ((match = regex.exec(text))) {
+      const raw = match[0];
+      const inner = match[1] || '';
+      const opening = raw.match(/^<u\s*>/i)?.[0] || '';
+      const closing = raw.match(/<\/u\s*>$/i)?.[0] || '';
+      const start = match.index;
+      const end = start + raw.length;
+      const innerStart = start + opening.length;
+      const innerEnd = end - closing.length;
+
+      if (
+        !opening ||
+        !closing ||
+        isEscaped(text, start) ||
+        isEscaped(text, innerEnd)
+      ) {
+        continue;
+      }
+
+      if (
+        !inner.trim() ||
+        inner.length > MAX_MATCH_INNER_LENGTH ||
+        /\n\s*\n/.test(inner) ||
+        /<\/?[A-Za-z][^>]*>/.test(inner)
+      ) {
+        continue;
+      }
+
+      result.push({
+        start,
+        end,
+        innerStart,
+        innerEnd,
+        opening,
+        closing,
+        raw,
+        inner
+      });
+    }
+
+    return result;
+  }
+
   function skipped(textNode) {
     const parent =
       textNode &&
@@ -2860,6 +2931,61 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
     strong.textContent = text;
     return strong;
+  }
+
+  function trimFragmentText(fragment, leadingLength, trailingLength) {
+    const textNodes = [];
+    const walker = document.createTreeWalker(
+      fragment,
+      NodeFilter.SHOW_TEXT
+    );
+
+    while (walker.nextNode()) {
+      textNodes.push(walker.currentNode);
+    }
+
+    let leading = leadingLength;
+
+    for (const textNode of textNodes) {
+      if (!leading) {
+        break;
+      }
+
+      const value = textNode.nodeValue || '';
+      const amount = Math.min(leading, value.length);
+      textNode.nodeValue = value.slice(amount);
+      leading -= amount;
+    }
+
+    let trailing = trailingLength;
+
+    for (let index = textNodes.length - 1; index >= 0; index -= 1) {
+      if (!trailing) {
+        break;
+      }
+
+      const textNode = textNodes[index];
+      const value = textNode.nodeValue || '';
+      const amount = Math.min(trailing, value.length);
+      textNode.nodeValue = value.slice(0, value.length - amount);
+      trailing -= amount;
+    }
+
+    for (const textNode of textNodes) {
+      if (!textNode.nodeValue && textNode.parentNode) {
+        textNode.parentNode.removeChild(textNode);
+      }
+    }
+
+    return !leading && !trailing;
+  }
+
+  function createRepairedUnderline(contents) {
+    const underline = document.createElement('u');
+    underline.className = 'aistudio-underline-repaired';
+    underline.setAttribute('data-aistudio-underline-repaired', '1');
+    underline.appendChild(contents);
+    return underline;
   }
 
   function appendBoldRepairedText(fragment, text) {
@@ -3249,6 +3375,167 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return true;
   }
 
+  function collectInlineText(container) {
+    const records = [];
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT
+    );
+    let text = '';
+
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      const value = textNode.nodeValue || '';
+
+      if (!value || skipped(textNode)) {
+        continue;
+      }
+
+      const start = text.length;
+      text += value;
+      records.push({
+        node: textNode,
+        start,
+        end: text.length
+      });
+    }
+
+    return { records, text };
+  }
+
+  function repairInlineUnderlineMatch(records, match) {
+    const start = textPosition(records, match.start, false);
+    const end = textPosition(records, match.end, true);
+
+    if (!start || !end) {
+      return false;
+    }
+
+    if (
+      closest(start.node.parentElement, 'u, ins') ||
+      closest(end.node.parentElement, 'u, ins')
+    ) {
+      return false;
+    }
+
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+
+    const selected = range.cloneContents();
+    const selectedText = selected.textContent || '';
+    const crossesBoundary = Boolean(
+      selected.querySelector &&
+      selected.querySelector(INLINE_REPAIR_BOUNDARY_SELECTOR)
+    );
+    const previewTrimmed = trimFragmentText(
+      selected,
+      match.opening.length,
+      match.closing.length
+    );
+
+    if (
+      selectedText !== match.raw ||
+      crossesBoundary ||
+      !previewTrimmed ||
+      selected.textContent !== match.inner
+    ) {
+      if (typeof range.detach === 'function') {
+        range.detach();
+      }
+      return false;
+    }
+
+    const contents = range.extractContents();
+
+    if (
+      !trimFragmentText(
+        contents,
+        match.opening.length,
+        match.closing.length
+      ) ||
+      contents.textContent !== match.inner
+    ) {
+      range.insertNode(contents);
+      if (typeof range.detach === 'function') {
+        range.detach();
+      }
+      return false;
+    }
+
+    range.insertNode(createRepairedUnderline(contents));
+
+    if (typeof range.detach === 'function') {
+      range.detach();
+    }
+
+    return true;
+  }
+
+  function repairLiteralUnderlinesInContainer(container) {
+    if (
+      !container ||
+      !container.isConnected ||
+      closest(container, USER_SELECTOR)
+    ) {
+      return 0;
+    }
+
+    const snapshot = collectInlineText(container);
+
+    if (
+      !hasLiteralUnderline(snapshot.text) ||
+      snapshot.text.length > MAX_INLINE_REPAIR_LENGTH
+    ) {
+      return 0;
+    }
+
+    const matches = findUnderlineMatches(snapshot.text);
+    let repaired = 0;
+
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const current = collectInlineText(container);
+
+      if (
+        repairInlineUnderlineMatch(
+          current.records,
+          matches[index]
+        )
+      ) {
+        repaired += 1;
+      }
+    }
+
+    return repaired;
+  }
+
+  function repairLiteralUnderlines(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const containers = Array.from(
+      root.querySelectorAll(INLINE_REPAIR_CONTAINER_SELECTOR)
+    );
+
+    if (
+      root.matches &&
+      root.matches(INLINE_REPAIR_CONTAINER_SELECTOR)
+    ) {
+      containers.unshift(root);
+    } else {
+      containers.push(root);
+    }
+
+    let repaired = 0;
+
+    for (const container of containers) {
+      repaired += repairLiteralUnderlinesInContainer(container);
+    }
+
+    return repaired;
+  }
+
   function repairInlineEmphasisInContainer(container) {
     if (
       !container ||
@@ -3258,33 +3545,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const collect = () => {
-      const records = [];
-      const walker = document.createTreeWalker(
-        container,
-        NodeFilter.SHOW_TEXT
-      );
-      let text = '';
-
-      while (walker.nextNode()) {
-        const textNode = walker.currentNode;
-        const value = textNode.nodeValue || '';
-
-        if (!value || skipped(textNode)) {
-          continue;
-        }
-
-        const start = text.length;
-        text += value;
-        records.push({
-          node: textNode,
-          start,
-          end: text.length
-        });
-      }
-
-      return { records, text };
-    };
+    const collect = () => collectInlineText(container);
 
     const snapshot = collect();
 
@@ -3364,6 +3625,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let repaired = repairRawMath(root);
     repaired += repairRenderedMathBold(root);
     repaired += repairSplitTableBreaks(root);
+    repaired += repairLiteralUnderlines(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
       root,

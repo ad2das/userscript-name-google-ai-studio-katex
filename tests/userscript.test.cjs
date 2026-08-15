@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.8\.1/);
+assert.match(source, /\/\/ @version\s+1\.8\.2/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -38,9 +38,11 @@ const instrumented = source.replace(
     buttonLabel,
     canSubmit,
     findMatches,
+    findUnderlineMatches,
     findEmbeddedRawMathBlocks,
     generating,
     hasLiteralTableBreak,
+    hasLiteralUnderline,
     installSessionKeepalive,
     isRunActionLabel,
     isPromptRunButton,
@@ -199,6 +201,27 @@ assert.equal(api.isStopActionLabel('Run'), false);
 assert.equal(api.hasLiteralTableBreak('first<br>second'), true);
 assert.equal(api.hasLiteralTableBreak('first<BR />second'), true);
 assert.equal(api.hasLiteralTableBreak('first break second'), false);
+assert.equal(api.hasLiteralUnderline('plain <u>underline</u> text'), true);
+assert.equal(api.hasLiteralUnderline('plain <U >underline</U > text'), true);
+assert.equal(
+  api.hasLiteralUnderline('<u onclick="alert(1)">unsafe</u>'),
+  false
+);
+assert.equal(api.hasLiteralUnderline('<u>missing close'), false);
+
+const underlineMatches = api.findUnderlineMatches(
+  '어렵다: <u>어렵다</u>, 없다: <u>없다</u>, 조건: <u>필요조건이다</u>'
+);
+assert.deepEqual(
+  Array.from(underlineMatches, (match) => match.inner),
+  ['어렵다', '없다', '필요조건이다']
+);
+assert.equal(api.findUnderlineMatches('Keep \\<u>escaped</u>.').length, 0);
+assert.equal(
+  api.findUnderlineMatches('<u><strong>nested</strong></u>').length,
+  0
+);
+assert.equal(api.findUnderlineMatches('<u>line 1\n\nline 2</u>').length, 0);
 
 const adjacentMathMatch = api.findMatches(
   'Formula $x$ remains raw while **this is bold**.'
