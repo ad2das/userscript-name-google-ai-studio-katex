@@ -2,6 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <link rel="icon" href="data:,">
   <title>AI Studio userscript fixture</title>
 </head>
 <body>
@@ -166,5 +167,48 @@
       <pre id="user-prose-code-bold"><code>사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.</code></pre>
     </div>
   </ms-chat-turn>
+
+  <!--
+    Selector-independent fallback fixture: no ms-chat-turn, ms-cmark-node,
+    ms-text-chunk, model role, or known model class exists around this answer.
+    It reproduces both follow-up screenshots while user/navigation/code text
+    in the same application surface must remain literal.
+  -->
+  <app-root id="selectorless-app-root">
+    <header>
+      <div id="permanent-token-progress" role="progressbar" style="display:block;width:12px;height:2px">tokens</div>
+    </header>
+    <main id="selectorless-main">
+      <section id="reported-selectorless-model-output" class="next-response-shell">
+        <h2>K-IFRS 기준서 원문 비교</h2>
+        <ol>
+          <li>
+            <p id="photo-one-underline-usual">"개별 취득하는 무형자산의 원가는 &lt;u&gt;통상&lt;/u&gt; 신뢰성 있게 측정할 수 있다."</p>
+          </li>
+          <li>
+            <p id="photo-one-underline-always">"사업결합으로 취득한 무형자산은 공정가치를 신뢰성 있게 측정할 수 있는 충분한 정보가 &lt;u&gt;항상 존재하는 것으로 본다.&lt;/u&gt;"</p>
+          </li>
+          <li>
+            <p id="photo-two-development-stage">②번 지문: "연구단계와 개발단계를 구분할 수 없는 경우에는 ... 모두 **개발단계**에서 발생한 것으로 본다."</p>
+          </li>
+          <li>
+            <p id="photo-two-research-stage">올바른 기준: 구분이 안 되면 가장 보수적으로 **모두 연구단계에서 발생한 것(전액 당기비용)**으로 봅니다!</p>
+          </li>
+          <li>
+            <p id="photo-two-alternatives">④번 지문: "새롭거나 개선된 제품 등에 대한 여러 가지 **대체안을 제안, 설계, 평가, 최종 선택**하는 활동"</p>
+          </li>
+        </ol>
+        <pre><code id="selectorless-literal-code">Markdown syntax: **literal stays literal** and &lt;u&gt;literal&lt;/u&gt;</code></pre>
+      </section>
+
+      <section id="selectorless-user-output" data-turn-role="user">
+        <p id="selectorless-user-literal">사용자 **원문 굵게**와 &lt;u&gt;원문 밑줄&lt;/u&gt;은 유지합니다.</p>
+      </section>
+
+      <nav id="selectorless-navigation">
+        <p id="selectorless-nav-literal">메뉴 **원문 표기**와 &lt;u&gt;원문 태그&lt;/u&gt;</p>
+      </nav>
+    </main>
+  </app-root>
 </body>
 </html>

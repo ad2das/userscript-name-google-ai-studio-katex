@@ -39,6 +39,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Model-response discovery across case variants such as `Model`/`model` and
   `assistant`, plus roleless `ms-cmark-node`/`ms-text-chunk` response fallbacks
   while continuing to preserve user turns
+- Selector-independent fallback discovery for raw Markdown/HTML/TeX in the
+  nearest response paragraph, even when AI Studio changes every surrounding
+  turn/renderer tag, while excluding user, editor, code, navigation, and dialog
+  surfaces
 - Mobile readable Google/Samsung-like font stack
 - Code/pre blocks with horizontal scrolling
 - Long-running AI Studio document sessions kept warm without reloading the tab
@@ -54,7 +58,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.8.5 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.8.6 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script

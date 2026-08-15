@@ -124,6 +124,26 @@ async (page) => {
     const rolelessModelResponse = document.getElementById(
       'roleless-model-response'
     );
+    const selectorlessModelResponse = document.getElementById(
+      'reported-selectorless-model-output'
+    );
+    const selectorlessStrong = Array.from(
+      selectorlessModelResponse.querySelectorAll(
+        'strong.aistudio-md-repaired'
+      )
+    );
+    const selectorlessUnderlines = Array.from(
+      selectorlessModelResponse.querySelectorAll(
+        'u.aistudio-underline-repaired'
+      )
+    );
+    const selectorlessReportedNodes = [
+      'photo-one-underline-usual',
+      'photo-one-underline-always',
+      'photo-two-development-stage',
+      'photo-two-research-stage',
+      'photo-two-alternatives'
+    ].map((id) => document.getElementById(id));
     const rawBoldLeafSelector = [
       'p',
       'li',
@@ -412,6 +432,62 @@ async (page) => {
         document.querySelectorAll(
           '#lowercase-user-response strong, #lowercase-user-response u'
         ).length === 0,
+      selectorlessStrongTexts: selectorlessStrong.map(
+        (element) => element.textContent
+      ),
+      selectorlessStrongWeights: selectorlessStrong.map(fontWeightOf),
+      selectorlessUnderlineTexts: selectorlessUnderlines.map(
+        (element) => element.textContent
+      ),
+      selectorlessUnderlineDecorations: selectorlessUnderlines.map(
+        (element) => getComputedStyle(element).textDecorationLine
+      ),
+      selectorlessMarkersRemoved:
+        selectorlessReportedNodes.every((element) => (
+          !element.textContent.includes('**') &&
+          !element.textContent.includes('<u>') &&
+          !element.textContent.includes('</u>')
+        )),
+      selectorlessRootMarked:
+        selectorlessModelResponse.querySelector(
+          '[data-aistudio-repair-root="1"]'
+        ) !== null ||
+        selectorlessModelResponse.getAttribute(
+          'data-aistudio-repair-root'
+        ) === '1',
+      selectorlessLiteralCodePreserved:
+        document.getElementById('selectorless-literal-code').textContent ===
+          'Markdown syntax: **literal stays literal** and <u>literal</u>' &&
+        document.querySelectorAll(
+          '#selectorless-literal-code strong, #selectorless-literal-code u'
+        ).length === 0,
+      selectorlessUserPreserved:
+        document.getElementById('selectorless-user-literal').textContent ===
+          '사용자 **원문 굵게**와 <u>원문 밑줄</u>은 유지합니다.' &&
+        document.querySelectorAll(
+          '#selectorless-user-output strong, #selectorless-user-output u'
+        ).length === 0,
+      selectorlessNavigationPreserved:
+        document.getElementById('selectorless-nav-literal').textContent ===
+          '메뉴 **원문 표기**와 <u>원문 태그</u>' &&
+        document.querySelectorAll(
+          '#selectorless-navigation strong, #selectorless-navigation u'
+        ).length === 0,
+      diagnosticFallbackRoots: Number(
+        document.documentElement.getAttribute(
+          'data-aistudio-mobile-fix-fallback-roots'
+        )
+      ),
+      diagnosticTotalRepairs: Number(
+        document.documentElement.getAttribute(
+          'data-aistudio-mobile-fix-total-repairs'
+        )
+      ),
+      permanentProgressVisible: (() => {
+        const progress = document.getElementById('permanent-token-progress');
+        const rect = progress.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })(),
       rawBoldRemainderIds,
       fencedMathPreserved:
         document.querySelector(
@@ -423,7 +499,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-185'
+        'data-aistudio-mobile-safe-186'
       )
     };
   });
@@ -526,6 +602,27 @@ async (page) => {
     !rendering.currentModelMarkersRemoved ||
     !rendering.rolelessModelRepaired ||
     !rendering.lowercaseUserPreserved ||
+    JSON.stringify(rendering.selectorlessStrongTexts) !== JSON.stringify([
+      '개발단계',
+      '모두 연구단계에서 발생한 것(전액 당기비용)',
+      '대체안을 제안, 설계, 평가, 최종 선택'
+    ]) ||
+    rendering.selectorlessStrongWeights.some((weight) => weight < 600) ||
+    JSON.stringify(rendering.selectorlessUnderlineTexts) !== JSON.stringify([
+      '통상',
+      '항상 존재하는 것으로 본다.'
+    ]) ||
+    rendering.selectorlessUnderlineDecorations.some(
+      (decoration) => !decoration.includes('underline')
+    ) ||
+    !rendering.selectorlessMarkersRemoved ||
+    !rendering.selectorlessRootMarked ||
+    !rendering.selectorlessLiteralCodePreserved ||
+    !rendering.selectorlessUserPreserved ||
+    !rendering.selectorlessNavigationPreserved ||
+    rendering.diagnosticFallbackRoots < 5 ||
+    rendering.diagnosticTotalRepairs < 5 ||
+    !rendering.permanentProgressVisible ||
     JSON.stringify(rendering.rawBoldRemainderIds) !== JSON.stringify([
       'actual-code-bold',
       'code-boundary-bold',
@@ -536,18 +633,20 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.5'
+    rendering.version !== '1.8.6'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
 
   await page.evaluate(() => {
-    const modelTurn = document.createElement('ms-chat-turn');
-    const modelRenderer = document.createElement('ms-cmark-node');
+    const fallbackSurface = document.getElementById('selectorless-main');
+    const modelTurn = document.createElement('section');
+    const modelRenderer = document.createElement('div');
     const modelParagraph = document.createElement('p');
     const progress = document.createElement('div');
 
     modelTurn.id = 'dynamic-roleless-model-turn';
+    modelTurn.className = 'unknown-dynamic-response-shell';
     modelRenderer.id = 'dynamic-roleless-model-response';
     modelParagraph.textContent =
       '새 응답의 **동적 모델 출력**과 <u>동적 밑줄</u>입니다.';
@@ -556,10 +655,10 @@ async (page) => {
     progress.style.cssText = 'display:block;width:2px;height:2px';
     modelRenderer.append(modelParagraph, progress);
     modelTurn.appendChild(modelRenderer);
-    document.body.appendChild(modelTurn);
+    fallbackSurface.appendChild(modelTurn);
 
-    const userTurn = document.createElement('ms-chat-turn');
-    const userRenderer = document.createElement('ms-cmark-node');
+    const userTurn = document.createElement('section');
+    const userRenderer = document.createElement('div');
     const userParagraph = document.createElement('p');
 
     userTurn.id = 'dynamic-lowercase-user-turn';
@@ -569,7 +668,7 @@ async (page) => {
       '새 사용자 **원문 굵게**와 <u>원문 밑줄</u>입니다.';
     userRenderer.appendChild(userParagraph);
     userTurn.appendChild(userRenderer);
-    document.body.appendChild(userTurn);
+    fallbackSurface.appendChild(userTurn);
   });
 
   await page.waitForTimeout(2300);
