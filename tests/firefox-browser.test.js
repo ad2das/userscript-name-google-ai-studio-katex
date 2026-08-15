@@ -85,6 +85,12 @@ async (page) => {
     const repairedUnderlines = Array.from(underlineRoot.querySelectorAll(
       'u.aistudio-underline-repaired'
     ));
+    const fairValueCard = document.getElementById(
+      'photo-three-fair-value-card'
+    );
+    const fairValueUnderlines = Array.from(
+      fairValueCard.querySelectorAll('u.aistudio-underline-repaired')
+    );
     const rawMathIds = [
       'raw-accounting-array',
       'raw-aligned-equation',
@@ -216,6 +222,22 @@ async (page) => {
       underlineDecoration: repairedUnderlines[0]
         ? getComputedStyle(repairedUnderlines[0]).textDecorationLine
         : '',
+      fairValueUnderlineTexts: fairValueUnderlines.map(
+        (element) => element.textContent
+      ),
+      fairValueUnderlineDecorations: fairValueUnderlines.map(
+        (element) => getComputedStyle(element).textDecorationLine
+      ),
+      fairValueMarkersRemoved:
+        !fairValueCard.textContent.includes('<u>') &&
+        !fairValueCard.textContent.includes('</u>'),
+      permanentModelProgressVisible: (() => {
+        const progress = document.getElementById(
+          'permanent-model-token-progress'
+        );
+        const rect = progress.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })(),
       underlineLinkBoundaryPreserved:
         document.querySelectorAll('#underline-link-boundary u').length === 0 &&
         document.getElementById('underline-link-boundary').textContent ===
@@ -499,7 +521,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-186'
+        'data-aistudio-mobile-safe-187'
       )
     };
   });
@@ -523,6 +545,15 @@ async (page) => {
       JSON.stringify(['어렵다', '없다', '필요조건이다']) ||
     !rendering.underlineMarkersRemoved ||
     !rendering.underlineDecoration.includes('underline') ||
+    JSON.stringify(rendering.fairValueUnderlineTexts) !== JSON.stringify([
+      '절대 1원도 하지 않습니다',
+      '무조건 100% 당기손익(IS)'
+    ]) ||
+    rendering.fairValueUnderlineDecorations.some(
+      (decoration) => !decoration.includes('underline')
+    ) ||
+    !rendering.fairValueMarkersRemoved ||
+    !rendering.permanentModelProgressVisible ||
     !rendering.underlineLinkBoundaryPreserved ||
     !rendering.underlineAttributePreserved ||
     !rendering.nativeUnderlinePreserved ||
@@ -633,17 +664,37 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.6'
+    rendering.version !== '1.8.7'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
 
   await page.evaluate(() => {
     const fallbackSurface = document.getElementById('selectorless-main');
+    const runLabel = document.querySelector('.run-button-label');
+    const completedTurn = document.createElement('ms-chat-turn');
+    const completedContainer = document.createElement('div');
+    const completedRenderer = document.createElement('ms-cmark-node');
+    const completedWrong = document.createElement('p');
+    const completedCorrect = document.createElement('p');
     const modelTurn = document.createElement('section');
     const modelRenderer = document.createElement('div');
     const modelParagraph = document.createElement('p');
     const progress = document.createElement('div');
+
+    runLabel.textContent = 'Stop';
+
+    completedTurn.id = 'dynamic-completed-old-turn';
+    completedContainer.className = 'chat-turn-container model';
+    completedRenderer.id = 'dynamic-completed-old-response';
+    completedWrong.textContent =
+      '과거 ②번 지문은 모두 **개발단계**에서 발생한 것으로 본다.';
+    completedCorrect.textContent =
+      '과거 올바른 기준은 **모두 연구단계에서 발생한 것(전액 당기비용)**이다.';
+    completedRenderer.append(completedWrong, completedCorrect);
+    completedContainer.appendChild(completedRenderer);
+    completedTurn.appendChild(completedContainer);
+    fallbackSurface.appendChild(completedTurn);
 
     modelTurn.id = 'dynamic-roleless-model-turn';
     modelTurn.className = 'unknown-dynamic-response-shell';
@@ -674,6 +725,15 @@ async (page) => {
   await page.waitForTimeout(2300);
 
   const duringStreaming = await page.evaluate(() => ({
+    completedStrongTexts: Array.from(document.querySelectorAll(
+      '#dynamic-completed-old-response strong.aistudio-md-repaired'
+    )).map((element) => element.textContent),
+    completedStrongWeights: Array.from(document.querySelectorAll(
+      '#dynamic-completed-old-response strong.aistudio-md-repaired'
+    )).map((element) => Number(getComputedStyle(element).fontWeight)),
+    completedMarkersRemoved:
+      !document.getElementById('dynamic-completed-old-response')
+        .textContent.includes('**'),
     modelText: document.getElementById(
       'dynamic-roleless-model-response'
     ).textContent,
@@ -687,16 +747,30 @@ async (page) => {
     userRepairs: document.querySelectorAll(
       '#dynamic-lowercase-user-response strong, ' +
       '#dynamic-lowercase-user-response u'
-    ).length
+    ).length,
+    generating: document.documentElement.getAttribute(
+      'data-aistudio-mobile-fix-generating'
+    ),
+    deferredRoots: Number(document.documentElement.getAttribute(
+      'data-aistudio-mobile-fix-deferred-roots'
+    ))
   }));
 
   if (
+    JSON.stringify(duringStreaming.completedStrongTexts) !== JSON.stringify([
+      '개발단계',
+      '모두 연구단계에서 발생한 것(전액 당기비용)'
+    ]) ||
+    duringStreaming.completedStrongWeights.some((weight) => weight < 600) ||
+    !duringStreaming.completedMarkersRemoved ||
     !duringStreaming.modelText.includes('**동적 모델 출력**') ||
     !duringStreaming.modelText.includes('<u>동적 밑줄</u>') ||
     duringStreaming.modelRepairs !== 0 ||
     !duringStreaming.userText.includes('**원문 굵게**') ||
     !duringStreaming.userText.includes('<u>원문 밑줄</u>') ||
-    duringStreaming.userRepairs !== 0
+    duringStreaming.userRepairs !== 0 ||
+    duringStreaming.generating !== 'true' ||
+    duringStreaming.deferredRoots < 1
   ) {
     throw new Error(
       `Firefox streaming guard regression: ${JSON.stringify(duringStreaming)}`
@@ -705,6 +779,7 @@ async (page) => {
 
   await page.evaluate(() => {
     document.getElementById('dynamic-model-progress').remove();
+    document.querySelector('.run-button-label').textContent = 'Run';
   });
   await page.waitForTimeout(2700);
 

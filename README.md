@@ -43,6 +43,9 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   nearest response paragraph, even when AI Studio changes every surrounding
   turn/renderer tag, while excluding user, editor, code, navigation, and dialog
   surfaces
+- Per-turn generation guarding: a live `Stop` action defers only the active
+  latest response, while already completed conversation turns are still
+  repaired; a visible `Run` action overrides stale progress widgets
 - Mobile readable Google/Samsung-like font stack
 - Code/pre blocks with horizontal scrolling
 - Long-running AI Studio document sessions kept warm without reloading the tab
@@ -58,13 +61,13 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.8.6 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.8.7 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
 does not retry a failed generation. It refreshes an exposed Google auth token when
 needed, warms the authenticated AI Studio document session before generation, and
-blocks all answer-DOM repair while AI Studio is streaming.
+defers DOM repair only for the active latest answer while AI Studio is streaming.
 
 Raw math repair is fail-closed: it replaces either an entire completed model-output
 container or complete line-bounded TeX blocks inside plain response text, and only

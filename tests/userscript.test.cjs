@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.8\.6/);
+assert.match(source, /\/\/ @version\s+1\.8\.7/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -24,7 +24,11 @@ assert.match(source, /function repairInlineEmphasisInContainer/);
 assert.match(source, /function repairProseCodeBold/);
 assert.match(
   source,
-  /if \(pageGenerating\) \{[\s\S]*?schedule\(GENERATION_RECHECK_MS\);[\s\S]*?return;/
+  /if \(findRunButton\(\)\) \{\s*return false;\s*\}/
+);
+assert.match(
+  source,
+  /if \(pageGenerating && isLastTurn\) \{[\s\S]*?deferredThisScan \+= 1;[\s\S]*?continue;/
 );
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 

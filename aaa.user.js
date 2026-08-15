@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.6
+// @version      1.8.7
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.6';
-  const STYLE_ID = 'aistudio-mobile-safe-186-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-186';
+  const VERSION = '1.8.7';
+  const STYLE_ID = 'aistudio-mobile-safe-187-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-187';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -451,7 +451,8 @@
     'aistudio-mobile-safe-182-style',
     'aistudio-mobile-safe-183-style',
     'aistudio-mobile-safe-184-style',
-    'aistudio-mobile-safe-185-style'
+    'aistudio-mobile-safe-185-style',
+    'aistudio-mobile-safe-186-style'
   ];
 
   const CSS_TEXT = `
@@ -4275,6 +4276,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return true;
     }
 
+    /*
+     * AI Studio keeps token/progress widgets mounted after a response has
+     * finished. A visible Run action is the authoritative completed state;
+     * stale spinners inside an old model turn must not freeze every repair.
+     */
+    if (findRunButton()) {
+      return false;
+    }
+
     const indicators = document.querySelectorAll(
       MODEL_ACTIVITY_SELECTOR
     );
@@ -4622,26 +4632,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       );
     }
 
-    /*
-     * AI Studio가 스트리밍 중일 때는 이전 답변을 포함해 어떤 출력 DOM도 바꾸지 않는다.
-     * Angular가 관리하는 노드를 동시에 교체하면 다음 GenerateContent 요청의 내부 상태가
-     * 깨질 수 있으므로, 완료 후 안정 구간에서만 보정한다.
-     */
-    if (pageGenerating) {
-      /*
-       * 완료 버튼/spinner가 새 DOM 바깥에서 사라져도 놓치지 않도록 읽기
-       * 전용 재확인을 이어간다. 생성 중에는 repairRoot를 호출하지 않는다.
-       */
-      schedule(GENERATION_RECHECK_MS);
-      return;
-    }
-
     const roots = collectRoots();
     const lastTurn = lastModelTurn(roots);
+
+    if (pageGenerating) {
+      /*
+       * 현재 작성 중인 마지막 turn만 건드리지 않는다. 다른 과거 turn은
+       * 이미 완성된 DOM이므로 정상적인 안정화 검사 후 복구할 수 있다.
+       * Stop 하나 때문에 긴 세션의 모든 과거 답변이 영구 동결되지 않도록
+       * 재확인도 계속한다.
+       */
+      schedule(GENERATION_RECHECK_MS);
+    }
+
     const fallbackCount = roots.filter((root) => (
       fallbackRoots.has(root)
     )).length;
     let repairedThisScan = 0;
+    let deferredThisScan = 0;
 
     if (html) {
       html.setAttribute(
@@ -4667,6 +4675,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         closest(root, MODEL_TURN_SELECTOR) ||
         root;
       const isLastTurn = sameTurnOrInside(rootTurn, lastTurn);
+
+      if (pageGenerating && isLastTurn) {
+        deferredThisScan += 1;
+        continue;
+      }
+
       let state = states.get(root);
 
       /*
@@ -4765,6 +4779,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       html.setAttribute(
         'data-aistudio-mobile-fix-total-repairs',
         String(repairedTotal)
+      );
+      html.setAttribute(
+        'data-aistudio-mobile-fix-deferred-roots',
+        String(deferredThisScan)
       );
     }
 
