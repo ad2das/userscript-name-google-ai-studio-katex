@@ -13,6 +13,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 ## What It Fixes
 
 - KaTeX display math horizontal scrolling on mobile
+- Wide display formulas fitted to the available mobile width without leaking
+  KaTeX `underbrace`/stretchy SVG segments as long black lines
 - Markdown tables overflowing the screen
 - Literal `<br>`, `<br/>`, and `<br />` markers shown inside completed table cells,
   including markers split across multiple inline nodes
@@ -30,7 +32,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   without rebuilding or deleting those surrounding DOM elements
 - Bold fallback for unsupported enclosed and currency glyphs such as `①` and `₩`
 - Native vertical page scrolling
-- Split `**bold**` / `__bold__` Markdown text in model responses
+- Split `**bold**` / `__bold__` Markdown text in model responses, including
+  emphasis that spans an already-rendered inline KaTeX formula
 - Bold single- or multi-paragraph Korean prose that AI Studio misclassifies as
   an indented code block, preserving paragraph breaks and adjacent Korean text,
   while preserving actual code and literal Markdown syntax examples
@@ -61,7 +64,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.8.7 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.8.8 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
