@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.6.3
-// @description  Mobile-safe display fixes, split Markdown emphasis/table breaks, and guarded AI Studio session keepalive.
+// @version      1.6.4
+// @description  Mobile-safe display fixes, raw array recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -15,9 +15,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.3';
-  const STYLE_ID = 'aistudio-mobile-safe-163-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-163';
+  const VERSION = '1.6.4';
+  const STYLE_ID = 'aistudio-mobile-safe-164-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-164';
 
   /*
    * CSS-only만 쓰면 raw **bold**를 실제 굵게 만들 수 없다.
@@ -43,6 +43,7 @@
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
+  const MAX_RAW_ARRAY_LENGTH = 12000;
 
   const ENABLE_SESSION_KEEPALIVE = true;
   const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
@@ -134,7 +135,8 @@
 
     'strong',
     'b',
-    '.aistudio-md-repaired'
+    '.aistudio-md-repaired',
+    '.aistudio-array-repaired'
   ].join(',');
 
   const INLINE_REPAIR_CONTAINER_SELECTOR = [
@@ -154,6 +156,14 @@
     'h6',
     'th',
     'td'
+  ].join(',');
+
+  const RAW_ARRAY_CONTAINER_SELECTOR = [
+    'p',
+    'li',
+    'blockquote',
+    'figcaption',
+    'ms-cmark-node'
   ].join(',');
 
   const INLINE_REPAIR_BOUNDARY_SELECTOR = [
@@ -225,7 +235,8 @@
     'aistudio-mobile-safe-152-style',
     'aistudio-mobile-safe-160-style',
     'aistudio-mobile-safe-161-style',
-    'aistudio-mobile-safe-162-style'
+    'aistudio-mobile-safe-162-style',
+    'aistudio-mobile-safe-163-style'
   ];
 
   const CSS_TEXT = `
@@ -312,6 +323,50 @@ ${SCOPE} :where(strong, b, .aistudio-md-repaired) {
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
+}
+
+/*
+ * AI Studio가 raw \\begin{array} 블록의 명령/행 구분 백슬래시를
+ * 일부 잃어버린 경우에만 쓰는 보수적인 HTML fallback이다.
+ */
+${SCOPE} .aistudio-array-repaired {
+  display: inline-table !important;
+  max-width: 100% !important;
+  margin: 0.65em auto !important;
+  border-collapse: collapse !important;
+  font-family: var(--as-font) !important;
+  font-size: 1em !important;
+  line-height: 1.45 !important;
+  vertical-align: middle !important;
+}
+
+${SCOPE} .aistudio-array-row {
+  display: table-row !important;
+}
+
+${SCOPE} .aistudio-array-cell {
+  display: table-cell !important;
+  padding: 0.12em 0.45em !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+  vertical-align: baseline !important;
+}
+
+${SCOPE} .aistudio-array-align-l {
+  text-align: left !important;
+}
+
+${SCOPE} .aistudio-array-align-c {
+  text-align: center !important;
+}
+
+${SCOPE} .aistudio-array-align-r {
+  text-align: right !important;
+}
+
+${SCOPE} .aistudio-array-divider {
+  border-left: 1px solid currentColor !important;
 }
 
 ${SCOPE} .aistudio-md-bold-italic {
@@ -624,8 +679,21 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function hasRawArrayText(text) {
+    return Boolean(
+      text &&
+      text.length <= MAX_RAW_ARRAY_LENGTH &&
+      /(?:^|\s)(?:\\)?begin\s*\{array\}\s*\{[lcr|\s]+\}/i.test(text) &&
+      /(?:\\)?end\s*\{array\}(?:\s|$)/i.test(text)
+    );
+  }
+
   function hasRepairableText(text) {
-    return hasPair(text) || hasLiteralTableBreak(text);
+    return (
+      hasPair(text) ||
+      hasLiteralTableBreak(text) ||
+      hasRawArrayText(text)
+    );
   }
 
   function isEscaped(text, index) {
@@ -676,6 +744,295 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         hasUnescapedDollarPair(text)
       )
     );
+  }
+
+  function parseArrayColumns(specification) {
+    const alignments = [];
+    const dividers = [];
+    let dividerPending = false;
+
+    for (const character of specification || '') {
+      if (character === '|') {
+        dividerPending = true;
+        continue;
+      }
+
+      if (!/[lcr]/i.test(character)) {
+        if (!/\s/.test(character)) {
+          return null;
+        }
+        continue;
+      }
+
+      if (dividerPending) {
+        dividers.push(alignments.length);
+        dividerPending = false;
+      }
+
+      alignments.push(character.toLowerCase());
+    }
+
+    if (!alignments.length || alignments.length > 12) {
+      return null;
+    }
+
+    return { alignments, dividers };
+  }
+
+  function splitRawArrayRows(body) {
+    const rows = [];
+    let current = '';
+    let depth = 0;
+
+    const finishRow = () => {
+      if (current.trim()) {
+        rows.push(current.trim());
+      }
+      current = '';
+    };
+
+    for (let index = 0; index < body.length; index += 1) {
+      const character = body[index];
+
+      if (character === '{' && !isEscaped(body, index)) {
+        depth += 1;
+      } else if (
+        character === '}' &&
+        !isEscaped(body, index) &&
+        depth > 0
+      ) {
+        depth -= 1;
+      }
+
+      if (character === '\\' && depth === 0) {
+        if (body[index + 1] === '\\') {
+          finishRow();
+          index += 1;
+          continue;
+        }
+
+        let cursor = index + 1;
+
+        while (body[cursor] === ' ' || body[cursor] === '\t') {
+          cursor += 1;
+        }
+
+        if (body[cursor] === '\r') {
+          cursor += 1;
+        }
+
+        if (body[cursor] === '\n' || cursor >= body.length) {
+          finishRow();
+          index = cursor;
+          continue;
+        }
+      }
+
+      current += character;
+    }
+
+    finishRow();
+    return rows;
+  }
+
+  function splitRawArrayCells(row) {
+    const cells = [];
+    let current = '';
+    let depth = 0;
+
+    for (let index = 0; index < row.length; index += 1) {
+      const character = row[index];
+
+      if (character === '{' && !isEscaped(row, index)) {
+        depth += 1;
+      } else if (
+        character === '}' &&
+        !isEscaped(row, index) &&
+        depth > 0
+      ) {
+        depth -= 1;
+      }
+
+      if (
+        character === '&' &&
+        depth === 0 &&
+        !isEscaped(row, index)
+      ) {
+        cells.push(current.trim());
+        current = '';
+        continue;
+      }
+
+      current += character;
+    }
+
+    cells.push(current.trim());
+    return cells;
+  }
+
+  function plainArrayCellText(source) {
+    let text = (source || '').trim();
+    let previous;
+
+    do {
+      previous = text;
+      text = text.replace(/\\text\s*\{([^{}]*)\}/gi, '$1');
+    } while (text !== previous);
+
+    return text
+      .replace(/\\(?:qquad|quad)\b/g, ' ')
+      .replace(/\\[,;:!]/g, ' ')
+      .replace(/\\([&%_#$\\{}])/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function parseRawArray(text) {
+    if (!hasRawArrayText(text)) {
+      return null;
+    }
+
+    const source = text.trim();
+    const opening = source.match(
+      /^(?:\\)?begin\s*\{array\}\s*\{([lcr|\s]+)\}/i
+    );
+
+    if (!opening) {
+      return null;
+    }
+
+    const remainder = source.slice(opening[0].length);
+    const closing = remainder.match(
+      /(?:\\)?end\s*\{array\}\s*$/i
+    );
+
+    if (!closing || typeof closing.index !== 'number') {
+      return null;
+    }
+
+    const columns = parseArrayColumns(opening[1]);
+    const body = remainder.slice(0, closing.index).trim();
+
+    if (!columns || !body || !body.includes('&')) {
+      return null;
+    }
+
+    const rows = splitRawArrayRows(body).map(splitRawArrayCells);
+
+    if (
+      !rows.length ||
+      rows.some((row) => row.length > columns.alignments.length)
+    ) {
+      return null;
+    }
+
+    for (const row of rows) {
+      while (row.length < columns.alignments.length) {
+        row.push('');
+      }
+    }
+
+    return {
+      alignments: columns.alignments,
+      dividers: columns.dividers,
+      rows: rows.map((row) => row.map(plainArrayCellText))
+    };
+  }
+
+  function createRepairedArray(parsed) {
+    const array = document.createElement('span');
+    array.className = 'aistudio-array-repaired';
+    array.setAttribute('data-aistudio-array-repaired', '1');
+    array.setAttribute('role', 'table');
+
+    for (const rowValues of parsed.rows) {
+      const row = document.createElement('span');
+      row.className = 'aistudio-array-row';
+      row.setAttribute('role', 'row');
+
+      rowValues.forEach((value, index) => {
+        const cell = document.createElement('span');
+        const alignment = parsed.alignments[index] || 'l';
+        const divider = parsed.dividers.includes(index)
+          ? ' aistudio-array-divider'
+          : '';
+
+        cell.className =
+          `aistudio-array-cell aistudio-array-align-${alignment}${divider}`;
+        cell.setAttribute('role', 'cell');
+        cell.textContent = value;
+        row.appendChild(cell);
+      });
+
+      array.appendChild(row);
+    }
+
+    return array;
+  }
+
+  function repairRawArrayContainer(container) {
+    if (
+      !container ||
+      !container.isConnected ||
+      closest(container, USER_SELECTOR) ||
+      closest(container, SKIP_SELECTOR) ||
+      (
+        container.querySelector &&
+        container.querySelector(
+          'a, code, pre, table, svg, math, .katex, ms-katex, ' +
+          '.MathJax, mjx-container, .aistudio-array-repaired'
+        )
+      )
+    ) {
+      return 0;
+    }
+
+    const sources = [
+      container.textContent || '',
+      typeof container.innerText === 'string'
+        ? container.innerText
+        : ''
+    ];
+    let parsed = null;
+
+    for (const source of sources) {
+      parsed = parseRawArray(source);
+      if (parsed) {
+        break;
+      }
+    }
+
+    if (!parsed || typeof container.replaceChildren !== 'function') {
+      return 0;
+    }
+
+    container.replaceChildren(createRepairedArray(parsed));
+    return 1;
+  }
+
+  function repairRawArrays(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const containers = Array.from(
+      root.querySelectorAll(RAW_ARRAY_CONTAINER_SELECTOR)
+    ).reverse();
+
+    if (
+      root.matches &&
+      root.matches(RAW_ARRAY_CONTAINER_SELECTOR)
+    ) {
+      containers.push(root);
+    }
+
+    let repaired = 0;
+
+    for (const container of containers) {
+      repaired += repairRawArrayContainer(container);
+    }
+
+    return repaired;
   }
 
   function isWordChar(character) {
@@ -1285,7 +1642,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    let repaired = repairSplitTableBreaks(root);
+    let repaired = repairRawArrays(root);
+    repaired += repairSplitTableBreaks(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
       root,
@@ -2037,7 +2395,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'css-plus-safe-raw-bold-repair-session-keepalive'
+      'css-plus-safe-array-markdown-repair-session-keepalive'
     );
 
     window.addEventListener(
