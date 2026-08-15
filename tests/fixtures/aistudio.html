@@ -115,6 +115,49 @@
     </div>
   </ms-chat-turn>
 
+  <!--
+    Current AI Studio builds expose lower-case turn roles, and some response
+    renderers briefly have no explicit role while a streamed turn is settled.
+    These reproduce the mobile screenshot where every **...** and <u> marker
+    survived together because the response root was never discovered.
+  -->
+  <ms-chat-turn id="lowercase-model-turn" data-turn-role="model">
+    <section class="response-content">
+      <ms-cmark-node id="reported-current-model-response">
+        <h2>K-IFRS 공식 기준서 원문 대조</h2>
+        <ol>
+          <li>
+            <p id="current-bold-probability">문단 25: "개별 취득하는 무형자산은 ... **발생가능성 인식기준은 항상 충족**하는 것으로 본다."</p>
+          </li>
+          <li>
+            <p id="current-underline-measurement">문단 26: "개별 취득하는 무형자산의 원가는 &lt;u&gt;통상 신뢰성 있게 측정&lt;/u&gt;할 수 있다."</p>
+          </li>
+          <li>
+            <p id="current-bold-ma-probability">문단 33: "사업결합으로 취득하는 무형자산의 경우, **발생가능성 인식기준은 항상 충족**되는 것으로 본다."</p>
+          </li>
+          <li>
+            <p id="current-bold-ma-measurement">문단 35: "무형자산이 식별가능하다면, **신뢰성 있는 측정 인식기준은 사업결합으로 취득하는 무형자산의 경우 항상 충족**되는 것으로 본다."</p>
+          </li>
+        </ol>
+      </ms-cmark-node>
+    </section>
+  </ms-chat-turn>
+
+  <ms-chat-turn id="roleless-model-turn">
+    <section class="response-content">
+      <ms-text-chunk id="roleless-model-response">
+        <p id="roleless-model-bold">역할 속성이 늦게 붙어도 **모델 출력은 복구**합니다.</p>
+      </ms-text-chunk>
+    </section>
+  </ms-chat-turn>
+
+  <ms-chat-turn id="lowercase-user-turn" data-turn-role="user">
+    <ms-cmark-node id="lowercase-user-response">
+      <p id="lowercase-user-bold">사용자가 쓴 **원문 굵게 표기**는 유지합니다.</p>
+      <p id="lowercase-user-underline">사용자가 쓴 &lt;u&gt;원문 밑줄 표기&lt;/u&gt;도 유지합니다.</p>
+    </ms-cmark-node>
+  </ms-chat-turn>
+
   <ms-chat-turn>
     <div class="chat-turn-container user">
       <p id="user-raw-math">begin{aligned}x&amp;=\mathbf{y}\end{aligned}</p>

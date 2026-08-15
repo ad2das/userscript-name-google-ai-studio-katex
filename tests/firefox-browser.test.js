@@ -112,6 +112,18 @@ async (page) => {
     const proseCodeStrong = proseCodeBlock.querySelector(
       'strong.aistudio-md-repaired'
     );
+    const currentModelResponse = document.getElementById(
+      'reported-current-model-response'
+    );
+    const currentModelStrong = Array.from(currentModelResponse.querySelectorAll(
+      'strong.aistudio-md-repaired'
+    ));
+    const currentModelUnderline = currentModelResponse.querySelector(
+      'u.aistudio-underline-repaired'
+    );
+    const rolelessModelResponse = document.getElementById(
+      'roleless-model-response'
+    );
     const rawBoldLeafSelector = [
       'p',
       'li',
@@ -375,6 +387,31 @@ async (page) => {
         document.getElementById('user-prose-code-bold').textContent ===
           '사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.' &&
         document.querySelectorAll('#user-prose-code-bold strong').length === 0,
+      currentModelStrongTexts: currentModelStrong.map(
+        (element) => element.textContent
+      ),
+      currentModelStrongWeights: currentModelStrong.map(fontWeightOf),
+      currentModelUnderlineText: currentModelUnderline?.textContent,
+      currentModelUnderlineDecoration: currentModelUnderline
+        ? getComputedStyle(currentModelUnderline).textDecorationLine
+        : '',
+      currentModelMarkersRemoved:
+        !currentModelResponse.textContent.includes('**') &&
+        !currentModelResponse.textContent.includes('<u>') &&
+        !currentModelResponse.textContent.includes('</u>'),
+      rolelessModelRepaired:
+        rolelessModelResponse.querySelector(
+          'strong.aistudio-md-repaired'
+        )?.textContent === '모델 출력은 복구' &&
+        !rolelessModelResponse.textContent.includes('**'),
+      lowercaseUserPreserved:
+        document.getElementById('lowercase-user-bold').textContent ===
+          '사용자가 쓴 **원문 굵게 표기**는 유지합니다.' &&
+        document.getElementById('lowercase-user-underline').textContent ===
+          '사용자가 쓴 <u>원문 밑줄 표기</u>도 유지합니다.' &&
+        document.querySelectorAll(
+          '#lowercase-user-response strong, #lowercase-user-response u'
+        ).length === 0,
       rawBoldRemainderIds,
       fencedMathPreserved:
         document.querySelector(
@@ -386,7 +423,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-184'
+        'data-aistudio-mobile-safe-185'
       )
     };
   });
@@ -478,6 +515,17 @@ async (page) => {
     !rendering.markdownSyntaxPreserved ||
     !rendering.languageCodePreserved ||
     !rendering.userProseCodePreserved ||
+    JSON.stringify(rendering.currentModelStrongTexts) !== JSON.stringify([
+      '발생가능성 인식기준은 항상 충족',
+      '발생가능성 인식기준은 항상 충족',
+      '신뢰성 있는 측정 인식기준은 사업결합으로 취득하는 무형자산의 경우 항상 충족'
+    ]) ||
+    rendering.currentModelStrongWeights.some((weight) => weight < 600) ||
+    rendering.currentModelUnderlineText !== '통상 신뢰성 있게 측정' ||
+    !rendering.currentModelUnderlineDecoration.includes('underline') ||
+    !rendering.currentModelMarkersRemoved ||
+    !rendering.rolelessModelRepaired ||
+    !rendering.lowercaseUserPreserved ||
     JSON.stringify(rendering.rawBoldRemainderIds) !== JSON.stringify([
       'actual-code-bold',
       'code-boundary-bold',
@@ -488,9 +536,129 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.4'
+    rendering.version !== '1.8.5'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
+  }
+
+  await page.evaluate(() => {
+    const modelTurn = document.createElement('ms-chat-turn');
+    const modelRenderer = document.createElement('ms-cmark-node');
+    const modelParagraph = document.createElement('p');
+    const progress = document.createElement('div');
+
+    modelTurn.id = 'dynamic-roleless-model-turn';
+    modelRenderer.id = 'dynamic-roleless-model-response';
+    modelParagraph.textContent =
+      '새 응답의 **동적 모델 출력**과 <u>동적 밑줄</u>입니다.';
+    progress.id = 'dynamic-model-progress';
+    progress.setAttribute('role', 'progressbar');
+    progress.style.cssText = 'display:block;width:2px;height:2px';
+    modelRenderer.append(modelParagraph, progress);
+    modelTurn.appendChild(modelRenderer);
+    document.body.appendChild(modelTurn);
+
+    const userTurn = document.createElement('ms-chat-turn');
+    const userRenderer = document.createElement('ms-cmark-node');
+    const userParagraph = document.createElement('p');
+
+    userTurn.id = 'dynamic-lowercase-user-turn';
+    userTurn.setAttribute('data-turn-role', 'user');
+    userRenderer.id = 'dynamic-lowercase-user-response';
+    userParagraph.textContent =
+      '새 사용자 **원문 굵게**와 <u>원문 밑줄</u>입니다.';
+    userRenderer.appendChild(userParagraph);
+    userTurn.appendChild(userRenderer);
+    document.body.appendChild(userTurn);
+  });
+
+  await page.waitForTimeout(2300);
+
+  const duringStreaming = await page.evaluate(() => ({
+    modelText: document.getElementById(
+      'dynamic-roleless-model-response'
+    ).textContent,
+    modelRepairs: document.querySelectorAll(
+      '#dynamic-roleless-model-response strong, ' +
+      '#dynamic-roleless-model-response u'
+    ).length,
+    userText: document.getElementById(
+      'dynamic-lowercase-user-response'
+    ).textContent,
+    userRepairs: document.querySelectorAll(
+      '#dynamic-lowercase-user-response strong, ' +
+      '#dynamic-lowercase-user-response u'
+    ).length
+  }));
+
+  if (
+    !duringStreaming.modelText.includes('**동적 모델 출력**') ||
+    !duringStreaming.modelText.includes('<u>동적 밑줄</u>') ||
+    duringStreaming.modelRepairs !== 0 ||
+    !duringStreaming.userText.includes('**원문 굵게**') ||
+    !duringStreaming.userText.includes('<u>원문 밑줄</u>') ||
+    duringStreaming.userRepairs !== 0
+  ) {
+    throw new Error(
+      `Firefox streaming guard regression: ${JSON.stringify(duringStreaming)}`
+    );
+  }
+
+  await page.evaluate(() => {
+    document.getElementById('dynamic-model-progress').remove();
+  });
+  await page.waitForTimeout(2700);
+
+  const dynamicRepair = await page.evaluate(() => {
+    const model = document.getElementById('dynamic-roleless-model-response');
+    const user = document.getElementById('dynamic-lowercase-user-response');
+    const strong = model.querySelector('strong.aistudio-md-repaired');
+    const underline = model.querySelector('u.aistudio-underline-repaired');
+
+    return {
+      modelHtml: model.innerHTML,
+      modelText: model.textContent,
+      strongText: strong?.textContent,
+      strongWeight: strong
+        ? Number(getComputedStyle(strong).fontWeight)
+        : 0,
+      underlineText: underline?.textContent,
+      underlineDecoration: underline
+        ? getComputedStyle(underline).textDecorationLine
+        : '',
+      userText: user.textContent,
+      userRepairs: user.querySelectorAll('strong, u').length
+    };
+  });
+
+  if (
+    dynamicRepair.modelText.includes('**') ||
+    dynamicRepair.modelText.includes('<u>') ||
+    dynamicRepair.modelText.includes('</u>') ||
+    dynamicRepair.strongText !== '동적 모델 출력' ||
+    dynamicRepair.strongWeight < 600 ||
+    dynamicRepair.underlineText !== '동적 밑줄' ||
+    !dynamicRepair.underlineDecoration.includes('underline') ||
+    !dynamicRepair.userText.includes('**원문 굵게**') ||
+    !dynamicRepair.userText.includes('<u>원문 밑줄</u>') ||
+    dynamicRepair.userRepairs !== 0
+  ) {
+    throw new Error(
+      `Firefox dynamic-root regression: ${JSON.stringify(dynamicRepair)}`
+    );
+  }
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForTimeout(1200);
+
+  const dynamicHtmlAfterRescan = await page.evaluate(() => (
+    document.getElementById('dynamic-roleless-model-response').innerHTML
+  ));
+
+  if (dynamicHtmlAfterRescan !== dynamicRepair.modelHtml) {
+    throw new Error('Firefox dynamic-root idempotency regression');
   }
 
   await page.evaluate(() => {
@@ -513,5 +681,5 @@ async (page) => {
     throw new Error(`Firefox preflight regression: ${JSON.stringify(preflight)}`);
   }
 
-  return { rendering, preflight };
+  return { rendering, duringStreaming, dynamicRepair, preflight };
 }
