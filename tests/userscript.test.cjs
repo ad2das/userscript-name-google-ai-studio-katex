@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.7\.1/);
+assert.match(source, /\/\/ @version\s+1\.8\.0/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -38,6 +38,7 @@ const instrumented = source.replace(
     buttonLabel,
     canSubmit,
     findMatches,
+    findEmbeddedRawMathBlocks,
     generating,
     hasLiteralTableBreak,
     installSessionKeepalive,
@@ -609,6 +610,81 @@ assert.equal(
     String.raw`Explanation before begin{aligned}a&=b\end{aligned}`
   ),
   null
+);
+
+const embeddedAcquisitionResponse = String.raw`최종 합체! (3개 더하기)
+
+\begin{aligned}
+\text{건물 취득원가} &= \mathbf{\text{① 쌩 공사비}}(2,600,000) + \mathbf{\text{② 특정이자}}(62,000) + \mathbf{\text{③ 일반이자}}(52,080) \
+&= \mathbf{2,714,080\text{원}}
+\end{aligned}`;
+const embeddedAcquisitionBlocks = api.findEmbeddedRawMathBlocks(
+  embeddedAcquisitionResponse
+);
+assert.equal(embeddedAcquisitionBlocks.length, 1);
+assert.equal(
+  embeddedAcquisitionBlocks[0].start,
+  embeddedAcquisitionResponse.indexOf(String.raw`\begin{aligned}`)
+);
+assert.equal(embeddedAcquisitionBlocks[0].candidate.environment, 'aligned');
+assert.match(
+  embeddedAcquisitionBlocks[0].candidate.tex,
+  /\\text\{\\bf ① 쌩 공사비\}/
+);
+assert.match(
+  embeddedAcquisitionBlocks[0].candidate.tex,
+  /\\text\{\\bf ② 특정이자\}/
+);
+assert.match(
+  embeddedAcquisitionBlocks[0].candidate.tex,
+  /\\text\{\\bf ③ 일반이자\}/
+);
+const embeddedAcquisitionHtml = katex.renderToString(
+  embeddedAcquisitionBlocks[0].candidate.tex,
+  {
+    displayMode: true,
+    output: 'htmlAndMathml',
+    throwOnError: true,
+    strict: 'ignore',
+    trust: false
+  }
+);
+assert.match(embeddedAcquisitionHtml, /class="katex"/);
+assert.match(embeddedAcquisitionHtml, /① 쌩 공사비/);
+
+const multipleEmbeddedBlocks = api.findEmbeddedRawMathBlocks(String.raw`제목
+$$\mathbf{첫째}$$
+설명
+\begin{aligned}
+x &= \mathbf{y}
+\end{aligned}`);
+assert.equal(multipleEmbeddedBlocks.length, 2);
+assert.deepEqual(
+  Array.from(multipleEmbeddedBlocks, (block) => block.candidate.kind),
+  ['delimited', 'environment']
+);
+
+const fencedMathExample = [
+  '코드 예시:',
+  '```latex',
+  String.raw`\begin{aligned}`,
+  String.raw`x &= \mathbf{y}`,
+  String.raw`\end{aligned}`,
+  '```'
+].join('\n');
+assert.equal(api.findEmbeddedRawMathBlocks(fencedMathExample).length, 0);
+assert.equal(
+  api.findEmbeddedRawMathBlocks(
+    String.raw`Explanation before \begin{aligned}x&=y\end{aligned}`
+  ).length,
+  0
+);
+assert.equal(
+  api.findEmbeddedRawMathBlocks(
+    String.raw`제목
+\begin{array}{cc}a&b\end{matrix}`
+  ).length,
+  0
 );
 assert.equal(
   api.hasRawMathText(

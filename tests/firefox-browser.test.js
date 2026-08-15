@@ -81,7 +81,8 @@ async (page) => {
       'raw-markdown-bold',
       'raw-standalone-bold',
       'mixed-partial-math',
-      'modern-raw-math'
+      'modern-raw-math',
+      'embedded-acquisition-math'
     ];
     const rawMathNodes = rawMathIds.map((id) => document.getElementById(id));
     const sourceOf = (id) => document
@@ -139,6 +140,23 @@ async (page) => {
       standaloneSource: sourceOf('raw-standalone-bold'),
       mixedSource: sourceOf('mixed-partial-math'),
       modernSource: sourceOf('modern-raw-math'),
+      embeddedSource: sourceOf('embedded-acquisition-math'),
+      embeddedHeadingPreserved: document
+        .getElementById('embedded-acquisition-math')
+        .textContent.includes('최종 합체! (3개 더하기)'),
+      embeddedRepairCount: document
+        .getElementById('embedded-acquisition-math')
+        .getAttribute('data-aistudio-embedded-raw-math-repaired'),
+      embeddedBoldWeight: Number(getComputedStyle(
+        Array.from(document.querySelectorAll(
+          '#embedded-acquisition-math .hangul_fallback'
+        )).find((element) => element.textContent.includes('쌩'))
+      ).fontWeight),
+      embeddedCircledBoldWeight: Number(getComputedStyle(
+        Array.from(document.querySelectorAll(
+          '#embedded-acquisition-math .aistudio-katex-bold-glyph-fallback'
+        )).find((element) => element.textContent.includes('①'))
+      ).fontWeight),
       alignedBoldCount: document.querySelectorAll(
         '#raw-aligned-equation .katex-html .mathbf'
       ).length,
@@ -201,8 +219,15 @@ async (page) => {
       preservedLinkBoundaryBold:
         linkBoundaryBold.querySelectorAll('strong').length === 0 &&
         linkBoundaryBold.textContent.includes('**'),
+      fencedMathPreserved:
+        document.querySelector(
+          '#fenced-raw-math .aistudio-raw-math-repaired'
+        ) === null &&
+        document.getElementById('fenced-raw-math').textContent.includes(
+          String.raw`\begin{aligned}`
+        ),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-171'
+        'data-aistudio-mobile-safe-180'
       )
     };
   });
@@ -220,9 +245,9 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
-    rendering.rawMathCount !== 9 ||
-    rendering.rawMathKatexCount !== 9 ||
-    rendering.rawMathMathmlCount !== 9 ||
+    rendering.rawMathCount !== 10 ||
+    rendering.rawMathKatexCount !== 10 ||
+    rendering.rawMathMathmlCount !== 10 ||
     rendering.rawMathErrorCount !== 0 ||
     !rendering.arraySource?.startsWith('\\begin{array}{ll|ll}') ||
     !rendering.arraySource?.includes('\\\\') ||
@@ -234,6 +259,13 @@ async (page) => {
     !rendering.standaloneSource?.includes('\\boldsymbol{x}') ||
     !rendering.mixedSource?.includes('\\text{\\bf 원}') ||
     !rendering.modernSource?.includes('\\text{\\bf 원}') ||
+    !rendering.embeddedSource?.includes('\\text{\\bf ① 쌩 공사비}') ||
+    !rendering.embeddedSource?.includes('\\text{\\bf ② 특정이자}') ||
+    !rendering.embeddedSource?.includes('\\text{\\bf ③ 일반이자}') ||
+    !rendering.embeddedHeadingPreserved ||
+    rendering.embeddedRepairCount !== '1' ||
+    rendering.embeddedBoldWeight < 600 ||
+    rendering.embeddedCircledBoldWeight < 600 ||
     rendering.alignedBoldCount < 3 ||
     rendering.matrixBoldCount < 1 ||
     !rendering.markdownMathBold ||
@@ -257,7 +289,8 @@ async (page) => {
     !rendering.preservedLinkBoundary ||
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
-    rendering.version !== '1.7.1'
+    !rendering.fencedMathPreserved ||
+    rendering.version !== '1.8.0'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

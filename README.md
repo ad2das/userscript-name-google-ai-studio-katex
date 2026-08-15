@@ -24,6 +24,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   `\text{...}`
 - Bold inheritance through nested text, including
   `\mathbf{10,000\text{원}}`, in both raw and already-rendered KaTeX
+- Complete raw TeX blocks embedded after headings or explanatory paragraphs,
+  while preserving the surrounding response text and fenced code examples
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses
 - Mobile readable Google/Samsung-like font stack
@@ -41,7 +43,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.7.1 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.8.0 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
@@ -49,12 +51,14 @@ does not retry a failed generation. It refreshes an exposed Google auth token wh
 needed, warms the authenticated AI Studio document session before generation, and
 blocks all answer-DOM repair while AI Studio is streaming.
 
-Raw math repair is fail-closed: it only replaces a completed model-output container
-after the entire source matches an allowed math form and KaTeX renders it without an
-error. Existing rendered math is left untouched except when its TeX source contains
-the known nested-bold inheritance defect. Code blocks, links, editable/user content,
-and malformed or unsupported environments are always preserved. KaTeX rendering uses
-`trust: false` with bounded input size, expansion count, and rendered size.
+Raw math repair is fail-closed: it replaces either an entire completed model-output
+container or complete line-bounded TeX blocks inside plain response text, and only
+after KaTeX renders each candidate without an error. Surrounding prose and line breaks
+are preserved. Existing rendered math is left untouched except when its TeX source
+contains the known nested-bold inheritance defect. Fenced/code blocks, links,
+editable/user content, and malformed or unsupported environments are always preserved.
+KaTeX rendering uses `trust: false` with bounded input size, expansion count, and
+rendered size.
 
 ## Tests
 
