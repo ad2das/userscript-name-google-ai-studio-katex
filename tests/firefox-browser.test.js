@@ -69,6 +69,11 @@ async (page) => {
       document.getElementById('photo-four-inline-math'),
       { ...options, displayMode: false }
     );
+    window.katex.render(
+      String.raw`\frac{9}{12}`,
+      document.getElementById('unscoped-katex-annotation'),
+      { ...options, displayMode: false }
+    );
     window.__unexpectedBarrierMathSources = [];
     const originalKatexRender = window.katex.render.bind(window.katex);
     window.katex.render = (source, element, renderOptions) => {
@@ -185,6 +190,24 @@ async (page) => {
       selectorlessModelResponse.querySelectorAll(
         'u.aistudio-underline-repaired'
       )
+    );
+    const unscopedBold = document.getElementById(
+      'unscoped-bold-with-new-math-host'
+    );
+    const unscopedStrong = unscopedBold.querySelector(
+      'strong.aistudio-md-repaired'
+    );
+    const unscopedEquation = document.getElementById(
+      'unscoped-inline-equation'
+    );
+    const unscopedKatex = document.getElementById(
+      'unscoped-bold-with-katex-annotation'
+    );
+    const unscopedKatexStrong = unscopedKatex.querySelector(
+      'strong.aistudio-md-repaired'
+    );
+    const unscopedBreak = document.getElementById(
+      'unscoped-literal-break'
     );
     const selectorlessReportedNodes = [
       'photo-one-underline-usual',
@@ -567,6 +590,41 @@ async (page) => {
         document.querySelectorAll(
           '#selectorless-navigation strong, #selectorless-navigation u'
         ).length === 0,
+      unscopedBoldText: visibleTextOf(unscopedStrong),
+      unscopedBoldWeight: fontWeightOf(unscopedStrong),
+      unscopedMarkersRemoved: !unscopedBold.textContent.includes('**'),
+      unscopedEquationPreserved:
+        unscopedStrong?.contains(unscopedEquation) === true,
+      unscopedEquationMarked: unscopedEquation.classList.contains(
+        'aistudio-md-embedded-math'
+      ),
+      unscopedEquationWeight: fontWeightOf(unscopedEquation),
+      unscopedEquationStroke:
+        getComputedStyle(unscopedEquation).textShadow,
+      unscopedKatexText: visibleTextOf(unscopedKatexStrong),
+      unscopedKatexMarkersRemoved:
+        !unscopedKatex.textContent.includes('**'),
+      unscopedKatexPreserved:
+        Boolean(unscopedKatexStrong?.querySelector('.katex')) &&
+        sourceOf('unscoped-bold-with-katex-annotation') ===
+          String.raw`\frac{9}{12}`,
+      unscopedRootMarked:
+        unscopedBold.querySelector(
+          '[data-aistudio-repair-root="1"]'
+        ) !== null,
+      unscopedBreakCount: unscopedBreak.querySelectorAll(
+        'br.aistudio-table-br-repaired'
+      ).length,
+      unscopedBreakMarkersRemoved:
+        !unscopedBreak.textContent.includes('<br>'),
+      unscopedBreakRootMarked:
+        unscopedBreak.getAttribute('data-aistudio-repair-root') === '1',
+      unscopedUserPreserved:
+        document.getElementById('unscoped-user-literal').textContent ===
+          '사용자의 **보존할 원문**입니다.' &&
+        document.querySelectorAll(
+          '#unscoped-user-literal strong'
+        ).length === 0,
       diagnosticFallbackRoots: Number(
         document.documentElement.getAttribute(
           'data-aistudio-mobile-fix-fallback-roots'
@@ -593,7 +651,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-188'
+        'data-aistudio-mobile-safe-189'
       )
     };
   });
@@ -738,7 +796,24 @@ async (page) => {
     !rendering.selectorlessLiteralCodePreserved ||
     !rendering.selectorlessUserPreserved ||
     !rendering.selectorlessNavigationPreserved ||
-    rendering.diagnosticFallbackRoots < 5 ||
+    rendering.unscopedBoldText !==
+      '공사기간과 겹치는 기간(4/1~12/31 = 9개월)만 직접 골라내어(×9/12)' ||
+    rendering.unscopedBoldWeight < 600 ||
+    !rendering.unscopedMarkersRemoved ||
+    !rendering.unscopedEquationPreserved ||
+    !rendering.unscopedEquationMarked ||
+    rendering.unscopedEquationWeight < 600 ||
+    rendering.unscopedEquationStroke === 'none' ||
+    !rendering.unscopedKatexText.startsWith('TeX 주석 포함 수식(') ||
+    !rendering.unscopedKatexText.endsWith(')도 굵게') ||
+    !rendering.unscopedKatexMarkersRemoved ||
+    !rendering.unscopedKatexPreserved ||
+    !rendering.unscopedRootMarked ||
+    rendering.unscopedBreakCount !== 1 ||
+    !rendering.unscopedBreakMarkersRemoved ||
+    !rendering.unscopedBreakRootMarked ||
+    !rendering.unscopedUserPreserved ||
+    rendering.diagnosticFallbackRoots !== 0 ||
     rendering.diagnosticTotalRepairs < 5 ||
     !rendering.permanentProgressVisible ||
     JSON.stringify(rendering.rawBoldRemainderIds) !== JSON.stringify([
@@ -751,7 +826,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.8.8'
+    rendering.version !== '1.8.9'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
