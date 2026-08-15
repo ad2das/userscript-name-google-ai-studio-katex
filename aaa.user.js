@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.5
+// @version      1.8.6
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.5';
-  const STYLE_ID = 'aistudio-mobile-safe-185-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-185';
+  const VERSION = '1.8.6';
+  const STYLE_ID = 'aistudio-mobile-safe-186-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-186';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -49,6 +49,7 @@
 
   const SCAN_MS = 10000;
   const MUTATION_SCAN_DELAY_MS = 450;
+  const GENERATION_RECHECK_MS = 750;
   const OLD_TURN_WAIT_MS = 500;
   const LAST_TURN_WAIT_MS = 1500;
   const RETRY_BASE_MS = 2000;
@@ -56,6 +57,9 @@
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
   const MAX_RAW_MATH_LENGTH = 12000;
+  const MAX_FALLBACK_ROOT_LENGTH = 16000;
+  const MAX_FALLBACK_ASCENT = 12;
+  const MAX_RECENT_REPAIR_ROOTS = 64;
   const MAX_KATEX_EXPANSIONS = 1000;
   const MAX_KATEX_SIZE = 20;
 
@@ -157,6 +161,15 @@
     '[data-message-author-role="human" i]'
   ];
 
+  const FALLBACK_SURFACE_SELECTORS = [
+    'app-root',
+    'main',
+    '[role="main"]',
+    'ms-chat-turn'
+  ];
+  const FALLBACK_SURFACE_SELECTOR = FALLBACK_SURFACE_SELECTORS.join(',');
+  const REPAIRED_ROOT_SELECTOR = '[data-aistudio-repair-root="1"]';
+
   /*
    * Response renderer elements are the stable fallback when the surrounding
    * turn has not received a role/class yet. Restrict this fallback to chat
@@ -168,6 +181,7 @@
   ].join(',');
 
   const STYLE_ROOT_SELECTOR = [
+    REPAIRED_ROOT_SELECTOR,
     MODEL_RENDERER_SELECTOR,
     '.chat-turn-container.model ms-cmark-node',
     '.chat-turn-container.model ms-text-chunk',
@@ -213,6 +227,12 @@
   ]
     .join(',');
 
+  const FALLBACK_ACTIVITY_SELECTOR = FALLBACK_SURFACE_SELECTORS
+    .flatMap((surfaceSelector) => MODEL_ACTIVITY_INDICATORS.map(
+      (activitySelector) => `${surfaceSelector} ${activitySelector}`
+    ))
+    .join(',');
+
   const REPAIR_ROOT_SELECTOR = [
     STYLE_ROOT_SELECTOR,
     MODEL_TURN_SELECTOR
@@ -220,8 +240,14 @@
 
   const USER_SELECTOR = [
     ...USER_ROLE_SELECTORS,
+    '[data-role="user" i]',
+    '[data-author-role="user" i]',
+    '[data-message-role="user" i]',
     '.user-prompt-container',
     '.chat-turn-container.user',
+    '.user-message',
+    '.human-message',
+    'ms-user-message',
     'ms-prompt-input',
     'ms-autosize-textarea',
     'ms-chat-input'
@@ -260,6 +286,22 @@
     '.aistudio-array-repaired',
     '.aistudio-aligned-repaired',
     '.aistudio-raw-math-repaired'
+  ].join(',');
+
+  const FALLBACK_EXCLUDE_SELECTOR = [
+    'nav',
+    'header',
+    'footer',
+    'aside',
+    '[role="navigation"]',
+    '[role="menu"]',
+    '[role="menubar"]',
+    '[role="toolbar"]',
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[aria-modal="true"]',
+    '.cdk-overlay-container',
+    `#${RECOVERY_STATUS_ID}`
   ].join(',');
 
   const INLINE_REPAIR_CONTAINER_SELECTOR = [
@@ -408,7 +450,8 @@
     'aistudio-mobile-safe-181-style',
     'aistudio-mobile-safe-182-style',
     'aistudio-mobile-safe-183-style',
-    'aistudio-mobile-safe-184-style'
+    'aistudio-mobile-safe-184-style',
+    'aistudio-mobile-safe-185-style'
   ];
 
   const CSS_TEXT = `
@@ -874,6 +917,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 `;
 
   const states = new WeakMap();
+  const fallbackRoots = new WeakSet();
 
   let cleanedLegacy = false;
   let pending = false;
@@ -884,6 +928,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let lastSessionRefreshAt = 0;
   let bypassRunPreflight = false;
   let statusTimer = null;
+  let repairedTotal = 0;
 
   function elementOf(node) {
     if (!node) {
@@ -3888,34 +3933,177 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function collectRoots() {
-    const roots = Array.from(
-      document.querySelectorAll(REPAIR_ROOT_SELECTOR)
-    ).filter((root) => {
-      if (
-        !root.isConnected ||
-        closest(root, USER_SELECTOR)
-      ) {
-        return false;
+  function hasFallbackRepairHint(text) {
+    return Boolean(
+      text &&
+      (
+        /[*_<>$\\]/.test(text) ||
+        /(?:begin|end)\s*\{/i.test(text)
+      )
+    );
+  }
+
+  function hasActionableRepairText(text) {
+    return Boolean(
+      text &&
+      text.length <= MAX_FALLBACK_ROOT_LENGTH &&
+      (
+        findMatches(text).length ||
+        findUnderlineMatches(text).length ||
+        hasLiteralTableBreak(text) ||
+        hasRawMathText(text)
+      )
+    );
+  }
+
+  function fallbackBlocked(element) {
+    return Boolean(
+      !element ||
+      closest(element, USER_SELECTOR) ||
+      closest(element, SKIP_SELECTOR) ||
+      closest(element, FALLBACK_EXCLUDE_SELECTOR)
+    );
+  }
+
+  function fallbackRootForTextNode(textNode) {
+    const value = textNode && textNode.nodeValue;
+    const parent = textNode && textNode.parentElement;
+
+    if (
+      !parent ||
+      !hasFallbackRepairHint(value) ||
+      fallbackBlocked(parent)
+    ) {
+      return null;
+    }
+
+    const surface = closest(parent, FALLBACK_SURFACE_SELECTOR);
+
+    if (!surface) {
+      return null;
+    }
+
+    let current = parent;
+
+    for (
+      let depth = 0;
+      current && current !== surface && depth < MAX_FALLBACK_ASCENT;
+      depth += 1
+    ) {
+      if (fallbackBlocked(current)) {
+        return null;
       }
 
-      /*
-       * 중첩된 후보가 있으면 가장 바깥쪽만 처리한다.
-       */
-      const parentRoot =
-        root.parentElement
-          ? closest(root.parentElement, REPAIR_ROOT_SELECTOR)
-          : null;
+      const text = current.textContent || '';
 
-      return !parentRoot;
+      if (text.length > MAX_FALLBACK_ROOT_LENGTH) {
+        return null;
+      }
+
+      if (hasActionableRepairText(text)) {
+        fallbackRoots.add(current);
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
+  function collectFallbackRoots() {
+    const body = document.body;
+
+    if (
+      !body ||
+      typeof document.createTreeWalker !== 'function'
+    ) {
+      return [];
+    }
+
+    const roots = new Set();
+    const walker = document.createTreeWalker(
+      body,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(textNode) {
+          return hasFallbackRepairHint(textNode.nodeValue || '')
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_SKIP;
+        }
+      }
+    );
+
+    while (walker.nextNode()) {
+      const root = fallbackRootForTextNode(walker.currentNode);
+
+      if (root) {
+        roots.add(root);
+      }
+    }
+
+    return Array.from(roots);
+  }
+
+  function collectRoots() {
+    const explicitRoots = Array.from(
+      document.querySelectorAll(REPAIR_ROOT_SELECTOR)
+    ).filter((root) => {
+      return Boolean(
+        root.isConnected &&
+        !closest(root, USER_SELECTOR)
+      );
+    });
+
+    const candidates = Array.from(new Set([
+      ...explicitRoots,
+      ...collectFallbackRoots()
+    ])).filter((root) => (
+      root.isConnected &&
+      !closest(root, USER_SELECTOR)
+    ));
+
+    /*
+     * 명시적 turn 안에서 fallback 문단도 발견된 경우 가장 바깥 turn만
+     * 처리한다. 알려진 turn이 없는 새 DOM에서는 표식이 있는 최소 문단이
+     * 그대로 남아 주변 UI를 건드리지 않는다.
+     */
+    const roots = candidates.filter((root) => (
+      !candidates.some((candidate) => (
+        candidate !== root &&
+        typeof candidate.contains === 'function' &&
+        candidate.contains(root)
+      ))
+    ));
+
+    roots.sort((left, right) => {
+      if (
+        left === right ||
+        typeof left.compareDocumentPosition !== 'function'
+      ) {
+        return 0;
+      }
+
+      const position = left.compareDocumentPosition(right);
+
+      if (position & 4) {
+        return -1;
+      }
+
+      if (position & 2) {
+        return 1;
+      }
+
+      return 0;
     });
 
     const selected = roots.filter(nearViewport);
 
     /*
-     * 최근 답변 몇 개는 화면 판정과 상관없이 확인한다.
+     * selectorless fallback은 한 답변에서 여러 문단이 될 수 있으므로
+     * 최근 표식 문단을 넉넉히 확인한다.
      */
-    roots.slice(-4).forEach((root) => {
+    roots.slice(-MAX_RECENT_REPAIR_ROOTS).forEach((root) => {
       if (!selected.includes(root)) {
         selected.push(root);
       }
@@ -3924,13 +4112,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return selected;
   }
 
-  function lastModelTurn() {
-    const models = Array.from(
-      document.querySelectorAll(REPAIR_ROOT_SELECTOR)
-    ).filter((root) => (
-      root.isConnected &&
-      !closest(root, USER_SELECTOR)
-    ));
+  function lastModelTurn(roots = []) {
+    const models = roots.length
+      ? roots
+      : Array.from(
+        document.querySelectorAll(REPAIR_ROOT_SELECTOR)
+      ).filter((root) => (
+        root.isConnected &&
+        !closest(root, USER_SELECTOR)
+      ));
 
     const last = models[models.length - 1];
 
@@ -3938,7 +4128,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return null;
     }
 
-    return closest(last, 'ms-chat-turn') || last;
+    return (
+      closest(last, 'ms-chat-turn') ||
+      closest(last, MODEL_TURN_SELECTOR) ||
+      last
+    );
   }
 
   function sameTurnOrInside(root, turn) {
@@ -4043,6 +4237,32 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }) || null;
   }
 
+  function fallbackActivityHasRepairHint(indicator) {
+    if (
+      !indicator ||
+      fallbackBlocked(indicator)
+    ) {
+      return false;
+    }
+
+    const surface = closest(indicator, FALLBACK_SURFACE_SELECTOR);
+    let current = indicator.parentElement;
+
+    for (
+      let depth = 0;
+      current && current !== surface && depth < MAX_FALLBACK_ASCENT;
+      depth += 1
+    ) {
+      if (hasFallbackRepairHint(current.textContent || '')) {
+        return true;
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
+  }
+
   function generating() {
     const activeStopButton = Array.from(
       document.querySelectorAll('button')
@@ -4059,7 +4279,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       MODEL_ACTIVITY_SELECTOR
     );
 
-    return Array.from(indicators).some(visible);
+    if (Array.from(indicators).some(visible)) {
+      return true;
+    }
+
+    const fallbackIndicators = document.querySelectorAll(
+      FALLBACK_ACTIVITY_SELECTOR
+    );
+
+    return Array.from(fallbackIndicators).some((indicator) => (
+      visible(indicator) &&
+      fallbackActivityHasRepairHint(indicator)
+    ));
   }
 
   function showRecoveryStatus(message, visibleForMs = 3500) {
@@ -4381,9 +4612,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const now = Date.now();
-    const roots = collectRoots();
-    const lastTurn = lastModelTurn();
+    const html = document.documentElement;
     const pageGenerating = generating();
+
+    if (html) {
+      html.setAttribute(
+        'data-aistudio-mobile-fix-generating',
+        pageGenerating ? 'true' : 'false'
+      );
+    }
 
     /*
      * AI Studio가 스트리밍 중일 때는 이전 답변을 포함해 어떤 출력 DOM도 바꾸지 않는다.
@@ -4391,7 +4628,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
      * 깨질 수 있으므로, 완료 후 안정 구간에서만 보정한다.
      */
     if (pageGenerating) {
+      /*
+       * 완료 버튼/spinner가 새 DOM 바깥에서 사라져도 놓치지 않도록 읽기
+       * 전용 재확인을 이어간다. 생성 중에는 repairRoot를 호출하지 않는다.
+       */
+      schedule(GENERATION_RECHECK_MS);
       return;
+    }
+
+    const roots = collectRoots();
+    const lastTurn = lastModelTurn(roots);
+    const fallbackCount = roots.filter((root) => (
+      fallbackRoots.has(root)
+    )).length;
+    let repairedThisScan = 0;
+
+    if (html) {
+      html.setAttribute(
+        'data-aistudio-mobile-fix-scan-roots',
+        String(roots.length)
+      );
+      html.setAttribute(
+        'data-aistudio-mobile-fix-fallback-roots',
+        String(fallbackCount)
+      );
     }
 
     for (const root of roots) {
@@ -4460,10 +4720,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       state.attempted = text;
 
+      if (
+        root.setAttribute &&
+        !root.matches(REPAIRED_ROOT_SELECTOR)
+      ) {
+        root.setAttribute('data-aistudio-repair-root', '1');
+      }
+
       const repaired = repairRoot(root);
       const after = root.textContent || '';
 
       if (repaired > 0) {
+        repairedThisScan += repaired;
+        repairedTotal += repaired;
         states.set(root, {
           text: after,
           since: now,
@@ -4486,6 +4755,33 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         attempts: attempts + 1,
         lastAttemptAt: now
       });
+    }
+
+    if (html) {
+      html.setAttribute(
+        'data-aistudio-mobile-fix-last-repairs',
+        String(repairedThisScan)
+      );
+      html.setAttribute(
+        'data-aistudio-mobile-fix-total-repairs',
+        String(repairedTotal)
+      );
+    }
+
+    if (
+      repairedThisScan > 0 &&
+      window.console &&
+      typeof window.console.info === 'function'
+    ) {
+      window.console.info(
+        '[AI Studio display fix v' + VERSION + '] repaired',
+        {
+          fallbackRoots: fallbackCount,
+          repairs: repairedThisScan,
+          roots: roots.length,
+          total: repairedTotal
+        }
+      );
     }
   }
 
@@ -4510,6 +4806,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }, delay);
   }
 
+  function isFallbackMutationTarget(element) {
+    if (
+      !element ||
+      fallbackBlocked(element) ||
+      !closest(element, FALLBACK_SURFACE_SELECTOR)
+    ) {
+      return false;
+    }
+
+    return hasRepairableText(element.textContent || '');
+  }
+
   function shouldObserveMutationTarget(
     node,
     includeDescendants = false
@@ -4525,7 +4833,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     if (
       closest(element, MODEL_TURN_SELECTOR) ||
-      closest(element, REPAIR_ROOT_SELECTOR)
+      closest(element, REPAIR_ROOT_SELECTOR) ||
+      isFallbackMutationTarget(element)
     ) {
       return true;
     }
@@ -4542,9 +4851,23 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
      * addedNode는 바깥 turn이다. 내부 renderer까지 확인해 10초 주기 스캔을
      * 기다리지 않고 안정화 타이머를 시작한다.
      */
-    return Array.from(
+    const hasExplicitRoot = Array.from(
       element.querySelectorAll(REPAIR_ROOT_SELECTOR)
     ).some((candidate) => !closest(candidate, USER_SELECTOR));
+
+    if (hasExplicitRoot) {
+      return true;
+    }
+
+    const fallbackSurface =
+      element.matches(FALLBACK_SURFACE_SELECTOR)
+        ? element
+        : element.querySelector(FALLBACK_SURFACE_SELECTOR);
+
+    return Boolean(
+      fallbackSurface &&
+      hasRepairableText(fallbackSurface.textContent || '')
+    );
   }
 
   function installObserver() {

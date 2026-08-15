@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.8\.5/);
+assert.match(source, /\/\/ @version\s+1\.8\.6/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -22,7 +22,10 @@ assert.match(source, /const SCAN_MS = 10000;/);
 assert.match(source, /function repairSplitTableBreaksInCell/);
 assert.match(source, /function repairInlineEmphasisInContainer/);
 assert.match(source, /function repairProseCodeBold/);
-assert.match(source, /if \(pageGenerating\) \{\s*return;\s*\}/);
+assert.match(
+  source,
+  /if \(pageGenerating\) \{[\s\S]*?schedule\(GENERATION_RECHECK_MS\);[\s\S]*?return;/
+);
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 
 const tail = /\n  if \(document\.readyState === 'loading'\) \{[\s\S]*?\n\}\(\)\);\s*$/;
