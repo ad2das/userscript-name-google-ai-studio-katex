@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.8.9
+// @version      1.9.0
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.8.9';
-  const STYLE_ID = 'aistudio-mobile-safe-189-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-189';
+  const VERSION = '1.9.0';
+  const STYLE_ID = 'aistudio-mobile-safe-190-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-190';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -980,6 +980,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let bypassRunPreflight = false;
   let statusTimer = null;
   let repairedTotal = 0;
+  let mathFitResizeDirty = true;
+  let fallbackDirty = true;
+  let lastFallbackScanAt = 0;
+  const mathFitCache = new WeakMap();
 
   function elementOf(node) {
     if (!node) {
@@ -4133,13 +4137,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
-  function fitDisplayMath(display) {
+  function fitDisplayMath(display, force = false) {
     if (
       !display ||
       !display.isConnected ||
       !closest(display, STYLE_ROOT_SELECTOR) ||
       closest(display, USER_SELECTOR)
     ) {
+      return false;
+    }
+
+    if (!force && mathFitCache.has(display)) {
       return false;
     }
 
@@ -4160,6 +4168,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const baseFontSize = Number.parseFloat(
       getComputedStyle(katexRoot).fontSize
     );
+
+    mathFitCache.set(display, {
+      availableWidth,
+      naturalWidth
+    });
 
     if (
       !availableWidth ||
@@ -4192,7 +4205,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return true;
   }
 
-  function fitWideDisplayMath() {
+  function fitWideDisplayMath(force = false) {
     const displays = Array.from(document.querySelectorAll(
       '.katex-display, ms-katex.display'
     )).filter((display) => !(
@@ -4202,7 +4215,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let fitted = 0;
 
     for (const display of displays) {
-      if (fitDisplayMath(display)) {
+      if (fitDisplayMath(display, force)) {
         fitted += 1;
       }
     }
@@ -4353,9 +4366,22 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       );
     });
 
+    const fallbackNow = Date.now();
+    const fallbackFresh = fallbackDirty ||
+      fallbackNow - lastFallbackScanAt >= SCAN_MS;
+
+    if (fallbackFresh) {
+      lastFallbackScanAt = fallbackNow;
+      fallbackDirty = false;
+    }
+
+    const fallbackList = fallbackFresh
+      ? collectFallbackRoots()
+      : [];
+
     const candidates = Array.from(new Set([
       ...explicitRoots,
-      ...collectFallbackRoots()
+      ...fallbackList
     ])).filter((root) => (
       root.isConnected &&
       !closest(root, USER_SELECTOR)
@@ -4924,7 +4950,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const now = Date.now();
     const html = document.documentElement;
-    const fittedMathCount = fitWideDisplayMath();
+    const fittedMathCount = fitWideDisplayMath(mathFitResizeDirty);
+    mathFitResizeDirty = false;
     const pageGenerating = generating();
 
     if (html) {
@@ -5165,7 +5192,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     if (
       !includeDescendants ||
-      typeof element.querySelectorAll !== 'function'
+      typeof element.querySelectorAll !== 'function' ||
+      !hasRepairableText(element.textContent || '')
     ) {
       return false;
     }
@@ -5214,12 +5242,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (shouldObserveMutationTarget(mutation.target)) {
+          fallbackDirty = true;
           schedule(MUTATION_SCAN_DELAY_MS);
           return;
         }
 
         for (const node of mutation.addedNodes || []) {
           if (shouldObserveMutationTarget(node, true)) {
+            fallbackDirty = true;
             schedule(MUTATION_SCAN_DELAY_MS);
             return;
           }
@@ -5257,6 +5287,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       'pageshow',
       () => {
         installStyle();
+        mathFitResizeDirty = true;
         schedule(150);
         keepSessionFresh(false);
       },
@@ -5268,6 +5299,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       () => {
         window.setTimeout(() => {
           installStyle();
+          mathFitResizeDirty = true;
           schedule(150);
         }, 150);
       },
@@ -5282,13 +5314,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     window.addEventListener(
       'resize',
-      () => schedule(150),
+      () => {
+        mathFitResizeDirty = true;
+        schedule(150);
+      },
       { passive: true }
     );
 
     window.addEventListener(
       'orientationchange',
-      () => schedule(150),
+      () => {
+        mathFitResizeDirty = true;
+        schedule(150);
+      },
       { passive: true }
     );
 
@@ -5297,6 +5335,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       () => {
         if (!document.hidden) {
           installStyle();
+          mathFitResizeDirty = true;
           schedule(150);
           keepSessionFresh(false);
         }
