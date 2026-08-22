@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.8
+// @version      1.9.9
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.8';
-  const STYLE_ID = 'aistudio-mobile-safe-198-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-198';
+  const VERSION = '1.9.9';
+  const STYLE_ID = 'aistudio-mobile-safe-199-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-199';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -494,7 +494,8 @@
     'aistudio-mobile-safe-194-style',
     'aistudio-mobile-safe-195-style',
     'aistudio-mobile-safe-196-style',
-    'aistudio-mobile-safe-197-style'
+    'aistudio-mobile-safe-197-style',
+    'aistudio-mobile-safe-198-style'
   ];
 
   const CSS_TEXT = `
@@ -4204,11 +4205,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function repairTableBreakTextNode(textNode) {
+    const allowedSkipRoot = textNode && closest(
+      textNode.parentElement,
+      'strong:not(.aistudio-md-repaired), ' +
+      'b:not(.aistudio-md-repaired)'
+    );
+
     if (
       !textNode ||
       !textNode.parentNode ||
       !textNode.isConnected ||
-      skipped(textNode)
+      skipped(textNode, allowedSkipRoot)
     ) {
       return 0;
     }
@@ -4292,8 +4299,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         continue;
       }
 
+      const allowedSkipRoot = closest(
+        textNode.parentElement,
+        'strong:not(.aistudio-md-repaired), ' +
+        'b:not(.aistudio-md-repaired)'
+      );
+
       if (
-        skipped(textNode) ||
+        skipped(textNode, allowedSkipRoot) ||
         closest(textNode.parentElement, 'th, td') !== cell
       ) {
         currentGroup = null;

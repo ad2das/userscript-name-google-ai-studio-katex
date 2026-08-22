@@ -124,6 +124,9 @@ async (page) => {
     const literalCode = document.getElementById('literal-code');
     const blockBoundary = document.getElementById('block-boundary');
     const linkBoundary = document.getElementById('link-boundary');
+    const nativeBoldLiteralBreak = document.getElementById(
+      'native-bold-literal-break'
+    );
     const splitBold = document.getElementById('split-bold');
     const multipleBold = document.getElementById('multiple-bold');
     const splitBoldItalic = document.getElementById('split-bold-italic');
@@ -339,6 +342,13 @@ async (page) => {
       preservedBlockBoundary: blockBoundary.querySelectorAll('br').length === 0,
       preservedCode: literalCode.textContent === '<br>',
       preservedLinkBoundary: linkBoundary.querySelectorAll('br').length === 0,
+      nativeBoldLiteralBreakRepaired:
+        nativeBoldLiteralBreak.querySelectorAll(
+          'strong > br.aistudio-table-br-repaired'
+        ).length === 1 &&
+        !nativeBoldLiteralBreak.textContent.includes('<br>') &&
+        nativeBoldLiteralBreak.textContent ===
+          '(차) 미처분이익잉여금 감소(대) 미지급배당금 (부채)',
       splitBoldCount: splitBold.querySelectorAll(
         'strong.aistudio-md-repaired'
       ).length,
@@ -857,7 +867,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-198'
+        'data-aistudio-mobile-safe-199'
       )
     };
   });
@@ -959,6 +969,7 @@ async (page) => {
     !rendering.preservedBlockBoundary ||
     !rendering.preservedCode ||
     !rendering.preservedLinkBoundary ||
+    !rendering.nativeBoldLiteralBreakRepaired ||
     !rendering.preservedCodeBoundary ||
     !rendering.preservedLinkBoundaryBold ||
     rendering.proseCodeBoldCount !== 1 ||
@@ -1073,7 +1084,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.8'
+    rendering.version !== '1.9.9'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
