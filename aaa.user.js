@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.1
+// @version      1.9.2
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.1';
-  const STYLE_ID = 'aistudio-mobile-safe-191-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-191';
+  const VERSION = '1.9.2';
+  const STYLE_ID = 'aistudio-mobile-safe-192-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-192';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -477,7 +477,10 @@
     'aistudio-mobile-safe-185-style',
     'aistudio-mobile-safe-186-style',
     'aistudio-mobile-safe-187-style',
-    'aistudio-mobile-safe-188-style'
+    'aistudio-mobile-safe-188-style',
+    'aistudio-mobile-safe-189-style',
+    'aistudio-mobile-safe-190-style',
+    'aistudio-mobile-safe-191-style'
   ];
 
   const CSS_TEXT = `
@@ -2916,7 +2919,79 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return repairEmbeddedRawMathRanges(container);
   }
 
-  function repairRawMath(root) {
+  function hasSplitRawMathEnvironment(root, rootText) {
+    if (
+      !root ||
+      !root.querySelectorAll ||
+      typeof document.createTreeWalker !== 'function' ||
+      !/(?:\\)?begin\s*\{[A-Za-z]/i.test(rootText || '') ||
+      !/(?:\\)?end\s*\{[A-Za-z]/i.test(rootText || '')
+    ) {
+      return false;
+    }
+
+    const markers = new Map();
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(textNode) {
+          const value = textNode.nodeValue || '';
+          const parent = textNode.parentElement;
+
+          if (
+            !parent ||
+            !/(?:\\)?(?:begin|end)\s*\{[A-Za-z]/i.test(value) ||
+            closest(parent, RENDERED_MATH_SELECTOR) ||
+            closest(parent, SKIP_SELECTOR)
+          ) {
+            return NodeFilter.FILTER_SKIP;
+          }
+
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      const owner =
+        closest(textNode.parentElement, RAW_MATH_CONTAINER_SELECTOR) ||
+        textNode.parentElement;
+      const tokenPattern = /(?:\\)?(begin|end)\s*\{([A-Za-z][A-Za-z*]*)\}/gi;
+      let token;
+
+      while ((token = tokenPattern.exec(textNode.nodeValue || ''))) {
+        const environment = token[2];
+
+        if (!RAW_MATH_ENVIRONMENTS.has(environment)) {
+          continue;
+        }
+
+        const entry = markers.get(environment) || {
+          openings: new Set(),
+          closings: new Set()
+        };
+        entry[token[1].toLowerCase() === 'begin' ? 'openings' : 'closings']
+          .add(owner);
+        markers.set(environment, entry);
+      }
+    }
+
+    for (const entry of markers.values()) {
+      for (const opening of entry.openings) {
+        for (const closing of entry.closings) {
+          if (opening !== closing) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function repairRawMath(root, rootText = '') {
     if (!root || !root.querySelectorAll) {
       return 0;
     }
@@ -2930,11 +3005,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       root.matches(RAW_MATH_CONTAINER_SELECTOR)
     ) {
       containers.push(root);
-    } else if (fallbackRoots.has(root)) {
+    } else if (
+      fallbackRoots.has(root) ||
+      hasSplitRawMathEnvironment(root, rootText)
+    ) {
       /*
-       * 최신 selectorless renderer는 begin/end를 서로 다른 블록에 둘 수
-       * 있다. 이때 완전한 수식 범위를 가진 작은 fallback root만 추가해
-       * 전체 응답을 다시 순회하지 않고 형제 블록 사이의 수식을 복구한다.
+       * AI Studio는 begin/end를 서로 다른 형제 renderer에 둘 수 있다.
+       * selectorless fallback root와 실제로 marker가 갈라진 알려진 turn만
+       * 추가해 일반 응답의 상위 root를 불필요하게 다시 순회하지 않는다.
        */
       containers.push(root);
     }
@@ -4070,7 +4148,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    let repaired = repairRawMath(root);
+    let repaired = repairRawMath(root, rootText);
     repaired += repairRenderedMathBold(root);
     repaired += repairSplitTableBreaks(root);
     repaired += repairLiteralUnderlines(root);

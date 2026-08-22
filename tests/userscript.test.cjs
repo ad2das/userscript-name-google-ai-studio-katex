@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.1/);
+assert.match(source, /\/\/ @version\s+1\.9\.2/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -27,6 +27,11 @@ assert.match(source, /function embeddedMathRoots/);
 assert.match(source, /function hasActionableRepairElement/);
 assert.match(source, /hasCompleteRawMath/);
 assert.match(source, /fallbackRoots\.has\(root\)/);
+assert.match(source, /function hasSplitRawMathEnvironment/);
+assert.match(
+  source,
+  /fallbackRoots\.has\(root\) \|\|\s*hasSplitRawMathEnvironment\(root, rootText\)/
+);
 assert.match(source, /function fitWideDisplayMath/);
 assert.match(
   source,

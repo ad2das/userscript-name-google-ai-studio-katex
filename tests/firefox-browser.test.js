@@ -579,6 +579,11 @@ async (page) => {
         document.querySelector(
           '#photo-split-aligned-wrapper .aistudio-raw-math-repaired .katex'
         ) !== null,
+      knownSplitMathSource: sourceOf('known-split-aligned-wrapper'),
+      knownSplitMathRepaired:
+        document.querySelector(
+          '#known-split-aligned-wrapper .aistudio-raw-math-repaired .katex'
+        ) !== null,
       selectorlessLiteralCodePreserved:
         document.getElementById('selectorless-literal-code').textContent ===
           'Markdown syntax: **literal stays literal** and <u>literal</u>' &&
@@ -658,7 +663,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-191'
+        'data-aistudio-mobile-safe-192'
       )
     };
   });
@@ -803,6 +808,9 @@ async (page) => {
     !rendering.selectorlessSplitMathRepaired ||
     !rendering.selectorlessSplitMathSource?.startsWith('\\begin{aligned}') ||
     !rendering.selectorlessSplitMathSource?.includes('사채상환손익') ||
+    !rendering.knownSplitMathRepaired ||
+    !rendering.knownSplitMathSource?.startsWith('\\begin{aligned}') ||
+    !rendering.knownSplitMathSource?.includes('사채상환손익') ||
     !rendering.selectorlessLiteralCodePreserved ||
     !rendering.selectorlessUserPreserved ||
     !rendering.selectorlessNavigationPreserved ||
@@ -836,7 +844,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.1'
+    rendering.version !== '1.9.2'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

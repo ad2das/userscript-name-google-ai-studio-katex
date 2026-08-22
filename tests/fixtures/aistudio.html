@@ -236,6 +236,24 @@
   </app-root>
 
   <!--
+    A known AI Studio model turn can also split one environment across several
+    sibling cmark renderers. The turn root, not only selectorless fallbacks,
+    must be eligible for the final range repair.
+  -->
+  <ms-chat-turn id="reported-known-split-math-turn" data-turn-role="model">
+    <div class="chat-turn-container model">
+      <h3>③ 사채상환손익 구하기 (손익 영향 ②)</h3>
+      <div id="known-split-aligned-wrapper">
+        <ms-cmark-node>\begin{aligned}</ms-cmark-node>
+        <ms-cmark-node>\mathbf{\text{사채상환손익}} &amp;= \text{상환시점 장부금액}(98,150\text{원}) - \text{상환대가}</ms-cmark-node>
+        <ms-cmark-node>(92,000\text{원}) \</ms-cmark-node>
+        <ms-cmark-node>&amp;= \mathbf{+6,150\text{원 (사채상환이익 → 당기순이익 6,150원 증가)}}</ms-cmark-node>
+        <ms-cmark-node>\end{aligned}</ms-cmark-node>
+      </div>
+    </div>
+  </ms-chat-turn>
+
+  <!--
     A virtualized historical response whose renderer is outside every known
     AI Studio surface. The inline formula also uses a newer custom host name
     instead of .katex/ms-katex. Both the bold markers and table <br> text must

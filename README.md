@@ -30,6 +30,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   while preserving the surrounding response text and fenced code examples
 - Raw TeX blocks next to rendered tables and other structured response content,
   without rebuilding or deleting those surrounding DOM elements
+- Raw TeX environments split across sibling AI Studio renderer blocks, including
+  known `ms-cmark-node` turns as well as selectorless fallback markup
 - Bold fallback for unsupported enclosed and currency glyphs such as `①` and `₩`
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses, including
@@ -65,7 +67,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.8.9 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.9.2 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
