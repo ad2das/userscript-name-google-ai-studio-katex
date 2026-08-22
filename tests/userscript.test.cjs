@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.4/);
+assert.match(source, /\/\/ @version\s+1\.9\.5/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -66,6 +66,7 @@ const instrumented = source.replace(
   tail,
   `
   globalThis.__userscriptTest = {
+    analyzeAsciiBoxTree,
     availableKatex,
     bracesAreBalanced,
     MODEL_ACTIVITY_SELECTOR,
@@ -327,6 +328,33 @@ assert.equal(
     '첫 문장입니다.\n이어지는 줄에서도 **강조 문장입니다.**'
   ),
   true
+);
+
+const reportedAsciiCapitalTree = [
+  '┌─ 자본금 (무조건 액면가액!)',
+  '             │',
+  '자본거래 ───┼─ 자본잉여금 (주주와의 거래에서 생긴 (+) 플러스 잉여금)',
+  '             │',
+  '             └─ 자본조정 (자본의 차감(-) 항목 또는 임시 가계정 성격)'
+].join('\n');
+const asciiCapitalTree = api.analyzeAsciiBoxTree(reportedAsciiCapitalTree);
+
+assert.ok(asciiCapitalTree);
+assert.equal(asciiCapitalTree.source, reportedAsciiCapitalTree);
+assert.deepEqual(
+  Array.from(asciiCapitalTree.lines, (line) => line.junction),
+  ['┌', '│', '┼', '│', '└']
+);
+assert.equal(asciiCapitalTree.lines[0].left, '');
+assert.equal(asciiCapitalTree.lines[2].left, '자본거래 ───');
+assert.equal(api.analyzeAsciiBoxTree('const value = "┌─ literal";'), null);
+assert.equal(
+  api.analyzeAsciiBoxTree([
+    '┌──┬──┐',
+    '│ A │ B │',
+    '└──┴──┘'
+  ].join('\n')),
+  null
 );
 
 const brokenArray = String.raw`begin{array}{ll|ll}

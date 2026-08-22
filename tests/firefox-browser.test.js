@@ -198,6 +198,15 @@ async (page) => {
     const proseCodeStrong = proseCodeBlock.querySelector(
       'strong.aistudio-md-repaired'
     );
+    const asciiTree = document.getElementById('reported-ascii-capital-tree');
+    const asciiTreeCode = asciiTree.querySelector('code');
+    const asciiTreeOriginal = [
+      '┌─ 자본금 (무조건 액면가액!)',
+      '             │',
+      '자본거래 ───┼─ 자본잉여금 (주주와의 거래에서 생긴 (+) 플러스 잉여금)',
+      '             │',
+      '             └─ 자본조정 (자본의 차감(-) 항목 또는 임시 가계정 성격)'
+    ].join('\n');
     const currentModelResponse = document.getElementById(
       'reported-current-model-response'
     );
@@ -552,6 +561,25 @@ async (page) => {
         document.getElementById('language-code-bold').textContent ===
           '한국어 설명입니다. **굵게 표시합니다.**' &&
         document.querySelectorAll('#language-code-bold strong').length === 0,
+      asciiTreeRepaired:
+        asciiTree.classList.contains('aistudio-ascii-tree-block-repaired') &&
+        asciiTreeCode.classList.contains('aistudio-ascii-tree-repaired') &&
+        asciiTree.querySelector(
+          '.aistudio-ascii-tree-visual[aria-hidden="true"]'
+        ) !== null,
+      asciiTreeOriginalPreserved:
+        asciiTreeCode.textContent === asciiTreeOriginal &&
+        asciiTreeCode.innerText === asciiTreeOriginal &&
+        asciiTree.textContent === asciiTreeOriginal,
+      asciiTreeDisplay: getComputedStyle(asciiTree.querySelector(
+        '.aistudio-ascii-tree-visual'
+      )).display,
+      asciiTreeJunctionXs: Array.from(asciiTree.querySelectorAll(
+        '.aistudio-ascii-tree-junction'
+      )).map((junction) => junction.getBoundingClientRect().left),
+      asciiTreeRowCount: asciiTree.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
       userProseCodePreserved:
         document.getElementById('user-prose-code-bold').textContent ===
           '사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.' &&
@@ -717,7 +745,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-194'
+        'data-aistudio-mobile-safe-195'
       )
     };
   });
@@ -831,6 +859,13 @@ async (page) => {
     !rendering.koreanCodePreserved ||
     !rendering.markdownSyntaxPreserved ||
     !rendering.languageCodePreserved ||
+    !rendering.asciiTreeRepaired ||
+    !rendering.asciiTreeOriginalPreserved ||
+    rendering.asciiTreeDisplay !== 'inline-grid' ||
+    rendering.asciiTreeRowCount !== 5 ||
+    rendering.asciiTreeJunctionXs.length !== 5 ||
+    Math.max(...rendering.asciiTreeJunctionXs) -
+      Math.min(...rendering.asciiTreeJunctionXs) > 0.5 ||
     !rendering.userProseCodePreserved ||
     JSON.stringify(rendering.currentModelStrongTexts) !== JSON.stringify([
       '발생가능성 인식기준은 항상 충족',
@@ -904,7 +939,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.4'
+    rendering.version !== '1.9.5'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

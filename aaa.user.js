@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.4
+// @version      1.9.5
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.4';
-  const STYLE_ID = 'aistudio-mobile-safe-194-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-194';
+  const VERSION = '1.9.5';
+  const STYLE_ID = 'aistudio-mobile-safe-195-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-195';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -35,13 +35,15 @@
    * 안전을 위해 하지 않는 것:
    * - 생성 중 최신 답변 수정
    * - KaTeX / MathJax 내부 수정
-   * - 실제 code / pre / link / input 내부 수정
+   * - 실제 code / pre / link / input의 원문 수정
    * - 링크, 코드, 블록 경계를 가로질러 **bold**를 합치기
    * - 단, 강조 안에 이미 렌더된 인라인 수식만 끼어 있는 경우는 수식을
    *   그대로 보존하면서 하나의 strong으로 안전하게 복구한다.
    *
    * 단, 한국어 설명문이 들여쓰기 때문에 pre > code로 잘못
    * 분류된 경우에는 코드 신호가 없을 때만 raw bold를 복구한다.
+   * 단순 박스문자 분류 트리는 원문 code를 보존한 채 aria-hidden 시각
+   * 레이어만 추가해 한글/ASCII 글꼴 폭 차이로 틀어진 연결 열을 맞춘다.
    *
    * display 수식의 바깥 래퍼는 세로 clipping을 막기 위해 overflow: visible로
    * 두되, KaTeX의 stretchy SVG 내부 clipping 규칙은 반드시 유지한다.
@@ -63,6 +65,8 @@
   const MAX_RECENT_REPAIR_ROOTS = 64;
   const MAX_KATEX_EXPANSIONS = 1000;
   const MAX_KATEX_SIZE = 20;
+  const MAX_ASCII_TREE_LENGTH = 8000;
+  const MAX_ASCII_TREE_LINES = 120;
   const MIN_DISPLAY_MATH_SCALE = 0.58;
   const MATH_FIT_CHECKED_ATTR = 'data-aistudio-math-fit-checked';
 
@@ -483,7 +487,8 @@
     'aistudio-mobile-safe-190-style',
     'aistudio-mobile-safe-191-style',
     'aistudio-mobile-safe-192-style',
-    'aistudio-mobile-safe-193-style'
+    'aistudio-mobile-safe-193-style',
+    'aistudio-mobile-safe-194-style'
   ];
 
   const CSS_TEXT = `
@@ -769,6 +774,75 @@ ${SCOPE} pre code {
   white-space: pre !important;
   overflow-wrap: normal !important;
   word-break: normal !important;
+}
+
+/*
+ * 한글 fallback 폭과 ASCII 공백 폭이 달라도 박스문자 구조도의 연결 열은
+ * 공유 grid column에 놓는다. 각 cell의 실제 텍스트와 줄바꿈은 유지되어
+ * AI Studio의 복사/다운로드 동작은 원문을 그대로 읽을 수 있다.
+ */
+${SCOPE} pre.aistudio-ascii-tree-block-repaired >
+code.aistudio-ascii-tree-repaired {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: pre !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-visual {
+  display: inline-grid !important;
+  grid-template-columns: max-content max-content max-content !important;
+  width: max-content !important;
+  min-width: 100% !important;
+  white-space: normal !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-row {
+  display: contents !important;
+}
+
+${SCOPE} :where(
+  .aistudio-ascii-tree-left,
+  .aistudio-ascii-tree-junction,
+  .aistudio-ascii-tree-right,
+  .aistudio-ascii-tree-plain
+) {
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+${SCOPE} :where(
+  .aistudio-ascii-tree-left,
+  .aistudio-ascii-tree-junction,
+  .aistudio-ascii-tree-right,
+  .aistudio-ascii-tree-plain
+)::before {
+  content: attr(data-aistudio-ascii-cell) !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-left {
+  grid-column: 1 !important;
+  justify-self: end !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-junction {
+  grid-column: 2 !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-right {
+  grid-column: 3 !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-plain {
+  grid-column: 1 / -1 !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
@@ -3380,6 +3454,205 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return matches.length;
   }
 
+  function analyzeAsciiBoxTree(text) {
+    if (
+      !text ||
+      text.length > MAX_ASCII_TREE_LENGTH
+    ) {
+      return null;
+    }
+
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+
+    if (
+      rawLines.length < 3 ||
+      rawLines.length > MAX_ASCII_TREE_LINES
+    ) {
+      return null;
+    }
+
+    let branchCount = 0;
+    let cornerCount = 0;
+    let verticalCount = 0;
+    let horizontalCount = 0;
+    let structuralCount = 0;
+    const lines = [];
+
+    for (const line of rawLines) {
+      if (!line.trim()) {
+        lines.push({ plain: line });
+        continue;
+      }
+
+      const junctions = Array.from(line.matchAll(/[┌└├┼│|]/g));
+
+      /*
+       * 복잡한 표/다중 열 그림은 건드리지 않는다. 한 행에 연결 축이 하나인
+       * 단순 분류 트리만 공유 grid column으로 옮긴다.
+       */
+      if (junctions.length !== 1) {
+        return null;
+      }
+
+      const junction = junctions[0][0];
+      const index = junctions[0].index;
+
+      structuralCount += 1;
+      branchCount += /[├┼]/.test(junction) ? 1 : 0;
+      cornerCount += /[┌└]/.test(junction) ? 1 : 0;
+      verticalCount += /[│|]/.test(junction) ? 1 : 0;
+      horizontalCount += line.includes('─') ? 1 : 0;
+      lines.push({
+        junction,
+        left: line.slice(0, index),
+        right: line.slice(index + junction.length)
+      });
+    }
+
+    if (
+      structuralCount < 3 ||
+      !branchCount ||
+      !cornerCount ||
+      !verticalCount ||
+      !horizontalCount
+    ) {
+      return null;
+    }
+
+    return { lines, source };
+  }
+
+  function eligibleAsciiTreeCode(code) {
+    const pre = code && code.parentElement;
+
+    return Boolean(
+      pre &&
+      pre.matches('pre') &&
+      !closest(code, USER_SELECTOR) &&
+      !code.matches(
+        '.aistudio-ascii-tree-repaired, .aistudio-prose-code-repaired, ' +
+        '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
+      ) &&
+      !pre.matches(
+        '.aistudio-ascii-tree-block-repaired, ' +
+        '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
+      ) &&
+      !code.querySelector(
+        'a, button, input, textarea, select, svg, math, script, style'
+      )
+    );
+  }
+
+  function asciiTreeCodeCandidates(root) {
+    if (!root || !root.querySelectorAll) {
+      return [];
+    }
+
+    const candidates = Array.from(root.querySelectorAll('pre > code'));
+
+    if (root.matches && root.matches('pre > code')) {
+      candidates.unshift(root);
+    }
+
+    return candidates.filter(eligibleAsciiTreeCode);
+  }
+
+  function hasAsciiBoxTreeHint(text) {
+    return Boolean(
+      text &&
+      /[┌└]/.test(text) &&
+      /[├┼]/.test(text) &&
+      /[│|]/.test(text) &&
+      text.includes('─')
+    );
+  }
+
+  function hasUnrepairedAsciiBoxTree(root, text = '') {
+    const rootText = text || (root && root.textContent) || '';
+
+    if (!hasAsciiBoxTreeHint(rootText)) {
+      return false;
+    }
+
+    return asciiTreeCodeCandidates(root).some((code) => (
+      Boolean(analyzeAsciiBoxTree(code.textContent || ''))
+    ));
+  }
+
+  function hasRepairableRoot(root, text = '') {
+    const rootText = text || (root && root.textContent) || '';
+
+    return Boolean(
+      hasRepairableText(rootText) ||
+      hasUnrepairedAsciiBoxTree(root, rootText)
+    );
+  }
+
+  function repairAsciiBoxTrees(root) {
+    let repaired = 0;
+
+    for (const code of asciiTreeCodeCandidates(root)) {
+      const analysis = analyzeAsciiBoxTree(code.textContent || '');
+
+      if (!analysis) {
+        continue;
+      }
+
+      const pre = code.parentElement;
+      const visual = document.createElement('span');
+      visual.className = 'aistudio-ascii-tree-visual';
+      visual.setAttribute('aria-hidden', 'true');
+
+      analysis.lines.forEach((line, lineIndex) => {
+        const row = document.createElement('span');
+        row.className = 'aistudio-ascii-tree-row';
+        row.setAttribute('data-aistudio-ascii-tree-line', String(lineIndex));
+
+        if (Object.prototype.hasOwnProperty.call(line, 'plain')) {
+          const plain = document.createElement('span');
+          plain.className = 'aistudio-ascii-tree-plain';
+          plain.setAttribute('data-aistudio-ascii-cell', line.plain);
+          row.appendChild(plain);
+        } else {
+          const left = document.createElement('span');
+          const junction = document.createElement('span');
+          const right = document.createElement('span');
+
+          left.className = 'aistudio-ascii-tree-left';
+          left.setAttribute('data-aistudio-ascii-cell', line.left);
+          junction.className = 'aistudio-ascii-tree-junction';
+          junction.setAttribute('data-aistudio-ascii-cell', line.junction);
+          right.className = 'aistudio-ascii-tree-right';
+          right.setAttribute('data-aistudio-ascii-cell', line.right);
+          row.append(left, junction, right);
+        }
+
+        visual.appendChild(row);
+      });
+
+      code.classList.add('aistudio-ascii-tree-repaired');
+      code.setAttribute('data-aistudio-ascii-tree-repaired', '1');
+      pre.insertBefore(visual, code.nextSibling);
+      pre.classList.add('aistudio-ascii-tree-block-repaired');
+      pre.setAttribute(
+        'data-aistudio-ascii-tree-block-repaired',
+        '1'
+      );
+      pre.addEventListener('copy', (event) => {
+        if (!event.clipboardData) {
+          return;
+        }
+
+        event.clipboardData.setData('text/plain', analysis.source);
+        event.preventDefault();
+      });
+      repaired += 1;
+    }
+
+    return repaired;
+  }
+
   function repairProseCodeBold(root) {
     if (!root || !root.querySelectorAll) {
       return 0;
@@ -3401,6 +3674,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         !pre.matches('pre') ||
         closest(code, USER_SELECTOR) ||
         code.matches(
+          '.aistudio-ascii-tree-repaired, ' +
           '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
         ) ||
         pre.matches(
@@ -4167,7 +4441,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const rootText = root.textContent || '';
 
-    if (!hasRepairableText(rootText)) {
+    if (!hasRepairableRoot(root, rootText)) {
       return 0;
     }
 
@@ -4175,6 +4449,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     repaired += repairRenderedMathBold(root);
     repaired += repairSplitTableBreaks(root);
     repaired += repairLiteralUnderlines(root);
+    repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
     repaired += repairInlineEmphasis(root);
     const walker = document.createTreeWalker(
@@ -4371,7 +4646,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return Boolean(
       text &&
       (
-        /[*_<>$\\]/.test(text) ||
+        /[*_<>$\\┌└├┼│]/.test(text) ||
         /(?:begin|end)\s*\{/i.test(text)
       )
     );
@@ -4427,7 +4702,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       findMatches(inlineText).length ||
       findUnderlineMatches(inlineText).length ||
       hasLiteralTableBreak(text) ||
-      hasCompleteRawMath
+      hasCompleteRawMath ||
+      hasUnrepairedAsciiBoxTree(element, text)
     );
   }
 
@@ -4443,6 +4719,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function fallbackRootForTextNode(textNode) {
     const value = textNode && textNode.nodeValue;
     const parent = textNode && textNode.parentElement;
+
+    const asciiCode = parent
+      ? closest(parent, 'pre > code')
+      : null;
+
+    if (
+      asciiCode &&
+      eligibleAsciiTreeCode(asciiCode) &&
+      analyzeAsciiBoxTree(asciiCode.textContent || '')
+    ) {
+      fallbackRoots.add(asciiCode);
+      return asciiCode;
+    }
 
     if (
       !parent ||
@@ -4546,7 +4835,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return Boolean(
         root.isConnected &&
         !closest(root, USER_SELECTOR) &&
-        hasRepairableText(root.textContent || '')
+        hasRepairableRoot(root, root.textContent || '')
       );
     });
 
@@ -4645,7 +4934,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function lastModelTurn(roots = []) {
     const actionableRoots = roots.filter((root) => (
-      hasRepairableText(root.textContent || '')
+      hasRepairableRoot(root, root.textContent || '')
     ));
     const models = actionableRoots.length
       ? actionableRoots
@@ -4654,7 +4943,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       ).filter((root) => (
         root.isConnected &&
         !closest(root, USER_SELECTOR) &&
-        hasRepairableText(root.textContent || '')
+        hasRepairableRoot(root, root.textContent || '')
       ));
 
     const last = models[models.length - 1];
@@ -5236,7 +5525,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     for (const root of roots) {
       const text = root.textContent || '';
 
-      if (!hasRepairableText(text)) {
+      if (!hasRepairableRoot(root, text)) {
         states.delete(root);
         continue;
       }
@@ -5333,7 +5622,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         });
 
         /* 새 KaTeX의 실제 폭은 DOM 삽입 다음 프레임에서 계산한다. */
-        schedule(hasRepairableText(after) ? 250 : 100);
+        schedule(hasRepairableRoot(root, after) ? 250 : 100);
 
         continue;
       }
@@ -5494,7 +5783,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return false;
     }
 
-    return hasRepairableText(element.textContent || '');
+    return hasRepairableRoot(element, element.textContent || '');
   }
 
   function shouldObserveMutationTarget(
@@ -5521,7 +5810,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (
       !includeDescendants ||
       typeof element.querySelectorAll !== 'function' ||
-      !hasRepairableText(element.textContent || '')
+      !hasRepairableRoot(element, element.textContent || '')
     ) {
       return false;
     }
@@ -5546,7 +5835,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     return Boolean(
       fallbackSurface &&
-      hasRepairableText(fallbackSurface.textContent || '')
+      hasRepairableRoot(
+        fallbackSurface,
+        fallbackSurface.textContent || ''
+      )
     );
   }
 
