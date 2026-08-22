@@ -128,6 +128,12 @@ async (page) => {
     const multipleBold = document.getElementById('multiple-bold');
     const splitBoldItalic = document.getElementById('split-bold-italic');
     const mathAdjacentBold = document.getElementById('math-adjacent-bold');
+    const nativeBoldMixedMarker = document.getElementById(
+      'native-bold-mixed-marker'
+    );
+    const nativeBoldInnerMarker = document.getElementById(
+      'native-bold-inner-marker'
+    );
     const underlineRoot = document.getElementById('raw-underline-passages');
     const repairedUnderlines = Array.from(underlineRoot.querySelectorAll(
       'u.aistudio-underline-repaired'
@@ -221,16 +227,18 @@ async (page) => {
       '___________________+__________               ___________________+__________',
       '순자산(자본총계) XXX 증가!                    순자산(자본총계) 변동 없음!'
     ].join('\n');
-    const asciiComparisonJunctions = Array.from(
-      asciiComparison.querySelectorAll('.aistudio-ascii-grid-junction')
+    const asciiComparisonStructural = Array.from(
+      asciiComparison.querySelectorAll('.aistudio-ascii-grid-structural')
     );
     const asciiComparisonColumns = new Map();
 
-    for (const junction of asciiComparisonJunctions) {
+    for (const junction of asciiComparisonStructural) {
+      const panel = junction.getAttribute('data-aistudio-ascii-panel');
       const column = getComputedStyle(junction).gridColumnStart;
-      const positions = asciiComparisonColumns.get(column) || [];
+      const key = `${panel}:${column}`;
+      const positions = asciiComparisonColumns.get(key) || [];
       positions.push(junction.getBoundingClientRect().left);
-      asciiComparisonColumns.set(column, positions);
+      asciiComparisonColumns.set(key, positions);
     }
 
     const asciiComparisonRepeatedColumns = Array.from(
@@ -365,6 +373,21 @@ async (page) => {
           !element.textContent.includes('**') &&
           !element.textContent.includes('__');
       }),
+      nativeBoldMixedMarkerRepaired:
+        nativeBoldMixedMarker.textContent ===
+          '⚡ 1초 공식: 주주에게 지급한 총 현금을 고르면 100% 정답입니다.' &&
+        nativeBoldMixedMarker.querySelector(
+          'strong > strong.aistudio-md-repaired'
+        )?.textContent === '주주에게 지급한 총 현금' &&
+        !nativeBoldMixedMarker.textContent.includes('**') &&
+        !nativeBoldMixedMarker.textContent.includes('__'),
+      nativeBoldInnerMarkerRepaired:
+        nativeBoldInnerMarker.textContent ===
+          '⚡ 1초 공식: 무조건 0원입니다.' &&
+        nativeBoldInnerMarker.querySelector(
+          'strong > strong.aistudio-md-repaired'
+        )?.textContent === '0원' &&
+        !nativeBoldInnerMarker.textContent.includes('**'),
       underlineCount: repairedUnderlines.length,
       underlineTexts: repairedUnderlines.map((element) => element.textContent),
       underlineMarkersRemoved: !underlineRoot.textContent.includes('<u>') &&
@@ -634,12 +657,14 @@ async (page) => {
         asciiComparisonCode.textContent === asciiComparisonOriginal &&
         asciiComparisonCode.innerText === asciiComparisonOriginal &&
         asciiComparison.textContent === asciiComparisonOriginal,
-      asciiComparisonJunctionCount: asciiComparisonJunctions.length,
+      asciiComparisonStructuralCount: asciiComparisonStructural.length,
       asciiComparisonRunCount: asciiComparison.querySelectorAll(
         '.aistudio-ascii-grid-run'
       ).length,
       asciiComparisonRepeatedColumnCount:
         asciiComparisonRepeatedColumns.length,
+      asciiComparisonStructuralColumnCount:
+        asciiComparisonColumns.size,
       asciiComparisonJunctionDrift,
       asciiComparisonScrollable:
         asciiComparison.scrollWidth > asciiComparison.clientWidth,
@@ -832,7 +857,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-197'
+        'data-aistudio-mobile-safe-198'
       )
     };
   });
@@ -851,6 +876,8 @@ async (page) => {
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
     !rendering.boldContainerMatrixRepaired ||
+    !rendering.nativeBoldMixedMarkerRepaired ||
+    !rendering.nativeBoldInnerMarkerRepaired ||
     rendering.underlineCount !== 3 ||
     JSON.stringify(rendering.underlineTexts) !==
       JSON.stringify(['어렵다', '없다', '필요조건이다']) ||
@@ -955,10 +982,11 @@ async (page) => {
       Math.min(...rendering.asciiTreeJunctionXs) > 0.5 ||
     !rendering.asciiComparisonRepaired ||
     !rendering.asciiComparisonOriginalPreserved ||
-    rendering.asciiComparisonJunctionCount < 8 ||
+    rendering.asciiComparisonStructuralCount < 8 ||
     rendering.asciiComparisonRunCount < 1 ||
     rendering.asciiComparisonRunCount > 200 ||
-    rendering.asciiComparisonRepeatedColumnCount < 2 ||
+    rendering.asciiComparisonStructuralColumnCount !== 2 ||
+    rendering.asciiComparisonRepeatedColumnCount !== 2 ||
     rendering.asciiComparisonJunctionDrift > 0.5 ||
     !rendering.asciiComparisonScrollable ||
     !rendering.accountingTableWrapped ||
@@ -1045,7 +1073,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.7'
+    rendering.version !== '1.9.8'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

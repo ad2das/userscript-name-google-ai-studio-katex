@@ -41,7 +41,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses, including
   emphasis that spans an already-rendered KaTeX, MathML, or custom inline-math
-  host—even inside virtualized historical responses outside known renderer tags
+  host and literal nested markers left inside AI Studio's native bold elements—even
+  inside virtualized historical responses outside known renderer tags
 - Bold single- or multi-paragraph Korean prose that AI Studio misclassifies as
   an indented code block, preserving paragraph breaks and adjacent Korean text,
   while preserving actual code and literal Markdown syntax examples
@@ -64,8 +65,9 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Mobile readable Google/Samsung-like font stack
 - Code/pre blocks with horizontal scrolling
 - Simple `┌ ┼ │ └ ─` trees and Korean multi-panel ASCII tables aligned through
-  bounded grids (Hangul 2 columns, ASCII 1), preserving their original text for
-  copy/download while leaving normal and language-labelled code untouched
+  bounded grids (Hangul 2 columns, ASCII 1), with each panel's `|`/`+` separators
+  snapped to one axis while preserving original text for copy/download and leaving
+  normal and language-labelled code untouched
 - Long-running AI Studio document sessions kept warm without reloading the tab
 - A Google-auth/session preflight before stale Run/`Ctrl+Enter` submissions
 
@@ -79,7 +81,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.9.7 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.9.8 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script

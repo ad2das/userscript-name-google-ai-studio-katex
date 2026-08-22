@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.7/);
+assert.match(source, /\/\/ @version\s+1\.9\.8/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -275,6 +275,12 @@ assert.equal(adjacentMathMatch.length, 1);
 assert.equal(adjacentMathMatch[0].inner, 'this is bold');
 assert.equal(api.findMatches('Keep **$x$** math untouched.').length, 0);
 assert.equal(api.findMatches('Keep \\**escaped** markers.').length, 0);
+const mixedNativeBoldMatch = api.findMatches(
+  '⚡ 1초 공식: **__주주에게 지급한 총 현금**을 고르면 정답입니다.'
+)[0];
+assert.ok(mixedNativeBoldMatch);
+assert.equal(mixedNativeBoldMatch.inner, '주주에게 지급한 총 현금');
+assert.equal(mixedNativeBoldMatch.openingTrim, 2);
 assert.equal(api.findMatches('foo__bar__baz').length, 0);
 assert.equal(api.findMatches('__dunder__name').length, 0);
 assert.equal(api.findMatches('목록에서는 __필수 조건__입니다.').length, 1);
@@ -383,6 +389,25 @@ assert.equal(asciiComparison.kind, 'character-grid');
 assert.equal(asciiComparison.source, reportedAsciiComparison);
 assert.ok(asciiComparison.columns > 60);
 assert.ok(asciiComparison.runCount < 200);
+assert.equal(asciiComparison.panelAnchors.length, 2);
+for (let panelIndex = 0; panelIndex < 2; panelIndex += 1) {
+  assert.deepEqual(
+    Array.from(new Set(
+      asciiComparison.lines.flatMap((line) => Array.from(line.runs))
+        .filter((run) => run.structural && run.panelIndex === panelIndex)
+        .map((run) => run.start)
+    )),
+    [asciiComparison.panelAnchors[panelIndex]]
+  );
+}
+assert.deepEqual(
+  Array.from(new Set(
+    asciiComparison.lines.flatMap((line) => Array.from(line.runs))
+      .filter((run) => run.structural)
+      .map((run) => run.start)
+  )).sort((left, right) => left - right),
+  Array.from(asciiComparison.panelAnchors).sort((left, right) => left - right)
+);
 assert.ok(
   asciiComparison.lines.flatMap((line) => Array.from(line.runs))
     .filter((run) => run.type === 'junction').length >= 6
@@ -391,6 +416,16 @@ assert.equal(
   api.analyzeMultiPanelAsciiTable(
     'const x = a < b;\n______\nvalue | other\n______'
   ),
+  null
+);
+assert.equal(
+  api.analyzeMultiPanelAsciiTable([
+    '< 첫 번째 패널 >',
+    '< 두 번째 패널 >',
+    '______+______',
+    '값 | 값',
+    '______+______'
+  ].join('\n')),
   null
 );
 

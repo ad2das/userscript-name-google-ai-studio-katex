@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.7
+// @version      1.9.8
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.7';
-  const STYLE_ID = 'aistudio-mobile-safe-197-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-197';
+  const VERSION = '1.9.8';
+  const STYLE_ID = 'aistudio-mobile-safe-198-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-198';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -493,7 +493,8 @@
     'aistudio-mobile-safe-193-style',
     'aistudio-mobile-safe-194-style',
     'aistudio-mobile-safe-195-style',
-    'aistudio-mobile-safe-196-style'
+    'aistudio-mobile-safe-196-style',
+    'aistudio-mobile-safe-197-style'
   ];
 
   const CSS_TEXT = `
@@ -3229,7 +3230,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     while ((match = regex.exec(text))) {
       const marker = match[1];
-      const inner = match[2] || '';
+      const sourceInner = match[2] || '';
+      const openingTrim = (
+        marker[0] === '*' &&
+        sourceInner.startsWith('__') &&
+        !sourceInner.endsWith('__')
+      ) ? 2 : 0;
+      const inner = sourceInner.slice(openingTrim);
       const start = match.index;
       const end = start + match[0].length;
       const markerCharacter = marker[0];
@@ -3289,6 +3296,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       result.push({
         start,
         end,
+        openingTrim,
         marker,
         raw: match[0],
         inner
@@ -3424,7 +3432,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return result;
   }
 
-  function skipped(textNode) {
+  function skipped(textNode, allowedSkipRoot = null) {
     const parent =
       textNode &&
       textNode.parentElement;
@@ -3433,9 +3441,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return true;
     }
 
+    let skipRoot = closest(parent, SKIP_SELECTOR);
+
+    if (allowedSkipRoot && skipRoot === allowedSkipRoot) {
+      skipRoot = closest(allowedSkipRoot.parentElement, SKIP_SELECTOR);
+    }
+
     return Boolean(
       closest(parent, USER_SELECTOR) ||
-      closest(parent, SKIP_SELECTOR) ||
+      skipRoot ||
       insideEmbeddedMath(parent)
     );
   }
@@ -3706,6 +3720,142 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return { columns: column, runs };
   }
 
+  function asciiPanelIndex(column, panelStarts) {
+    let panelIndex = 0;
+
+    for (let index = 1; index < panelStarts.length; index += 1) {
+      if (column < panelStarts[index]) {
+        break;
+      }
+
+      panelIndex = index;
+    }
+
+    return panelIndex;
+  }
+
+  function asciiMedianColumn(columns) {
+    if (!columns.length) {
+      return null;
+    }
+
+    const ordered = columns.slice().sort((left, right) => left - right);
+    return ordered[Math.floor((ordered.length - 1) / 2)];
+  }
+
+  function asciiStructuralRun(run, dividerLine) {
+    return (
+      /[|│]/.test(run.text) ||
+      (dividerLine && /[+┼]/.test(run.text))
+    );
+  }
+
+  function asciiPanelAnchors(lines, rawLines, panelStarts) {
+    const candidates = panelStarts.map(() => ({ all: [], vertical: [] }));
+
+    lines.forEach((line, lineIndex) => {
+      const dividerLine = /_{6,}|─{6,}/.test(rawLines[lineIndex]);
+
+      for (const run of line.runs) {
+        if (!asciiStructuralRun(run, dividerLine)) {
+          continue;
+        }
+
+        const panelIndex = asciiPanelIndex(run.start, panelStarts);
+        const panel = candidates[panelIndex];
+        panel.all.push(run.start);
+
+        if (/[|│]/.test(run.text)) {
+          panel.vertical.push(run.start);
+        }
+      }
+    });
+
+    return candidates.map((panel) => asciiMedianColumn(
+      panel.vertical.length ? panel.vertical : panel.all
+    ));
+  }
+
+  function normalizeAsciiPanelAxes(
+    lines,
+    rawLines,
+    panelStarts,
+    panelAnchors
+  ) {
+    return lines.map((line, lineIndex) => {
+      const dividerLine = /_{6,}|─{6,}/.test(rawLines[lineIndex]);
+      const runs = line.runs.map((run) => ({ ...run }));
+      const structuralByPanel = panelStarts.map(() => []);
+
+      runs.forEach((run, runIndex) => {
+        if (!asciiStructuralRun(run, dividerLine)) {
+          return;
+        }
+
+        const panelIndex = asciiPanelIndex(run.start, panelStarts);
+        structuralByPanel[panelIndex].push({
+          runIndex,
+          sourceColumn: run.start
+        });
+      });
+
+      structuralByPanel.forEach((structuralRuns, panelIndex) => {
+        const anchor = panelAnchors[panelIndex];
+
+        if (!structuralRuns.length || !Number.isFinite(anchor)) {
+          return;
+        }
+
+        const sourceAxis = asciiMedianColumn(
+          structuralRuns.map((entry) => entry.sourceColumn)
+        );
+        const delta = anchor - sourceAxis;
+        const panelStart = panelStarts[panelIndex];
+        const panelEnd = panelStarts[panelIndex + 1] ?? Infinity;
+        const structuralIndexes = new Set(
+          structuralRuns.map((entry) => entry.runIndex)
+        );
+
+        runs.forEach((run, runIndex) => {
+          if (run.start < panelStart || run.start >= panelEnd) {
+            return;
+          }
+
+          const structural = structuralIndexes.has(runIndex);
+
+          if (structural) {
+            run.start = anchor;
+            run.structural = true;
+            run.panelIndex = panelIndex;
+          } else if (run.start > sourceAxis) {
+            run.start += delta;
+          }
+        });
+
+        if (!dividerLine) {
+          return;
+        }
+
+        const firstStructuralIndex = structuralRuns[0].runIndex;
+        const before = runs[firstStructuralIndex - 1];
+
+        if (before && /^[_─]+$/.test(before.text)) {
+          const columns = Math.max(0, anchor - before.start);
+          before.columns = columns;
+          before.text = before.text[0].repeat(columns);
+        }
+      });
+
+      return {
+        columns: Math.max(
+          line.columns,
+          ...runs.map((run) => run.start + run.columns)
+        ),
+        runs: runs.filter((run) => run.columns > 0)
+      };
+    });
+  }
+
   function analyzeMultiPanelAsciiTable(text) {
     if (
       !text ||
@@ -3717,6 +3867,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const source = text.replace(/\r\n?/g, '\n');
     const rawLines = source.split('\n');
     const headings = source.match(/<[^>\n]{2,}>/g) || [];
+    const headingLine = rawLines.find((line) => (
+      (line.match(/<[^>\n]{2,}>/g) || []).length >= 2
+    ));
     const dividerCount = rawLines.filter((line) => (
       /_{6,}|─{6,}/.test(line)
     )).length;
@@ -3728,12 +3881,40 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       headings.length < 2 ||
       dividerCount < 2 ||
       verticalCount < 2 ||
+      !headingLine ||
       !/[가-힣]/.test(source)
     ) {
       return null;
     }
 
-    const lines = rawLines.map(asciiCharacterGridLine);
+    const headingMatches = Array.from(
+      headingLine.matchAll(/<[^>\n]{2,}>/g)
+    );
+    const panelStarts = headingMatches.map((match) => (
+      asciiCharacterGridLine(headingLine.slice(0, match.index)).columns
+    ));
+
+    if (panelStarts.length < 2 || panelStarts.length > 4) {
+      return null;
+    }
+
+    const sourceLines = rawLines.map(asciiCharacterGridLine);
+    const panelAnchors = asciiPanelAnchors(
+      sourceLines,
+      rawLines,
+      panelStarts
+    );
+
+    if (panelAnchors.some((anchor) => !Number.isFinite(anchor))) {
+      return null;
+    }
+
+    const lines = normalizeAsciiPanelAxes(
+      sourceLines,
+      rawLines,
+      panelStarts,
+      panelAnchors
+    );
     const columns = Math.max(...lines.map((line) => line.columns));
     const runCount = lines.reduce(
       (total, line) => total + line.runs.length,
@@ -3752,6 +3933,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       columns,
       kind: 'character-grid',
       lines,
+      panelAnchors,
       runCount,
       source
     };
@@ -3874,6 +4056,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
             const span = document.createElement('span');
             span.className = 'aistudio-ascii-grid-run';
             span.classList.add(`aistudio-ascii-grid-${run.type}`);
+
+            if (run.structural) {
+              span.classList.add('aistudio-ascii-grid-structural');
+              span.setAttribute(
+                'data-aistudio-ascii-panel',
+                String(run.panelIndex)
+              );
+            }
+
             span.setAttribute('data-aistudio-ascii-cell', run.text);
             span.style.gridColumn = `${run.start + 1} / span ${run.columns}`;
             row.appendChild(span);
@@ -4294,7 +4485,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const text = textNode.nodeValue || '';
     const markerLength = match.marker.length;
-    const innerStart = match.start + markerLength;
+    const innerStart = (
+      match.start + markerLength + (match.openingTrim || 0)
+    );
     const innerEnd = match.end - markerLength;
     const overlapStart = Math.max(record.start, match.start);
     const overlapEnd = Math.min(record.end, match.end);
@@ -4452,7 +4645,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (
       !trimFragmentText(
         preview,
-        match.marker.length,
+        match.marker.length + (match.openingTrim || 0),
         match.marker.length
       ) ||
       fragmentTextWithoutEmbeddedMath(preview) !== match.inner
@@ -4463,7 +4656,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     trimFragmentText(
       contents,
-      match.marker.length,
+      match.marker.length + (match.openingTrim || 0),
       match.marker.length
     );
     markEmbeddedMathRoots(contents);
@@ -4545,12 +4738,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       NodeFilter.SHOW_TEXT
     );
     let text = '';
+    const allowedSkipRoot = (
+      container.matches &&
+      container.matches(
+        'strong:not(.aistudio-md-repaired), ' +
+        'b:not(.aistudio-md-repaired)'
+      )
+    ) ? container : null;
 
     while (walker.nextNode()) {
       const textNode = walker.currentNode;
       const value = textNode.nodeValue || '';
 
-      if (!value || skipped(textNode)) {
+      if (!value || skipped(textNode, allowedSkipRoot)) {
         continue;
       }
 
@@ -4761,9 +4961,32 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       containers.push(root);
     }
 
+    const nativeEmphasis = Array.from(root.querySelectorAll(
+      'strong:not(.aistudio-md-repaired), ' +
+      'b:not(.aistudio-md-repaired)'
+    ));
+
+    if (
+      root.matches &&
+      root.matches(
+        'strong:not(.aistudio-md-repaired), ' +
+        'b:not(.aistudio-md-repaired)'
+      )
+    ) {
+      nativeEmphasis.unshift(root);
+    }
+
+    containers.push(...nativeEmphasis);
+
     let repaired = 0;
+    const visited = new Set();
 
     for (const container of containers) {
+      if (visited.has(container)) {
+        continue;
+      }
+
+      visited.add(container);
       repaired += repairInlineEmphasisInContainer(container);
     }
 
