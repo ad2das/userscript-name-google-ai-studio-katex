@@ -1,6 +1,6 @@
 {
   "name": "google-ai-studio-katex-fix",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "private": true,
   "scripts": {
     "test": "node --check aaa.user.js && node tests/userscript.test.cjs"

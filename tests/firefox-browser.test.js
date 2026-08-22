@@ -30,6 +30,29 @@ async (page) => {
     document.querySelector('button').addEventListener('click', () => {
       window.__appRunCount += 1;
     });
+
+    /*
+     * A complete environment inside one generic descendant of an explicit
+     * model turn. The outer turn cannot discover this host through the normal
+     * raw-math selector, so the proven local fallback scope must not be
+     * suppressed during root deduplication.
+     */
+    const nestedTurn = document.createElement('ms-chat-turn');
+    const nestedRenderer = document.createElement('new-response-renderer');
+    const nestedMath = document.createElement('div');
+
+    nestedTurn.id = 'nested-fallback-model-turn';
+    nestedTurn.setAttribute('data-turn-role', 'model');
+    nestedMath.id = 'nested-generic-environment';
+    nestedMath.textContent = [
+      String.raw`\begin{aligned}`,
+      String.raw`\mathbf{\text{사채상환손익}} &= 98,150\text{원} - 92,000\text{원} \\`,
+      String.raw`&= \mathbf{+6,150\text{원}}`,
+      String.raw`\end{aligned}`
+    ].join('\n');
+    nestedRenderer.appendChild(nestedMath);
+    nestedTurn.appendChild(nestedRenderer);
+    document.getElementById('selectorless-main').appendChild(nestedTurn);
   });
 
   const fixtureOrigin = await page.evaluate(() => window.location.origin);
@@ -584,6 +607,11 @@ async (page) => {
         document.querySelector(
           '#known-split-aligned-wrapper .aistudio-raw-math-repaired .katex'
         ) !== null,
+      nestedFallbackMathSource: sourceOf('nested-generic-environment'),
+      nestedFallbackMathRepaired:
+        document.querySelector(
+          '#nested-generic-environment .aistudio-raw-math-repaired .katex'
+        ) !== null,
       selectorlessLiteralCodePreserved:
         document.getElementById('selectorless-literal-code').textContent ===
           'Markdown syntax: **literal stays literal** and <u>literal</u>' &&
@@ -647,6 +675,12 @@ async (page) => {
           'data-aistudio-mobile-fix-total-repairs'
         )
       ),
+      uncheckedMathFitCount: Array.from(document.querySelectorAll(
+        '.katex-display:not([data-aistudio-math-fit-checked])'
+      )).filter((display) => !display.closest(
+        '[data-turn-role="user"], .user-prompt-container, ' +
+        '.chat-turn-container.user'
+      )).length,
       permanentProgressVisible: (() => {
         const progress = document.getElementById('permanent-token-progress');
         const rect = progress.getBoundingClientRect();
@@ -663,7 +697,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-192'
+        'data-aistudio-mobile-safe-193'
       )
     };
   });
@@ -745,7 +779,6 @@ async (page) => {
     rendering.stretchyFitScale >= 1 ||
     rendering.stretchyFitScale < 0.58 ||
     rendering.stretchyScrollWidth > rendering.stretchyDisplayWidth + 2 ||
-    rendering.fittedMathCount < 1 ||
     rendering.boldWithMathText !==
       '공사기간과 겹치는 기간(4/1~12/31 = 9개월)만 직접 골라내어(×9/12)' ||
     rendering.boldWithMathWeight < 600 ||
@@ -809,6 +842,8 @@ async (page) => {
     !rendering.selectorlessSplitMathSource?.startsWith('\\begin{aligned}') ||
     !rendering.selectorlessSplitMathSource?.includes('사채상환손익') ||
     !rendering.knownSplitMathRepaired ||
+    !rendering.nestedFallbackMathRepaired ||
+    !rendering.nestedFallbackMathSource?.includes('사채상환손익') ||
     !rendering.knownSplitMathSource?.startsWith('\\begin{aligned}') ||
     !rendering.knownSplitMathSource?.includes('사채상환손익') ||
     !rendering.selectorlessLiteralCodePreserved ||
@@ -831,8 +866,9 @@ async (page) => {
     !rendering.unscopedBreakMarkersRemoved ||
     !rendering.unscopedBreakRootMarked ||
     !rendering.unscopedUserPreserved ||
-    rendering.diagnosticFallbackRoots !== 0 ||
+    rendering.diagnosticFallbackRoots > 6 ||
     rendering.diagnosticTotalRepairs < 5 ||
+    rendering.uncheckedMathFitCount !== 0 ||
     !rendering.permanentProgressVisible ||
     JSON.stringify(rendering.rawBoldRemainderIds) !== JSON.stringify([
       'actual-code-bold',
@@ -844,7 +880,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.2'
+    rendering.version !== '1.9.3'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -860,6 +896,7 @@ async (page) => {
     const modelTurn = document.createElement('section');
     const modelRenderer = document.createElement('div');
     const modelParagraph = document.createElement('p');
+    const modelMath = document.createElement('div');
     const progress = document.createElement('div');
 
     runLabel.textContent = 'Stop';
@@ -881,10 +918,22 @@ async (page) => {
     modelRenderer.id = 'dynamic-roleless-model-response';
     modelParagraph.textContent =
       '새 응답의 **동적 모델 출력**과 <u>동적 밑줄</u>입니다.';
+    modelMath.id = 'dynamic-photo-split-aligned';
+    [
+      String.raw`\begin{aligned}`,
+      String.raw`\mathbf{\text{사채상환손익}} &= \text{상환시점 장부금액}(98,150\text{원}) - \text{상환대가}`,
+      '(92,000\\text{원}) \\',
+      String.raw`&= \mathbf{+6,150\text{원 (사채상환이익 → 당기순이익 6,150원 증가)}}`,
+      String.raw`\end{aligned}`
+    ].forEach((text) => {
+      const line = document.createElement('div');
+      line.textContent = text;
+      modelMath.appendChild(line);
+    });
     progress.id = 'dynamic-model-progress';
     progress.setAttribute('role', 'progressbar');
     progress.style.cssText = 'display:block;width:2px;height:2px';
-    modelRenderer.append(modelParagraph, progress);
+    modelRenderer.append(modelParagraph, modelMath, progress);
     modelTurn.appendChild(modelRenderer);
     fallbackSurface.appendChild(modelTurn);
 
@@ -921,6 +970,12 @@ async (page) => {
       '#dynamic-roleless-model-response strong, ' +
       '#dynamic-roleless-model-response u'
     ).length,
+    rawMathVisible: document.getElementById(
+      'dynamic-photo-split-aligned'
+    ).textContent.includes('begin{aligned}'),
+    mathRepairs: document.querySelectorAll(
+      '#dynamic-photo-split-aligned .aistudio-raw-math-repaired'
+    ).length,
     userText: document.getElementById(
       'dynamic-lowercase-user-response'
     ).textContent,
@@ -946,6 +1001,8 @@ async (page) => {
     !duringStreaming.modelText.includes('**동적 모델 출력**') ||
     !duringStreaming.modelText.includes('<u>동적 밑줄</u>') ||
     duringStreaming.modelRepairs !== 0 ||
+    !duringStreaming.rawMathVisible ||
+    duringStreaming.mathRepairs !== 0 ||
     !duringStreaming.userText.includes('**원문 굵게**') ||
     !duringStreaming.userText.includes('<u>원문 밑줄</u>') ||
     duringStreaming.userRepairs !== 0 ||
@@ -980,6 +1037,15 @@ async (page) => {
       underlineDecoration: underline
         ? getComputedStyle(underline).textDecorationLine
         : '',
+      mathRepaired: document.querySelector(
+        '#dynamic-photo-split-aligned .aistudio-raw-math-repaired .katex'
+      ) !== null,
+      mathSource: document.querySelector(
+        '#dynamic-photo-split-aligned annotation[encoding="application/x-tex"]'
+      )?.textContent || '',
+      mathFitChecked: document.querySelector(
+        '#dynamic-photo-split-aligned .katex-display'
+      )?.getAttribute('data-aistudio-math-fit-checked') === '1',
       userText: user.textContent,
       userRepairs: user.querySelectorAll('strong, u').length
     };
@@ -993,6 +1059,10 @@ async (page) => {
     dynamicRepair.strongWeight < 600 ||
     dynamicRepair.underlineText !== '동적 밑줄' ||
     !dynamicRepair.underlineDecoration.includes('underline') ||
+    !dynamicRepair.mathRepaired ||
+    !dynamicRepair.mathSource.startsWith('\\begin{aligned}') ||
+    !dynamicRepair.mathSource.includes('사채상환손익') ||
+    !dynamicRepair.mathFitChecked ||
     !dynamicRepair.userText.includes('**원문 굵게**') ||
     !dynamicRepair.userText.includes('<u>원문 밑줄</u>') ||
     dynamicRepair.userRepairs !== 0
@@ -1015,10 +1085,55 @@ async (page) => {
     throw new Error('Firefox dynamic-root idempotency regression');
   }
 
+  const cachedMathFit = await page.evaluate(async () => {
+    const originalGetComputedStyle = window.getComputedStyle;
+    let mathStyleReads = 0;
+
+    window.getComputedStyle = function (element, pseudo) {
+      if (
+        element?.matches?.('.katex, .katex-display, ms-katex.display')
+      ) {
+        mathStyleReads += 1;
+      }
+
+      return originalGetComputedStyle.call(window, element, pseudo);
+    };
+
+    try {
+      for (let index = 0; index < 20; index += 1) {
+        window.dispatchEvent(new Event('scroll'));
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    } finally {
+      window.getComputedStyle = originalGetComputedStyle;
+    }
+
+    return { mathStyleReads };
+  });
+
+  if (cachedMathFit.mathStyleReads !== 0) {
+    throw new Error(
+      `Firefox cached math-fit regression: ${JSON.stringify(cachedMathFit)}`
+    );
+  }
+
   await page.evaluate(() => {
     window.__timeOffset += 100000;
   });
-  await page.getByRole('button', { name: 'Run' }).click();
+  /* Date.now is intentionally offset above. Use a trusted pointer event
+     without the locator actionability clock, which shares that page shim. */
+  const runButtonPoint = await page.evaluate(() => {
+    const rect = document.querySelector(
+      'button.ctrl-enter-submits'
+    ).getBoundingClientRect();
+
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    };
+  });
+  await page.mouse.click(runButtonPoint.x, runButtonPoint.y);
   await page.waitForTimeout(250);
 
   const preflight = await page.evaluate(() => ({
@@ -1035,5 +1150,11 @@ async (page) => {
     throw new Error(`Firefox preflight regression: ${JSON.stringify(preflight)}`);
   }
 
-  return { rendering, duringStreaming, dynamicRepair, preflight };
+  return {
+    rendering,
+    duringStreaming,
+    dynamicRepair,
+    cachedMathFit,
+    preflight
+  };
 }

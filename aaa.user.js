@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.2
+// @version      1.9.3
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.2';
-  const STYLE_ID = 'aistudio-mobile-safe-192-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-192';
+  const VERSION = '1.9.3';
+  const STYLE_ID = 'aistudio-mobile-safe-193-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-193';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -64,6 +64,7 @@
   const MAX_KATEX_EXPANSIONS = 1000;
   const MAX_KATEX_SIZE = 20;
   const MIN_DISPLAY_MATH_SCALE = 0.58;
+  const MATH_FIT_CHECKED_ATTR = 'data-aistudio-math-fit-checked';
 
   const RAW_MATH_ENVIRONMENTS = new Set([
     'array',
@@ -480,7 +481,8 @@
     'aistudio-mobile-safe-188-style',
     'aistudio-mobile-safe-189-style',
     'aistudio-mobile-safe-190-style',
-    'aistudio-mobile-safe-191-style'
+    'aistudio-mobile-safe-191-style',
+    'aistudio-mobile-safe-192-style'
   ];
 
   const CSS_TEXT = `
@@ -971,10 +973,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   const states = new WeakMap();
   const fallbackRoots = new WeakSet();
+  const rawMathScopeRoots = new WeakSet();
   const mathFitOriginalStyles = new WeakMap();
 
   let cleanedLegacy = false;
-  let pending = false;
+  let pendingTimerId = null;
+  let pendingDueAt = Infinity;
+  let scanQueued = false;
   let observer = null;
   let authRefreshPromise = null;
   let sessionRefreshPromise = null;
@@ -4262,9 +4267,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (
       !availableWidth ||
       !naturalWidth ||
-      !Number.isFinite(baseFontSize) ||
-      naturalWidth <= availableWidth + 1
+      !Number.isFinite(baseFontSize)
     ) {
+      mathFitCache.delete(display);
+      display.removeAttribute(MATH_FIT_CHECKED_ATTR);
+      return false;
+    }
+
+    display.setAttribute(MATH_FIT_CHECKED_ATTR, '1');
+
+    if (naturalWidth <= availableWidth + 1) {
       return false;
     }
 
@@ -4291,12 +4303,31 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function fitWideDisplayMath(force = false) {
+    const uncheckedSelector = `[${MATH_FIT_CHECKED_ATTR}="1"]`;
+    const selector = force
+      ? '.katex-display, ms-katex.display'
+      : [
+          `.katex-display:not(${uncheckedSelector})`,
+          `ms-katex.display:not(${uncheckedSelector})`
+        ].join(',');
     const displays = Array.from(document.querySelectorAll(
-      '.katex-display, ms-katex.display'
-    )).filter((display) => !(
-      display.matches('ms-katex.display') &&
-      display.querySelector('.katex-display')
-    ));
+      selector
+    )).filter((display) => {
+      if (closest(display, USER_SELECTOR)) {
+        return false;
+      }
+
+      const nestedDisplay =
+        display.matches('ms-katex.display') &&
+        display.querySelector('.katex-display');
+
+      if (nestedDisplay) {
+        display.setAttribute(MATH_FIT_CHECKED_ATTR, '1');
+        return false;
+      }
+
+      return true;
+    });
     let fitted = 0;
 
     for (const display of displays) {
@@ -4356,6 +4387,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       ).length > 0;
     }
 
+    if (
+      hasCompleteRawMath &&
+      !(
+        element.matches &&
+        element.matches(RAW_MATH_CONTAINER_SELECTOR)
+      )
+    ) {
+      /*
+       * A proven, bounded environment scope must survive collection even when
+       * an explicit model turn contains it. The outer turn does not scan
+       * arbitrary div/custom hosts, so dropping this scope would lose the
+       * exact raw-math candidate that fallback discovery already validated.
+       */
+      rawMathScopeRoots.add(element);
+    } else {
+      rawMathScopeRoots.delete(element);
+    }
+
     return Boolean(
       findMatches(inlineText).length ||
       findUnderlineMatches(inlineText).length ||
@@ -4388,6 +4437,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const surface =
       closest(parent, FALLBACK_SURFACE_SELECTOR) ||
       document.body;
+    const includeSurface = Boolean(
+      surface &&
+      surface.matches &&
+      surface.matches('ms-chat-turn')
+    );
 
     if (
       !surface ||
@@ -4401,9 +4455,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     for (
       let depth = 0;
-      current && current !== surface && depth < MAX_FALLBACK_ASCENT;
+      current && depth < MAX_FALLBACK_ASCENT;
       depth += 1
     ) {
+      if (current === surface && !includeSurface) {
+        break;
+      }
+
       if (fallbackBlocked(current)) {
         return null;
       }
@@ -4417,6 +4475,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (hasActionableRepairElement(current)) {
         fallbackRoots.add(current);
         return current;
+      }
+
+      if (current === surface) {
+        break;
       }
 
       current = current.parentElement;
@@ -4506,11 +4568,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     ));
 
     /*
-     * 명시적 turn 안에서 fallback 문단도 발견된 경우 가장 바깥 turn만
-     * 처리한다. 알려진 turn이 없는 새 DOM에서는 표식이 있는 최소 문단이
-     * 그대로 남아 주변 UI를 건드리지 않는다.
+     * 일반 fallback 문단은 가장 바깥 turn으로 합치되, 완전한 수식 환경을
+     * 검증한 작은 scope는 유지한다. 상위 turn은 임의 div/custom host를
+     * 순회하지 않으므로 이 예외가 없으면 검증된 수식이 누락된다.
      */
     const roots = candidates.filter((root) => (
+      rawMathScopeRoots.has(root) ||
       !candidates.some((candidate) => (
         candidate !== root &&
         typeof candidate.contains === 'function' &&
@@ -4524,6 +4587,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         typeof left.compareDocumentPosition !== 'function'
       ) {
         return 0;
+      }
+
+      if (left.contains && left.contains(right)) {
+        return rawMathScopeRoots.has(right) ? 1 : -1;
+      }
+
+      if (right.contains && right.contains(left)) {
+        return rawMathScopeRoots.has(left) ? -1 : 1;
       }
 
       const position = left.compareDocumentPosition(right);
@@ -4591,6 +4662,39 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       turn.contains(root) ||
       root.contains(turn)
     );
+  }
+
+  function hasVisibleActivityInside(container) {
+    if (!container || !container.querySelectorAll) {
+      return false;
+    }
+
+    return Array.from(container.querySelectorAll(
+      MODEL_ACTIVITY_INDICATORS.join(',')
+    )).some(visible);
+  }
+
+  function hasLocalGenerationActivity(root, rootTurn) {
+    if (hasVisibleActivityInside(rootTurn)) {
+      return true;
+    }
+
+    const surface = closest(root, FALLBACK_SURFACE_SELECTOR);
+    let current = root && root.parentElement;
+
+    for (
+      let depth = 0;
+      current && current !== surface && depth < MAX_FALLBACK_ASCENT;
+      depth += 1
+    ) {
+      if (hasVisibleActivityInside(current)) {
+        return true;
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
   }
 
   function visible(element) {
@@ -5057,8 +5161,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function scan() {
-    pending = false;
-
     if (
       document.hidden ||
       !ENABLE_SAFE_OUTPUT_REPAIR
@@ -5127,7 +5229,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         root;
       const isLastTurn = sameTurnOrInside(rootTurn, lastTurn);
 
-      if (pageGenerating && isLastTurn) {
+      if (
+        pageGenerating &&
+        (
+          isLastTurn ||
+          hasLocalGenerationActivity(root, rootTurn)
+        )
+      ) {
         deferredThisScan += 1;
         continue;
       }
@@ -5206,9 +5314,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           lastAttemptAt: null
         });
 
-        if (hasRepairableText(after)) {
-          schedule(250);
-        }
+        /* 새 KaTeX의 실제 폭은 DOM 삽입 다음 프레임에서 계산한다. */
+        schedule(hasRepairableText(after) ? 250 : 100);
 
         continue;
       }
@@ -5254,25 +5361,110 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
+  function schedulerNow() {
+    return (
+      window.performance &&
+      typeof window.performance.now === 'function'
+        ? window.performance.now()
+        : Date.now()
+    );
+  }
+
   function schedule(delay = 0) {
+    if (!ENABLE_SAFE_OUTPUT_REPAIR) {
+      return;
+    }
+
+    const dueAt = schedulerNow() + Math.max(0, delay);
+
+    if (scanQueued) {
+      return;
+    }
+
     if (
-      pending ||
-      !ENABLE_SAFE_OUTPUT_REPAIR
+      pendingTimerId !== null &&
+      dueAt >= pendingDueAt
     ) {
       return;
     }
 
-    pending = true;
+    if (pendingTimerId !== null) {
+      window.clearTimeout(pendingTimerId);
+    }
 
-    window.setTimeout(() => {
+    pendingDueAt = dueAt;
+
+    pendingTimerId = window.setTimeout(() => {
+      pendingTimerId = null;
+      pendingDueAt = Infinity;
+      scanQueued = true;
+
+      const run = () => {
+        scanQueued = false;
+        scan();
+      };
+
       if (
         typeof window.requestIdleCallback === 'function'
       ) {
-        window.requestIdleCallback(scan, { timeout: 900 });
+        window.requestIdleCallback(run, { timeout: 900 });
       } else {
-        scan();
+        run();
       }
-    }, delay);
+    }, Math.max(0, dueAt - schedulerNow()));
+  }
+
+  function clearFallbackRootsInsideUser(element) {
+    const userRoot = closest(element, USER_SELECTOR);
+
+    if (!userRoot) {
+      return;
+    }
+
+    const marked = [];
+
+    if (userRoot.matches && userRoot.matches(REPAIRED_ROOT_SELECTOR)) {
+      marked.push(userRoot);
+    }
+
+    if (userRoot.querySelectorAll) {
+      marked.push(...userRoot.querySelectorAll(REPAIRED_ROOT_SELECTOR));
+    }
+
+    for (const root of marked) {
+      root.removeAttribute('data-aistudio-repair-root');
+      fallbackRoots.delete(root);
+      rawMathScopeRoots.delete(root);
+      states.delete(root);
+    }
+  }
+
+  function knownRepairRootForMutation(node) {
+    const element = elementOf(node);
+
+    if (!element || closest(element, USER_SELECTOR)) {
+      return null;
+    }
+
+    let current = element;
+    let knownRoot = null;
+
+    while (current) {
+      if (current.matches && current.matches(REPAIR_ROOT_SELECTOR)) {
+        knownRoot = current;
+      }
+
+      if (
+        current.matches &&
+        current.matches(FALLBACK_SURFACE_SELECTOR)
+      ) {
+        break;
+      }
+
+      current = current.parentElement;
+    }
+
+    return knownRoot;
   }
 
   function isFallbackMutationTarget(element) {
@@ -5340,6 +5532,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function hasUnmeasuredDisplayMath(node) {
+    const element = elementOf(node);
+
+    if (
+      !element ||
+      !element.querySelector ||
+      closest(element, USER_SELECTOR)
+    ) {
+      return false;
+    }
+
+    return Boolean(
+      (
+        element.matches &&
+        element.matches('.katex-display, ms-katex.display') &&
+        !element.hasAttribute(MATH_FIT_CHECKED_ATTR)
+      ) ||
+      element.querySelector(
+        `.katex-display:not([${MATH_FIT_CHECKED_ATTR}]), ` +
+        `ms-katex.display:not([${MATH_FIT_CHECKED_ATTR}])`
+      )
+    );
+  }
+
   function installObserver() {
     if (
       observer ||
@@ -5359,6 +5575,34 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
+        const mutationElement = elementOf(mutation.target);
+
+        if (mutation.type === 'attributes') {
+          clearFallbackRootsInsideUser(mutationElement);
+        }
+
+        if (
+          hasUnmeasuredDisplayMath(mutation.target) ||
+          Array.from(mutation.addedNodes || []).some(
+            hasUnmeasuredDisplayMath
+          )
+        ) {
+          schedule(100);
+        }
+
+        const knownRoot = knownRepairRootForMutation(mutation.target);
+
+        if (knownRoot) {
+          /*
+           * Known roots are already collected by a bounded selector query.
+           * Reset same-text backoff for structural/attribute lifecycle changes
+           * without triggering the expensive full-body fallback TreeWalker.
+           */
+          states.delete(knownRoot);
+          schedule(MUTATION_SCAN_DELAY_MS);
+          return;
+        }
+
         if (shouldObserveMutationTarget(mutation.target)) {
           fallbackDirty = true;
           schedule(MUTATION_SCAN_DELAY_MS);
@@ -5378,6 +5622,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     observer.observe(target, {
       childList: true,
       characterData: true,
+      attributes: true,
+      attributeFilter: [
+        'data-turn-role',
+        'data-message-author-role',
+        'data-role',
+        'data-author-role',
+        'data-message-role',
+        'aria-busy',
+        'aria-hidden',
+        'hidden'
+      ],
       subtree: true
     });
   }

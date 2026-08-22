@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.2/);
+assert.match(source, /\/\/ @version\s+1\.9\.3/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -27,12 +27,19 @@ assert.match(source, /function embeddedMathRoots/);
 assert.match(source, /function hasActionableRepairElement/);
 assert.match(source, /hasCompleteRawMath/);
 assert.match(source, /fallbackRoots\.has\(root\)/);
+assert.match(source, /const rawMathScopeRoots = new WeakSet\(\)/);
+assert.match(source, /rawMathScopeRoots\.has\(root\) \|\|/);
 assert.match(source, /function hasSplitRawMathEnvironment/);
 assert.match(
   source,
   /fallbackRoots\.has\(root\) \|\|\s*hasSplitRawMathEnvironment\(root, rootText\)/
 );
 assert.match(source, /function fitWideDisplayMath/);
+assert.match(source, /function hasUnmeasuredDisplayMath/);
+assert.match(source, /MATH_FIT_CHECKED_ATTR/);
+assert.match(source, /attributes: true/);
+assert.match(source, /'aria-busy',[\s\S]*?'aria-hidden',[\s\S]*?'hidden'/);
+assert.match(source, /function knownRepairRootForMutation/);
 assert.match(
   source,
   /closest\(parent, FALLBACK_SURFACE_SELECTOR\) \|\|\s*document\.body/
@@ -48,7 +55,7 @@ assert.match(
 );
 assert.match(
   source,
-  /if \(pageGenerating && isLastTurn\) \{[\s\S]*?deferredThisScan \+= 1;[\s\S]*?continue;/
+  /hasLocalGenerationActivity\(root, rootTurn\)[\s\S]*?deferredThisScan \+= 1;[\s\S]*?continue;/
 );
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 

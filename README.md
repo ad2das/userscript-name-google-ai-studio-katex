@@ -32,6 +32,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   without rebuilding or deleting those surrounding DOM elements
 - Raw TeX environments split across sibling AI Studio renderer blocks, including
   known `ms-cmark-node` turns as well as selectorless fallback markup
+- Complete raw TeX inside an otherwise unknown `div`/custom renderer nested in
+  a known model turn, without broad generic-element scans
 - Bold fallback for unsupported enclosed and currency glyphs such as `①` and `₩`
 - Native vertical page scrolling
 - Split `**bold**` / `__bold__` Markdown text in model responses, including
@@ -52,6 +54,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Per-turn generation guarding: a live `Stop` action defers only the active
   latest response, while already completed conversation turns are still
   repaired; a visible `Run` action overrides stale progress widgets
+- Attribute-only role/busy/visibility lifecycle changes reset the local repair
+  state, while known-turn mutations avoid the full-page fallback TreeWalker
+- Display-math width measurements are cached and rerun only for new formulas or
+  viewport resizes, keeping long mobile chats responsive
 - Mobile readable Google/Samsung-like font stack
 - Code/pre blocks with horizontal scrolling
 - Long-running AI Studio document sessions kept warm without reloading the tab
@@ -67,7 +73,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.9.2 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.9.3 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
