@@ -253,6 +253,40 @@ async (page) => {
         Math.max(...positions) - Math.min(...positions)
       ))
     );
+    const asciiDividend = document.getElementById(
+      'reported-ascii-dividend-comparison'
+    );
+    const asciiDividendCode = asciiDividend.querySelector('code');
+    const asciiDividendOriginal = [
+      '< 현금배당 (실질적 유출) >                    < 주식배당 (자본 내 대체) >',
+      '________________________________               ________________________________',
+      '      [자 산]       |      [자 본]                 [자 산]       |      [자 본]',
+      '___________________+____________               ___________________+____________',
+      '현금 (XX)           |                           (변동 없음)        | 자본금 XX',
+      '                    | 미처분이익잉여금 (XX)                        | 미처분이익잉여금',
+      '________________________┴_______               ________________________┴_______',
+      '순자산 (자본총계) XX 감소!                     순자산 (자본총계) 변동 없음!'
+    ].join('\n');
+    const asciiDividendStructural = Array.from(
+      asciiDividend.querySelectorAll('.aistudio-ascii-grid-structural')
+    );
+    const asciiDividendColumns = new Map();
+
+    for (const junction of asciiDividendStructural) {
+      const panel = junction.getAttribute('data-aistudio-ascii-panel');
+      const column = getComputedStyle(junction).gridColumnStart;
+      const key = `${panel}:${column}`;
+      const positions = asciiDividendColumns.get(key) || [];
+      positions.push(junction.getBoundingClientRect().left);
+      asciiDividendColumns.set(key, positions);
+    }
+
+    const asciiDividendDrift = Math.max(
+      0,
+      ...Array.from(asciiDividendColumns.values()).map((positions) => (
+        Math.max(...positions) - Math.min(...positions)
+      ))
+    );
     const accountingTable = document.getElementById('accounting-mobile-table');
     const accountingWrapper = accountingTable.closest(
       '.aistudio-table-scroll'
@@ -678,6 +712,24 @@ async (page) => {
       asciiComparisonJunctionDrift,
       asciiComparisonScrollable:
         asciiComparison.scrollWidth > asciiComparison.clientWidth,
+      asciiDividendRepaired:
+        asciiDividend.classList.contains(
+          'aistudio-ascii-tree-block-repaired'
+        ) &&
+        asciiDividend.querySelector(
+          '.aistudio-ascii-character-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiDividendOriginalPreserved:
+        asciiDividendCode.textContent === asciiDividendOriginal &&
+        asciiDividendCode.innerText === asciiDividendOriginal &&
+        asciiDividend.textContent === asciiDividendOriginal,
+      asciiDividendTeeCount: asciiDividend.querySelectorAll(
+        '.aistudio-ascii-grid-structural[data-aistudio-ascii-cell="┴"]'
+      ).length,
+      asciiDividendStructuralColumnCount: asciiDividendColumns.size,
+      asciiDividendDrift,
+      asciiDividendScrollable:
+        asciiDividend.scrollWidth > asciiDividend.clientWidth,
       accountingTableWrapped:
         accountingTable.getAttribute('data-aistudio-mobile-table') === '1' &&
         accountingWrapper?.getAttribute('data-aistudio-table-scroll') === '1',
@@ -867,7 +919,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-199'
+        'data-aistudio-mobile-safe-1100'
       )
     };
   });
@@ -1000,6 +1052,12 @@ async (page) => {
     rendering.asciiComparisonRepeatedColumnCount !== 2 ||
     rendering.asciiComparisonJunctionDrift > 0.5 ||
     !rendering.asciiComparisonScrollable ||
+    !rendering.asciiDividendRepaired ||
+    !rendering.asciiDividendOriginalPreserved ||
+    rendering.asciiDividendTeeCount !== 2 ||
+    rendering.asciiDividendStructuralColumnCount !== 2 ||
+    rendering.asciiDividendDrift > 0.5 ||
+    !rendering.asciiDividendScrollable ||
     !rendering.accountingTableWrapped ||
     rendering.accountingWrapperCount !== 1 ||
     !rendering.accountingTableTextPreserved ||
@@ -1084,7 +1142,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.9'
+    rendering.version !== '1.10.0'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

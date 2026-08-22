@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.9/);
+assert.match(source, /\/\/ @version\s+1\.10\.0/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -412,6 +412,39 @@ assert.ok(
   asciiComparison.lines.flatMap((line) => Array.from(line.runs))
     .filter((run) => run.type === 'junction').length >= 6
 );
+const reportedAsciiDividendComparison = [
+  '< 현금배당 (실질적 유출) >                    < 주식배당 (자본 내 대체) >',
+  '________________________________               ________________________________',
+  '      [자 산]       |      [자 본]                 [자 산]       |      [자 본]',
+  '___________________+____________               ___________________+____________',
+  '현금 (XX)           |                           (변동 없음)        | 자본금 XX',
+  '                    | 미처분이익잉여금 (XX)                        | 미처분이익잉여금',
+  '________________________┴_______               ________________________┴_______',
+  '순자산 (자본총계) XX 감소!                     순자산 (자본총계) 변동 없음!'
+].join('\n');
+const asciiDividendComparison = api.analyzeAsciiDiagram(
+  reportedAsciiDividendComparison
+);
+
+assert.ok(asciiDividendComparison);
+assert.equal(asciiDividendComparison.kind, 'character-grid');
+assert.equal(asciiDividendComparison.source, reportedAsciiDividendComparison);
+assert.equal(asciiDividendComparison.panelAnchors.length, 2);
+assert.equal(
+  asciiDividendComparison.lines.flatMap((line) => Array.from(line.runs))
+    .filter((run) => run.text === '┴' && run.structural).length,
+  2
+);
+for (let panelIndex = 0; panelIndex < 2; panelIndex += 1) {
+  assert.deepEqual(
+    Array.from(new Set(
+      asciiDividendComparison.lines.flatMap((line) => Array.from(line.runs))
+        .filter((run) => run.structural && run.panelIndex === panelIndex)
+        .map((run) => run.start)
+    )),
+    [asciiDividendComparison.panelAnchors[panelIndex]]
+  );
+}
 assert.equal(
   api.analyzeMultiPanelAsciiTable(
     'const x = a < b;\n______\nvalue | other\n______'
