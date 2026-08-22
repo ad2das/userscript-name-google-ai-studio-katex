@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.6/);
+assert.match(source, /\/\/ @version\s+1\.9\.7/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -71,6 +71,10 @@ const instrumented = source.replace(
   `
   globalThis.__userscriptTest = {
     analyzeAsciiBoxTree,
+    analyzeAsciiDiagram,
+    analyzeMultiPanelAsciiTable,
+    asciiCharacterGridLine,
+    asciiCharacterWidth,
     availableKatex,
     bracesAreBalanced,
     MODEL_ACTIVITY_SELECTOR,
@@ -358,6 +362,35 @@ assert.equal(
     '│ A │ B │',
     '└──┴──┘'
   ].join('\n')),
+  null
+);
+assert.equal(api.asciiCharacterWidth('A'), 1);
+assert.equal(api.asciiCharacterWidth('가'), 2);
+const reportedAsciiComparison = [
+  '< 유상증자 (실질적 증자) >                    < 무상증자 (형식적 증자) >',
+  '______________________________               ______________________________',
+  '      [자 산]       |      [자 본]                 [자 산]       |      [자 본]',
+  '___________________+__________               ___________________+__________',
+  '현금 +XXX           | 자본금 +XXX              (변동 없음)       | 자본금 +XXX',
+  '                    | 주식발행초과금 +XXX                         | 주식발행초과금 -XXX',
+  '___________________+__________               ___________________+__________',
+  '순자산(자본총계) XXX 증가!                    순자산(자본총계) 변동 없음!'
+].join('\n');
+const asciiComparison = api.analyzeAsciiDiagram(reportedAsciiComparison);
+
+assert.ok(asciiComparison);
+assert.equal(asciiComparison.kind, 'character-grid');
+assert.equal(asciiComparison.source, reportedAsciiComparison);
+assert.ok(asciiComparison.columns > 60);
+assert.ok(asciiComparison.runCount < 200);
+assert.ok(
+  asciiComparison.lines.flatMap((line) => Array.from(line.runs))
+    .filter((run) => run.type === 'junction').length >= 6
+);
+assert.equal(
+  api.analyzeMultiPanelAsciiTable(
+    'const x = a < b;\n______\nvalue | other\n______'
+  ),
   null
 );
 

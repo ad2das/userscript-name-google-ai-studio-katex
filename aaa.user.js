@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.6
+// @version      1.9.7
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.6';
-  const STYLE_ID = 'aistudio-mobile-safe-196-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-196';
+  const VERSION = '1.9.7';
+  const STYLE_ID = 'aistudio-mobile-safe-197-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-197';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -42,8 +42,8 @@
    *
    * 단, 한국어 설명문이 들여쓰기 때문에 pre > code로 잘못
    * 분류된 경우에는 코드 신호가 없을 때만 raw bold를 복구한다.
-   * 단순 박스문자 분류 트리는 원문 code를 보존한 채 aria-hidden 시각
-   * 레이어만 추가해 한글/ASCII 글꼴 폭 차이로 틀어진 연결 열을 맞춘다.
+   * 박스문자 트리와 보수적으로 식별한 한글 다중 열 ASCII 표는 원문 code를
+   * 보존한 채 aria-hidden 시각 레이어만 추가해 연결 열을 맞춘다.
    *
    * display 수식의 바깥 래퍼는 세로 clipping을 막기 위해 overflow: visible로
    * 두되, KaTeX의 stretchy SVG 내부 clipping 규칙은 반드시 유지한다.
@@ -67,6 +67,8 @@
   const MAX_KATEX_SIZE = 20;
   const MAX_ASCII_TREE_LENGTH = 8000;
   const MAX_ASCII_TREE_LINES = 120;
+  const MAX_ASCII_GRID_COLUMNS = 320;
+  const MAX_ASCII_GRID_RUNS = 1200;
   const MIN_DISPLAY_MATH_SCALE = 0.58;
   const MATH_FIT_CHECKED_ATTR = 'data-aistudio-math-fit-checked';
   const MOBILE_TABLE_ATTR = 'data-aistudio-mobile-table';
@@ -490,7 +492,8 @@
     'aistudio-mobile-safe-192-style',
     'aistudio-mobile-safe-193-style',
     'aistudio-mobile-safe-194-style',
-    'aistudio-mobile-safe-195-style'
+    'aistudio-mobile-safe-195-style',
+    'aistudio-mobile-safe-196-style'
   ];
 
   const CSS_TEXT = `
@@ -845,6 +848,43 @@ ${SCOPE} .aistudio-ascii-tree-right {
 
 ${SCOPE} .aistudio-ascii-tree-plain {
   grid-column: 1 / -1 !important;
+}
+
+/* 좌우 표처럼 여러 축을 가진 ASCII 도식은 1ch 논리 격자에 배치한다. */
+${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-character-grid {
+  display: block !important;
+  width: max-content !important;
+  min-width: 100% !important;
+}
+
+${SCOPE} .aistudio-ascii-character-grid .aistudio-ascii-tree-row {
+  display: grid !important;
+  grid-template-columns: repeat(
+    var(--aistudio-ascii-columns),
+    1ch
+  ) !important;
+  width: max-content !important;
+  min-width: calc(var(--aistudio-ascii-columns) * 1ch) !important;
+  min-height: 1.55em !important;
+  line-height: 1.55 !important;
+}
+
+${SCOPE} .aistudio-ascii-grid-run {
+  grid-row: 1 !important;
+  align-self: baseline !important;
+  min-width: 0 !important;
+  white-space: pre !important;
+  overflow: visible !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+${SCOPE} .aistudio-ascii-grid-run::before {
+  content: attr(data-aistudio-ascii-cell) !important;
+}
+
+${SCOPE} .aistudio-ascii-grid-wide {
+  font-family: var(--as-mono) !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
@@ -3571,7 +3611,157 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return null;
     }
 
-    return { lines, source };
+    return { kind: 'single-axis', lines, source };
+  }
+
+  function asciiCharacterWidth(character) {
+    const point = character.codePointAt(0) || 0;
+
+    if (
+      point === 0x200d ||
+      (point >= 0x0300 && point <= 0x036f) ||
+      (point >= 0xfe00 && point <= 0xfe0f)
+    ) {
+      return 0;
+    }
+
+    return (
+      (point >= 0x1100 && point <= 0x115f) ||
+      point === 0x2329 ||
+      point === 0x232a ||
+      (point >= 0x2e80 && point <= 0xa4cf) ||
+      (point >= 0xac00 && point <= 0xd7a3) ||
+      (point >= 0xf900 && point <= 0xfaff) ||
+      (point >= 0xfe10 && point <= 0xfe19) ||
+      (point >= 0xfe30 && point <= 0xfe6f) ||
+      (point >= 0xff00 && point <= 0xff60) ||
+      (point >= 0xffe0 && point <= 0xffe6) ||
+      (point >= 0x1f300 && point <= 0x1faff) ||
+      (point >= 0x20000 && point <= 0x3fffd)
+    ) ? 2 : 1;
+  }
+
+  function asciiCharacterGridLine(line) {
+    const runs = [];
+    let column = 0;
+    let current = null;
+
+    const flush = () => {
+      if (current) {
+        runs.push(current);
+        current = null;
+      }
+    };
+
+    for (const character of Array.from(line)) {
+      if (character === '\t') {
+        flush();
+        column += 8 - (column % 8);
+        continue;
+      }
+
+      const width = asciiCharacterWidth(character);
+
+      if (!width) {
+        if (current) {
+          current.text += character;
+        }
+        continue;
+      }
+
+      if (character === ' ') {
+        flush();
+        column += 1;
+        continue;
+      }
+
+      const type = /[|│+┼]/.test(character)
+        ? 'junction'
+        : width === 2
+          ? 'wide'
+          : 'narrow';
+
+      if (
+        current &&
+        current.type === type &&
+        type !== 'junction' &&
+        current.start + current.columns === column
+      ) {
+        current.text += character;
+        current.columns += width;
+      } else {
+        flush();
+        current = {
+          columns: width,
+          start: column,
+          text: character,
+          type
+        };
+      }
+
+      column += width;
+    }
+
+    flush();
+    return { columns: column, runs };
+  }
+
+  function analyzeMultiPanelAsciiTable(text) {
+    if (
+      !text ||
+      text.length > MAX_ASCII_TREE_LENGTH
+    ) {
+      return null;
+    }
+
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+    const headings = source.match(/<[^>\n]{2,}>/g) || [];
+    const dividerCount = rawLines.filter((line) => (
+      /_{6,}|─{6,}/.test(line)
+    )).length;
+    const verticalCount = rawLines.filter((line) => /[|│]/.test(line)).length;
+
+    if (
+      rawLines.length < 5 ||
+      rawLines.length > MAX_ASCII_TREE_LINES ||
+      headings.length < 2 ||
+      dividerCount < 2 ||
+      verticalCount < 2 ||
+      !/[가-힣]/.test(source)
+    ) {
+      return null;
+    }
+
+    const lines = rawLines.map(asciiCharacterGridLine);
+    const columns = Math.max(...lines.map((line) => line.columns));
+    const runCount = lines.reduce(
+      (total, line) => total + line.runs.length,
+      0
+    );
+
+    if (
+      columns < 30 ||
+      columns > MAX_ASCII_GRID_COLUMNS ||
+      runCount > MAX_ASCII_GRID_RUNS
+    ) {
+      return null;
+    }
+
+    return {
+      columns,
+      kind: 'character-grid',
+      lines,
+      runCount,
+      source
+    };
+  }
+
+  function analyzeAsciiDiagram(text) {
+    return (
+      analyzeAsciiBoxTree(text) ||
+      analyzeMultiPanelAsciiTable(text)
+    );
   }
 
   function eligibleAsciiTreeCode(code) {
@@ -3612,10 +3802,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function hasAsciiBoxTreeHint(text) {
     return Boolean(
       text &&
-      /[┌└]/.test(text) &&
-      /[├┼]/.test(text) &&
-      /[│|]/.test(text) &&
-      text.includes('─')
+      (
+        (
+          /[┌└]/.test(text) &&
+          /[├┼]/.test(text) &&
+          /[│|]/.test(text) &&
+          text.includes('─')
+        ) ||
+        (
+          /[가-힣]/.test(text) &&
+          /<[^>\n]{2,}>[\s\S]*<[^>\n]{2,}>/.test(text) &&
+          /_{6,}|─{6,}/.test(text) &&
+          /[|│]/.test(text)
+        )
+      )
     );
   }
 
@@ -3627,7 +3827,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     return asciiTreeCodeCandidates(root).some((code) => (
-      Boolean(analyzeAsciiBoxTree(code.textContent || ''))
+      Boolean(analyzeAsciiDiagram(code.textContent || ''))
     ));
   }
 
@@ -3645,7 +3845,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let repaired = 0;
 
     for (const code of asciiTreeCodeCandidates(root)) {
-      const analysis = analyzeAsciiBoxTree(code.textContent || '');
+      const analysis = analyzeAsciiDiagram(code.textContent || '');
 
       if (!analysis) {
         continue;
@@ -3656,12 +3856,29 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       visual.className = 'aistudio-ascii-tree-visual';
       visual.setAttribute('aria-hidden', 'true');
 
+      if (analysis.kind === 'character-grid') {
+        visual.classList.add('aistudio-ascii-character-grid');
+        visual.style.setProperty(
+          '--aistudio-ascii-columns',
+          String(analysis.columns)
+        );
+      }
+
       analysis.lines.forEach((line, lineIndex) => {
         const row = document.createElement('span');
         row.className = 'aistudio-ascii-tree-row';
         row.setAttribute('data-aistudio-ascii-tree-line', String(lineIndex));
 
-        if (Object.prototype.hasOwnProperty.call(line, 'plain')) {
+        if (analysis.kind === 'character-grid') {
+          for (const run of line.runs) {
+            const span = document.createElement('span');
+            span.className = 'aistudio-ascii-grid-run';
+            span.classList.add(`aistudio-ascii-grid-${run.type}`);
+            span.setAttribute('data-aistudio-ascii-cell', run.text);
+            span.style.gridColumn = `${run.start + 1} / span ${run.columns}`;
+            row.appendChild(span);
+          }
+        } else if (Object.prototype.hasOwnProperty.call(line, 'plain')) {
           const plain = document.createElement('span');
           plain.className = 'aistudio-ascii-tree-plain';
           plain.setAttribute('data-aistudio-ascii-cell', line.plain);
@@ -4852,7 +5069,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (
       asciiCode &&
       eligibleAsciiTreeCode(asciiCode) &&
-      analyzeAsciiBoxTree(asciiCode.textContent || '')
+      analyzeAsciiDiagram(asciiCode.textContent || '')
     ) {
       fallbackRoots.add(asciiCode);
       return asciiCode;

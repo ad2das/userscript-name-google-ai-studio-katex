@@ -63,9 +63,9 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   viewport resizes, keeping long mobile chats responsive
 - Mobile readable Google/Samsung-like font stack
 - Code/pre blocks with horizontal scrolling
-- Simple `┌ ┼ │ └ ─` classification trees aligned through shared grid columns,
-  preserving their original text for copy/download while leaving normal and
-  language-labelled code untouched
+- Simple `┌ ┼ │ └ ─` trees and Korean multi-panel ASCII tables aligned through
+  bounded grids (Hangul 2 columns, ASCII 1), preserving their original text for
+  copy/download while leaving normal and language-labelled code untouched
 - Long-running AI Studio document sessions kept warm without reloading the tab
 - A Google-auth/session preflight before stale Run/`Ctrl+Enter` submissions
 
@@ -79,7 +79,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.9.6 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.9.7 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
@@ -93,8 +93,8 @@ after KaTeX renders each candidate without an error. Surrounding prose and line 
 are preserved. Existing rendered math is left untouched except when its TeX source
 contains the known nested-bold inheritance defect. Fenced/code text, links,
 editable/user content, and malformed or unsupported environments are preserved. Only
-conservatively detected single-axis box-drawing trees receive a visual grid wrapper;
-their original text content is unchanged.
+conservatively detected box-drawing trees or Korean multi-panel ASCII tables receive
+a visual grid wrapper; their original text content is unchanged.
 KaTeX rendering uses `trust: false` with bounded input size, expansion count, and
 rendered size.
 

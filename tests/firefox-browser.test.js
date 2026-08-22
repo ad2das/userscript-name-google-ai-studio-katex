@@ -207,6 +207,41 @@ async (page) => {
       '             │',
       '             └─ 자본조정 (자본의 차감(-) 항목 또는 임시 가계정 성격)'
     ].join('\n');
+    const asciiComparison = document.getElementById(
+      'reported-ascii-comparison'
+    );
+    const asciiComparisonCode = asciiComparison.querySelector('code');
+    const asciiComparisonOriginal = [
+      '< 유상증자 (실질적 증자) >                    < 무상증자 (형식적 증자) >',
+      '______________________________               ______________________________',
+      '      [자 산]       |      [자 본]                 [자 산]       |      [자 본]',
+      '___________________+__________               ___________________+__________',
+      '현금 +XXX           | 자본금 +XXX              (변동 없음)       | 자본금 +XXX',
+      '                    | 주식발행초과금 +XXX                         | 주식발행초과금 -XXX',
+      '___________________+__________               ___________________+__________',
+      '순자산(자본총계) XXX 증가!                    순자산(자본총계) 변동 없음!'
+    ].join('\n');
+    const asciiComparisonJunctions = Array.from(
+      asciiComparison.querySelectorAll('.aistudio-ascii-grid-junction')
+    );
+    const asciiComparisonColumns = new Map();
+
+    for (const junction of asciiComparisonJunctions) {
+      const column = getComputedStyle(junction).gridColumnStart;
+      const positions = asciiComparisonColumns.get(column) || [];
+      positions.push(junction.getBoundingClientRect().left);
+      asciiComparisonColumns.set(column, positions);
+    }
+
+    const asciiComparisonRepeatedColumns = Array.from(
+      asciiComparisonColumns.values()
+    ).filter((positions) => positions.length >= 2);
+    const asciiComparisonJunctionDrift = Math.max(
+      0,
+      ...asciiComparisonRepeatedColumns.map((positions) => (
+        Math.max(...positions) - Math.min(...positions)
+      ))
+    );
     const accountingTable = document.getElementById('accounting-mobile-table');
     const accountingWrapper = accountingTable.closest(
       '.aistudio-table-scroll'
@@ -284,6 +319,7 @@ async (page) => {
       )
     ).filter((element) => (
       /(?:\*\*|__)/.test(element.textContent || '') &&
+      !element.matches('.aistudio-ascii-tree-block-repaired') &&
       !element.querySelector(rawBoldLeafSelector)
     )).map((element) => element.id).sort();
     return {
@@ -587,6 +623,26 @@ async (page) => {
       asciiTreeRowCount: asciiTree.querySelectorAll(
         '.aistudio-ascii-tree-row'
       ).length,
+      asciiComparisonRepaired:
+        asciiComparison.classList.contains(
+          'aistudio-ascii-tree-block-repaired'
+        ) &&
+        asciiComparison.querySelector(
+          '.aistudio-ascii-character-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiComparisonOriginalPreserved:
+        asciiComparisonCode.textContent === asciiComparisonOriginal &&
+        asciiComparisonCode.innerText === asciiComparisonOriginal &&
+        asciiComparison.textContent === asciiComparisonOriginal,
+      asciiComparisonJunctionCount: asciiComparisonJunctions.length,
+      asciiComparisonRunCount: asciiComparison.querySelectorAll(
+        '.aistudio-ascii-grid-run'
+      ).length,
+      asciiComparisonRepeatedColumnCount:
+        asciiComparisonRepeatedColumns.length,
+      asciiComparisonJunctionDrift,
+      asciiComparisonScrollable:
+        asciiComparison.scrollWidth > asciiComparison.clientWidth,
       accountingTableWrapped:
         accountingTable.getAttribute('data-aistudio-mobile-table') === '1' &&
         accountingWrapper?.getAttribute('data-aistudio-table-scroll') === '1',
@@ -776,7 +832,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-196'
+        'data-aistudio-mobile-safe-197'
       )
     };
   });
@@ -897,6 +953,14 @@ async (page) => {
     rendering.asciiTreeJunctionXs.length !== 5 ||
     Math.max(...rendering.asciiTreeJunctionXs) -
       Math.min(...rendering.asciiTreeJunctionXs) > 0.5 ||
+    !rendering.asciiComparisonRepaired ||
+    !rendering.asciiComparisonOriginalPreserved ||
+    rendering.asciiComparisonJunctionCount < 8 ||
+    rendering.asciiComparisonRunCount < 1 ||
+    rendering.asciiComparisonRunCount > 200 ||
+    rendering.asciiComparisonRepeatedColumnCount < 2 ||
+    rendering.asciiComparisonJunctionDrift > 0.5 ||
+    !rendering.asciiComparisonScrollable ||
     !rendering.accountingTableWrapped ||
     rendering.accountingWrapperCount !== 1 ||
     !rendering.accountingTableTextPreserved ||
@@ -981,7 +1045,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.6'
+    rendering.version !== '1.9.7'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -1225,9 +1289,9 @@ async (page) => {
   /* Date.now is intentionally offset above. Use a trusted pointer event
      without the locator actionability clock, which shares that page shim. */
   const runButtonPoint = await page.evaluate(() => {
-    const rect = document.querySelector(
-      'button.ctrl-enter-submits'
-    ).getBoundingClientRect();
+    const button = document.querySelector('button.ctrl-enter-submits');
+    button.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = button.getBoundingClientRect();
 
     return {
       x: rect.left + rect.width / 2,
