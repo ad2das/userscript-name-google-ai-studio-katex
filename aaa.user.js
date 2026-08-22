@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.5
+// @version      1.9.6
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.5';
-  const STYLE_ID = 'aistudio-mobile-safe-195-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-195';
+  const VERSION = '1.9.6';
+  const STYLE_ID = 'aistudio-mobile-safe-196-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-196';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -69,6 +69,7 @@
   const MAX_ASCII_TREE_LINES = 120;
   const MIN_DISPLAY_MATH_SCALE = 0.58;
   const MATH_FIT_CHECKED_ATTR = 'data-aistudio-math-fit-checked';
+  const MOBILE_TABLE_ATTR = 'data-aistudio-mobile-table';
 
   const RAW_MATH_ENVIRONMENTS = new Set([
     'array',
@@ -488,7 +489,8 @@
     'aistudio-mobile-safe-191-style',
     'aistudio-mobile-safe-192-style',
     'aistudio-mobile-safe-193-style',
-    'aistudio-mobile-safe-194-style'
+    'aistudio-mobile-safe-194-style',
+    'aistudio-mobile-safe-195-style'
   ];
 
   const CSS_TEXT = `
@@ -893,14 +895,63 @@ ${SCOPE} table {
 }
 
 ${SCOPE} :where(th, td) {
-  min-width: 0 !important;
+  min-width: 4.5em !important;
   box-sizing: border-box !important;
 
   white-space: normal !important;
-  overflow-wrap: anywhere !important;
-  word-break: normal !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+  hyphens: none !important;
 
   vertical-align: top !important;
+}
+
+${SCOPE} th {
+  white-space: nowrap !important;
+}
+
+${SCOPE} :where(th, td):nth-child(1) {
+  min-width: 4.25em !important;
+  white-space: nowrap !important;
+}
+
+${SCOPE} :where(th, td):nth-child(2) {
+  min-width: 3.25em !important;
+  white-space: nowrap !important;
+}
+
+${SCOPE} .aistudio-table-scroll {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0.65em 0 !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  box-sizing: border-box !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-x: contain !important;
+  scrollbar-gutter: stable !important;
+}
+
+${SCOPE} .aistudio-table-scroll > table[${MOBILE_TABLE_ATTR}="1"] {
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  table-layout: auto !important;
+}
+
+${SCOPE} .aistudio-table-scroll :where(th, td) {
+  max-width: min(28em, 68vw) !important;
+  line-height: 1.5 !important;
+}
+
+${SCOPE} .aistudio-table-scroll :where(th, td):nth-child(3) {
+  min-width: 7em !important;
+}
+
+${SCOPE} .aistudio-table-scroll :where(th, td):nth-child(4) {
+  font-variant-numeric: tabular-nums !important;
 }
 
 ${SCOPE} :where(img, video, canvas) {
@@ -3585,7 +3636,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     return Boolean(
       hasRepairableText(rootText) ||
-      hasUnrepairedAsciiBoxTree(root, rootText)
+      hasUnrepairedAsciiBoxTree(root, rootText) ||
+      hasUnwrappedMobileTable(root)
     );
   }
 
@@ -3936,6 +3988,77 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     for (const cell of cells) {
       repaired += repairSplitTableBreaksInCell(cell);
+    }
+
+    return repaired;
+  }
+
+  function eligibleMobileTable(table) {
+    return Boolean(
+      table &&
+      table.isConnected &&
+      table.matches &&
+      table.matches('table') &&
+      !table.hasAttribute(MOBILE_TABLE_ATTR) &&
+      !closest(table, USER_SELECTOR) &&
+      !closest(
+        table,
+        'code, pre, [contenteditable="true"], [role="textbox"]'
+      )
+    );
+  }
+
+  function mobileTableCandidates(root) {
+    if (!root || !root.querySelectorAll) {
+      return [];
+    }
+
+    const tables = Array.from(root.querySelectorAll(
+      `table:not([${MOBILE_TABLE_ATTR}])`
+    ));
+
+    if (
+      root.matches &&
+      root.matches(`table:not([${MOBILE_TABLE_ATTR}])`)
+    ) {
+      tables.unshift(root);
+    }
+
+    return tables.filter(eligibleMobileTable);
+  }
+
+  function hasUnwrappedMobileTable(root) {
+    return mobileTableCandidates(root).length > 0;
+  }
+
+  function repairMobileTables(root) {
+    let repaired = 0;
+
+    for (const table of mobileTableCandidates(root)) {
+      const parent = table.parentNode;
+
+      if (!parent) {
+        continue;
+      }
+
+      if (
+        parent.matches &&
+        parent.matches('.aistudio-table-scroll')
+      ) {
+        table.setAttribute(MOBILE_TABLE_ATTR, '1');
+        continue;
+      }
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'aistudio-table-scroll';
+      wrapper.setAttribute('data-aistudio-table-scroll', '1');
+      wrapper.setAttribute('role', 'region');
+      wrapper.setAttribute('aria-label', '표 가로 스크롤');
+      wrapper.setAttribute('tabindex', '0');
+      table.setAttribute(MOBILE_TABLE_ATTR, '1');
+      parent.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+      repaired += 1;
     }
 
     return repaired;
@@ -4448,6 +4571,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let repaired = repairRawMath(root, rootText);
     repaired += repairRenderedMathBold(root);
     repaired += repairSplitTableBreaks(root);
+    repaired += repairMobileTables(root);
     repaired += repairLiteralUnderlines(root);
     repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
@@ -4703,7 +4827,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       findUnderlineMatches(inlineText).length ||
       hasLiteralTableBreak(text) ||
       hasCompleteRawMath ||
-      hasUnrepairedAsciiBoxTree(element, text)
+      hasUnrepairedAsciiBoxTree(element, text) ||
+      hasUnwrappedMobileTable(element)
     );
   }
 

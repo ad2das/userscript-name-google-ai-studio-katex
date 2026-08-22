@@ -207,6 +207,13 @@ async (page) => {
       '             │',
       '             └─ 자본조정 (자본의 차감(-) 항목 또는 임시 가계정 성격)'
     ].join('\n');
+    const accountingTable = document.getElementById('accounting-mobile-table');
+    const accountingWrapper = accountingTable.closest(
+      '.aistudio-table-scroll'
+    );
+    const accountingDateCell = document.getElementById('accounting-date-cell');
+    const accountingSideCell = document.getElementById('accounting-side-cell');
+    const accountingNameCell = document.getElementById('accounting-name-cell');
     const currentModelResponse = document.getElementById(
       'reported-current-model-response'
     );
@@ -580,6 +587,30 @@ async (page) => {
       asciiTreeRowCount: asciiTree.querySelectorAll(
         '.aistudio-ascii-tree-row'
       ).length,
+      accountingTableWrapped:
+        accountingTable.getAttribute('data-aistudio-mobile-table') === '1' &&
+        accountingWrapper?.getAttribute('data-aistudio-table-scroll') === '1',
+      accountingWrapperCount: document.querySelectorAll(
+        '#accounting-table-narrow-host > .aistudio-table-scroll'
+      ).length,
+      accountingTableTextPreserved:
+        accountingTable.textContent.includes('증자일') &&
+        accountingTable.textContent.includes('주식발행초과금') &&
+        accountingTable.textContent.includes('700,000 − 500,000'),
+      accountingWrapperClientWidth: accountingWrapper?.clientWidth || 0,
+      accountingWrapperScrollWidth: accountingWrapper?.scrollWidth || 0,
+      accountingDateWhiteSpace: getComputedStyle(accountingDateCell).whiteSpace,
+      accountingSideWhiteSpace: getComputedStyle(accountingSideCell).whiteSpace,
+      accountingNameWordBreak: getComputedStyle(accountingNameCell).wordBreak,
+      accountingDateHeight: accountingDateCell.getBoundingClientRect().height,
+      accountingDateLineHeight: Number.parseFloat(
+        getComputedStyle(accountingDateCell).lineHeight
+      ),
+      userTablePreserved:
+        document.getElementById('user-accounting-table')
+          .getAttribute('data-aistudio-mobile-table') === null &&
+        document.getElementById('user-accounting-table')
+          .closest('.aistudio-table-scroll') === null,
       userProseCodePreserved:
         document.getElementById('user-prose-code-bold').textContent ===
           '사용자가 입력한 **한국어 설명문입니다.** 그대로 둡니다.' &&
@@ -745,7 +776,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-195'
+        'data-aistudio-mobile-safe-196'
       )
     };
   });
@@ -866,6 +897,17 @@ async (page) => {
     rendering.asciiTreeJunctionXs.length !== 5 ||
     Math.max(...rendering.asciiTreeJunctionXs) -
       Math.min(...rendering.asciiTreeJunctionXs) > 0.5 ||
+    !rendering.accountingTableWrapped ||
+    rendering.accountingWrapperCount !== 1 ||
+    !rendering.accountingTableTextPreserved ||
+    rendering.accountingWrapperClientWidth <= 0 ||
+    rendering.accountingWrapperScrollWidth <=
+      rendering.accountingWrapperClientWidth ||
+    rendering.accountingDateWhiteSpace !== 'nowrap' ||
+    rendering.accountingSideWhiteSpace !== 'nowrap' ||
+    rendering.accountingNameWordBreak !== 'keep-all' ||
+    rendering.accountingDateHeight > rendering.accountingDateLineHeight * 1.8 ||
+    !rendering.userTablePreserved ||
     !rendering.userProseCodePreserved ||
     JSON.stringify(rendering.currentModelStrongTexts) !== JSON.stringify([
       '발생가능성 인식기준은 항상 충족',
@@ -939,7 +981,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.5'
+    rendering.version !== '1.9.6'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

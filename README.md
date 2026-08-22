@@ -15,7 +15,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - KaTeX display math horizontal scrolling on mobile
 - Wide display formulas fitted to the available mobile width without leaking
   KaTeX `underbrace`/stretchy SVG segments as long black lines
-- Markdown tables overflowing the screen
+- Markdown tables use a contained horizontal scroller instead of crushing short
+  Korean columns (`일자`, `구분`, account names) into syllable-per-line text
 - Literal `<br>`, `<br/>`, and `<br />` markers shown inside completed table cells,
   including markers split across multiple inline nodes
 - Raw TeX environments whose `\begin`/`\end` or row-separator backslashes were
@@ -78,7 +79,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.9.5 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.9.6 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
