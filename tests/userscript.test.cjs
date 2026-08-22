@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.3/);
+assert.match(source, /\/\/ @version\s+1\.9\.4/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -420,6 +420,24 @@ assert.match(
   }),
   /class="katex"/
 );
+
+const reportedPercentRow = String.raw`\begin{aligned}
+\text{6개월간 유효이자} &= 4,826.1\text{원} \times 10% \times \frac{6}{12} = 241.3\text{원} \\
+\text{6개월간 표시이자} &= 400\text{원} \times \frac{6}{12} = 200\text{원} \\
+\text{6개월간 사할차 상각액} &= 241.3\text{원} - 200\text{원} = \mathbf{41.3\text{원}}
+\end{aligned}`;
+const reportedPercentCandidate = api.parseRawMathCandidate(reportedPercentRow);
+
+assert.ok(reportedPercentCandidate);
+assert.match(reportedPercentCandidate.tex, /10\\% \\times \\frac\{6\}\{12\}/);
+assert.match(reportedPercentCandidate.tex, /241\.3\\text\{원\} \\\\/);
+const reportedPercentHtml = katex.renderToString(reportedPercentCandidate.tex, {
+  displayMode: true,
+  throwOnError: true,
+  strict: 'ignore'
+});
+assert.match(reportedPercentHtml, /241\.3/);
+assert.match(reportedPercentHtml, /6개월간 표시이자/);
 
 assert.equal(api.bracesAreBalanced(String.raw`\mathbf{x_{1}}`), true);
 assert.equal(api.bracesAreBalanced(String.raw`\mathbf{x_{1}`), false);

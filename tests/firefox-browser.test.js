@@ -40,6 +40,7 @@ async (page) => {
     const nestedTurn = document.createElement('ms-chat-turn');
     const nestedRenderer = document.createElement('new-response-renderer');
     const nestedMath = document.createElement('div');
+    const percentMath = document.createElement('div');
 
     nestedTurn.id = 'nested-fallback-model-turn';
     nestedTurn.setAttribute('data-turn-role', 'model');
@@ -50,7 +51,15 @@ async (page) => {
       String.raw`&= \mathbf{+6,150\text{원}}`,
       String.raw`\end{aligned}`
     ].join('\n');
-    nestedRenderer.appendChild(nestedMath);
+    percentMath.id = 'step-two-percent-equation';
+    percentMath.textContent = [
+      String.raw`\begin{aligned}`,
+      String.raw`\text{6개월간 유효이자} &= 4,826.1\text{원} \times 10% \times \frac{6}{12} = 241.3\text{원} \\`,
+      String.raw`\text{6개월간 표시이자} &= 400\text{원} \times \frac{6}{12} = 200\text{원} \\`,
+      String.raw`\text{6개월간 사할차 상각액} &= 241.3\text{원} - 200\text{원} = \mathbf{41.3\text{원}}`,
+      String.raw`\end{aligned}`
+    ].join('\n');
+    nestedRenderer.append(nestedMath, percentMath);
     nestedTurn.appendChild(nestedRenderer);
     document.getElementById('selectorless-main').appendChild(nestedTurn);
   });
@@ -612,6 +621,17 @@ async (page) => {
         document.querySelector(
           '#nested-generic-environment .aistudio-raw-math-repaired .katex'
         ) !== null,
+      percentRowSource: sourceOf('step-two-percent-equation'),
+      percentRowRepaired:
+        document.querySelector(
+          '#step-two-percent-equation .aistudio-raw-math-repaired .katex'
+        ) !== null,
+      percentRowVisibleText: (() => {
+        const html = document.querySelector(
+          '#step-two-percent-equation .katex-html'
+        );
+        return html?.textContent || '';
+      })(),
       selectorlessLiteralCodePreserved:
         document.getElementById('selectorless-literal-code').textContent ===
           'Markdown syntax: **literal stays literal** and <u>literal</u>' &&
@@ -697,7 +717,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-193'
+        'data-aistudio-mobile-safe-194'
       )
     };
   });
@@ -844,6 +864,10 @@ async (page) => {
     !rendering.knownSplitMathRepaired ||
     !rendering.nestedFallbackMathRepaired ||
     !rendering.nestedFallbackMathSource?.includes('사채상환손익') ||
+    !rendering.percentRowRepaired ||
+    !rendering.percentRowSource?.includes('10\\% \\times \\frac{6}{12}') ||
+    !rendering.percentRowSource?.includes('241.3\\text{원} \\\\') ||
+    rendering.percentRowVisibleText.includes('106개월간') ||
     !rendering.knownSplitMathSource?.startsWith('\\begin{aligned}') ||
     !rendering.knownSplitMathSource?.includes('사채상환손익') ||
     !rendering.selectorlessLiteralCodePreserved ||
@@ -880,7 +904,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.9.3'
+    rendering.version !== '1.9.4'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

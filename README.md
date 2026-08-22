@@ -24,6 +24,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Raw display/inline delimiters and bold math commands such as `\mathbf`,
   `\boldsymbol`, `\bm`, `\bold`, `\pmb`, `\textbf`, `\bf`, and nested
   `\text{...}`
+- Bare percentage signs in raw TeX are preserved as visible `\%` instead of
+  commenting out the rest of an aligned row and joining it to the next row
 - Bold inheritance through nested text, including
   `\mathbf{10,000\text{원}}`, in both raw and already-rendered KaTeX
 - Complete raw TeX blocks embedded after headings or explanatory paragraphs,
@@ -73,7 +75,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.9.3 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.9.4 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script

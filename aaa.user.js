@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.3
+// @version      1.9.4
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.3';
-  const STYLE_ID = 'aistudio-mobile-safe-193-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-193';
+  const VERSION = '1.9.4';
+  const STYLE_ID = 'aistudio-mobile-safe-194-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-194';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -482,7 +482,8 @@
     'aistudio-mobile-safe-189-style',
     'aistudio-mobile-safe-190-style',
     'aistudio-mobile-safe-191-style',
-    'aistudio-mobile-safe-192-style'
+    'aistudio-mobile-safe-192-style',
+    'aistudio-mobile-safe-193-style'
   ];
 
   const CSS_TEXT = `
@@ -1253,7 +1254,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function normalizeKatexCommands(source) {
-    const aliasesNormalized = source
+    let visibleSource = '';
+
+    /*
+     * AI Studio occasionally emits a human-readable percentage as bare `%`.
+     * TeX treats that as a comment, swallowing the remainder of the row,
+     * including its `\\`; the next aligned row then appears as `106개월간`.
+     * Raw-math candidates are visible output, so preserve every unescaped
+     * percent sign as a literal glyph before KaTeX parses the block.
+     */
+    for (let index = 0; index < source.length; index += 1) {
+      if (source[index] === '%' && !isEscaped(source, index)) {
+        visibleSource += '\\%';
+      } else {
+        visibleSource += source[index];
+      }
+    }
+
+    const aliasesNormalized = visibleSource
       .replace(/\\bm(?=\s*\{)/g, '\\boldsymbol')
       .replace(/\\bfseries\b/g, '\\bf');
 
