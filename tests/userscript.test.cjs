@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.9\.0/);
+assert.match(source, /\/\/ @version\s+1\.9\.1/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -25,6 +25,8 @@ assert.match(source, /function repairInlineMatchContainingMath/);
 assert.match(source, /function looksLikeEmbeddedMathElement/);
 assert.match(source, /function embeddedMathRoots/);
 assert.match(source, /function hasActionableRepairElement/);
+assert.match(source, /hasCompleteRawMath/);
+assert.match(source, /fallbackRoots\.has\(root\)/);
 assert.match(source, /function fitWideDisplayMath/);
 assert.match(
   source,
@@ -387,6 +389,25 @@ assert.deepEqual(plainRuns(parsedAligned.rows[2][1]), [
   { text: '+10,000원 (처분이익)', bold: true }
 ]);
 assert.equal(api.parseRawAligned('begin{aligned} no alignment end{aligned}'), null);
+
+const reportedBondSettlement = String.raw`\begin{aligned}
+\mathbf{\text{사채상환손익}} &= \text{상환시점 장부금액}(98,150\text{원}) - \text{상환대가} \\
+&= \mathbf{+6,150\text{원 (사채상환이익 → 당기순이익 6,150원 증가)}}
+\end{aligned}`;
+const reportedBondCandidate = api.parseRawMathCandidate(
+  reportedBondSettlement
+);
+assert.ok(reportedBondCandidate);
+assert.equal(reportedBondCandidate.environment, 'aligned');
+assert.match(reportedBondCandidate.tex, /사채상환손익/);
+assert.match(
+  katex.renderToString(reportedBondCandidate.tex, {
+    displayMode: true,
+    throwOnError: true,
+    strict: 'ignore'
+  }),
+  /class="katex"/
+);
 
 assert.equal(api.bracesAreBalanced(String.raw`\mathbf{x_{1}}`), true);
 assert.equal(api.bracesAreBalanced(String.raw`\mathbf{x_{1}`), false);

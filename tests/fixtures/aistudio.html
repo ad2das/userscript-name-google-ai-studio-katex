@@ -208,6 +208,23 @@
         <pre><code id="selectorless-literal-code">Markdown syntax: **literal stays literal** and &lt;u&gt;literal&lt;/u&gt;</code></pre>
       </section>
 
+      <!--
+        Current mobile AI Studio can split a raw aligned environment across
+        sibling block elements without any known renderer class. The fallback
+        must ascend to this smallest complete wrapper instead of stopping at
+        the child that contains only the opening marker.
+      -->
+      <section id="reported-selectorless-split-math" class="next-response-shell">
+        <h3>③ 사채상환손익 구하기 (손익 영향 ②)</h3>
+        <div id="photo-split-aligned-wrapper">
+          <div>\begin{aligned}</div>
+          <div>\mathbf{\text{사채상환손익}} &amp;= \text{상환시점 장부금액}(98,150\text{원}) - \text{상환대가}</div>
+          <div>(92,000\text{원}) \</div>
+          <div>&amp;= \mathbf{+6,150\text{원 (사채상환이익 → 당기순이익 6,150원 증가)}}</div>
+          <div>\end{aligned}</div>
+        </div>
+      </section>
+
       <section id="selectorless-user-output" data-turn-role="user">
         <p id="selectorless-user-literal">사용자 **원문 굵게**와 &lt;u&gt;원문 밑줄&lt;/u&gt;은 유지합니다.</p>
       </section>

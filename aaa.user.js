@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.9.0
+// @version      1.9.1
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.9.0';
-  const STYLE_ID = 'aistudio-mobile-safe-190-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-190';
+  const VERSION = '1.9.1';
+  const STYLE_ID = 'aistudio-mobile-safe-191-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-191';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -2930,6 +2930,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       root.matches(RAW_MATH_CONTAINER_SELECTOR)
     ) {
       containers.push(root);
+    } else if (fallbackRoots.has(root)) {
+      /*
+       * 최신 selectorless renderer는 begin/end를 서로 다른 블록에 둘 수
+       * 있다. 이때 완전한 수식 범위를 가진 작은 fallback root만 추가해
+       * 전체 응답을 다시 순회하지 않고 형제 블록 사이의 수식을 복구한다.
+       */
+      containers.push(root);
     }
 
     let repaired = 0;
@@ -4243,6 +4250,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function hasRawMathFallbackHint(text) {
+    return Boolean(
+      text &&
+      (
+        /(?:\\)?(?:begin|end)\s*\{[A-Za-z]/i.test(text) ||
+        /\\(?:\[|\(|mathbf|boldsymbol|bm|bold|pmb|textbf|bfseries|bf)/.test(text) ||
+        text.includes('$$') ||
+        hasUnescapedDollarPair(text)
+      )
+    );
+  }
+
   function hasActionableRepairElement(element) {
     const text = element && (element.textContent || '');
 
@@ -4251,12 +4270,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const inlineText = collectInlineText(element).text;
+    let hasCompleteRawMath = Boolean(parseRawMathCandidate(text));
+
+    if (!hasCompleteRawMath && hasRawMathFallbackHint(text)) {
+      hasCompleteRawMath = findEmbeddedRawMathBlocks(
+        mappedRawMathSource(element).source
+      ).length > 0;
+    }
 
     return Boolean(
       findMatches(inlineText).length ||
       findUnderlineMatches(inlineText).length ||
       hasLiteralTableBreak(text) ||
-      hasRawMathText(text)
+      hasCompleteRawMath
     );
   }
 
@@ -4378,6 +4404,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const fallbackList = fallbackFresh
       ? collectFallbackRoots()
       : [];
+
+    /*
+     * 안정화 대기 중에는 비싼 body fallback 스캔을 반복하지 않는다.
+     * 최초에 찾은 작은 후보만 명시적 root로 승격해 다음 예약 스캔에서도
+     * 유지한다. 기존 10초 fallback 게이트와 수식 폭 캐시는 그대로 둔다.
+     */
+    for (const root of fallbackList) {
+      if (
+        root.setAttribute &&
+        !root.matches(REPAIRED_ROOT_SELECTOR)
+      ) {
+        root.setAttribute('data-aistudio-repair-root', '1');
+      }
+    }
 
     const candidates = Array.from(new Set([
       ...explicitRoots,
