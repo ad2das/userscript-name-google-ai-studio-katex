@@ -229,6 +229,15 @@ async (page) => {
       '             │',
       '             └─ 자본조정 (자본의 차감(-) 항목 또는 임시 가계정 성격)'
     ].join('\n');
+    const asciiContractTree = document.getElementById(
+      'reported-ascii-contract-tree'
+    );
+    const asciiContractTreeCode = asciiContractTree.querySelector('code');
+    const asciiContractTreeOriginal = [
+      '┌─ 확정 금액 ── 확정 수량 주식 교부? ───> 【자본】 (미발행자본)',
+      '계약 ─┤',
+      '      └─ 확정 금액 ── 주가 변동에 따라 수량 변동? ───> 【금융부채】'
+    ].join('\n');
     const asciiComparison = document.getElementById(
       'reported-ascii-comparison'
     );
@@ -703,6 +712,26 @@ async (page) => {
       asciiTreeRowCount: asciiTree.querySelectorAll(
         '.aistudio-ascii-tree-row'
       ).length,
+      asciiContractTreeRepaired:
+        asciiContractTree.classList.contains(
+          'aistudio-ascii-tree-block-repaired'
+        ) &&
+        asciiContractTree.querySelector(
+          '.aistudio-ascii-tree-visual[aria-hidden="true"]'
+        ) !== null,
+      asciiContractTreeOriginalPreserved:
+        asciiContractTreeCode.textContent === asciiContractTreeOriginal &&
+        asciiContractTreeCode.innerText === asciiContractTreeOriginal &&
+        asciiContractTree.textContent === asciiContractTreeOriginal,
+      asciiContractTreeJunctions: Array.from(
+        asciiContractTree.querySelectorAll('.aistudio-ascii-tree-junction')
+      ).map((junction) => ({
+        text: junction.getAttribute('data-aistudio-ascii-cell'),
+        x: junction.getBoundingClientRect().left
+      })),
+      asciiContractTreeRowCount: asciiContractTree.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
       asciiComparisonRepaired:
         asciiComparison.classList.contains(
           'aistudio-ascii-tree-block-repaired'
@@ -932,7 +961,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1101'
+        'data-aistudio-mobile-safe-1102'
       )
     };
   });
@@ -1056,6 +1085,17 @@ async (page) => {
     rendering.asciiTreeJunctionXs.length !== 5 ||
     Math.max(...rendering.asciiTreeJunctionXs) -
       Math.min(...rendering.asciiTreeJunctionXs) > 0.5 ||
+    !rendering.asciiContractTreeRepaired ||
+    !rendering.asciiContractTreeOriginalPreserved ||
+    rendering.asciiContractTreeRowCount !== 3 ||
+    JSON.stringify(rendering.asciiContractTreeJunctions.map(
+      (junction) => junction.text
+    )) !== JSON.stringify(['┌', '┤', '└']) ||
+    Math.max(...rendering.asciiContractTreeJunctions.map(
+      (junction) => junction.x
+    )) - Math.min(...rendering.asciiContractTreeJunctions.map(
+      (junction) => junction.x
+    )) > 0.5 ||
     !rendering.asciiComparisonRepaired ||
     !rendering.asciiComparisonOriginalPreserved ||
     rendering.asciiComparisonStructuralCount < 8 ||
@@ -1155,7 +1195,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.1'
+    rendering.version !== '1.10.2'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.1
+// @version      1.10.2
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.1';
-  const STYLE_ID = 'aistudio-mobile-safe-1101-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1101';
+  const VERSION = '1.10.2';
+  const STYLE_ID = 'aistudio-mobile-safe-1102-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1102';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -506,7 +506,8 @@
     'aistudio-mobile-safe-197-style',
     'aistudio-mobile-safe-198-style',
     'aistudio-mobile-safe-199-style',
-    'aistudio-mobile-safe-1100-style'
+    'aistudio-mobile-safe-1100-style',
+    'aistudio-mobile-safe-1101-style'
   ];
 
   const CSS_TEXT = `
@@ -3602,7 +3603,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         continue;
       }
 
-      const junctions = Array.from(line.matchAll(/[┌└├┼│|]/g));
+      const junctions = Array.from(
+        line.matchAll(/[┌┐└┘├┤┼│|]/g)
+      );
 
       /*
        * 복잡한 표/다중 열 그림은 건드리지 않는다. 한 행에 연결 축이 하나인
@@ -3616,9 +3619,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const index = junctions[0].index;
 
       structuralCount += 1;
-      branchCount += /[├┼]/.test(junction) ? 1 : 0;
-      cornerCount += /[┌└]/.test(junction) ? 1 : 0;
-      verticalCount += /[│|]/.test(junction) ? 1 : 0;
+      branchCount += /[├┤┼]/.test(junction) ? 1 : 0;
+      cornerCount += /[┌┐└┘]/.test(junction) ? 1 : 0;
+      verticalCount += /[┌┐└┘├┤┼│|]/.test(junction) ? 1 : 0;
       horizontalCount += line.includes('─') ? 1 : 0;
       lines.push({
         junction,
@@ -4016,9 +4019,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       text &&
       (
         (
-          /[┌└]/.test(text) &&
-          /[├┼]/.test(text) &&
-          /[│|]/.test(text) &&
+          /[┌┐└┘]/.test(text) &&
+          /[├┤┼]/.test(text) &&
+          /[┌┐└┘├┤┼│|]/.test(text) &&
           text.includes('─')
         ) ||
         (

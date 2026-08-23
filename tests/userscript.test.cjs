@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.1/);
+assert.match(source, /\/\/ @version\s+1\.10\.2/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -367,6 +367,24 @@ assert.deepEqual(
 );
 assert.equal(asciiCapitalTree.lines[0].left, '');
 assert.equal(asciiCapitalTree.lines[2].left, '자본거래 ───');
+const reportedAsciiContractTree = [
+  '┌─ 확정 금액 ── 확정 수량 주식 교부? ───> 【자본】 (미발행자본)',
+  '계약 ─┤',
+  '      └─ 확정 금액 ── 주가 변동에 따라 수량 변동? ───> 【금융부채】'
+].join('\n');
+const asciiContractTree = api.analyzeAsciiBoxTree(
+  reportedAsciiContractTree
+);
+
+assert.ok(asciiContractTree);
+assert.equal(asciiContractTree.kind, 'single-axis');
+assert.equal(asciiContractTree.source, reportedAsciiContractTree);
+assert.deepEqual(
+  Array.from(asciiContractTree.lines, (line) => line.junction),
+  ['┌', '┤', '└']
+);
+assert.equal(asciiContractTree.lines[0].left, '');
+assert.equal(asciiContractTree.lines[1].left, '계약 ─');
 assert.equal(api.analyzeAsciiBoxTree('const value = "┌─ literal";'), null);
 assert.equal(
   api.analyzeAsciiBoxTree([
