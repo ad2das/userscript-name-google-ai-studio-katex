@@ -6,6 +6,19 @@ async (page) => {
     window.__fetchCalls = 0;
     window.__authReloadCalls = 0;
     window.__appRunCount = 0;
+    window.__bodyTextWalkerCount = 0;
+
+    const originalCreateTreeWalker = document.createTreeWalker.bind(document);
+    document.createTreeWalker = (root, whatToShow, ...rest) => {
+      if (
+        root === document.body &&
+        whatToShow === NodeFilter.SHOW_TEXT
+      ) {
+        window.__bodyTextWalkerCount += 1;
+      }
+
+      return originalCreateTreeWalker(root, whatToShow, ...rest);
+    };
 
     window.fetch = async () => {
       window.__fetchCalls += 1;
@@ -919,7 +932,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1100'
+        'data-aistudio-mobile-safe-1101'
       )
     };
   });
@@ -1142,7 +1155,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.0'
+    rendering.version !== '1.10.1'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -1380,6 +1393,49 @@ async (page) => {
     );
   }
 
+  const promptTyping = await page.evaluate(async () => {
+    const editor = document.getElementById('unknown-plaintext-editor');
+    editor.focus();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    window.__bodyTextWalkerCount = 0;
+
+    const text = editor.firstChild;
+
+    for (let index = 0; index < 40; index += 1) {
+      text.nodeValue = `**입력 ${index}**`;
+      editor.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: '가',
+        inputType: 'insertText'
+      }));
+    }
+
+    window.dispatchEvent(new Event('scroll'));
+    window.dispatchEvent(new Event('resize'));
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+
+    return {
+      bodyFallbackWalkers: window.__bodyTextWalkerCount,
+      editorMarked:
+        editor.hasAttribute('data-aistudio-repair-root'),
+      editorRepairCount: editor.querySelectorAll(
+        '.aistudio-md-repaired, .aistudio-raw-math-repaired'
+      ).length,
+      editorText: editor.textContent
+    };
+  });
+
+  if (
+    promptTyping.bodyFallbackWalkers !== 0 ||
+    promptTyping.editorMarked ||
+    promptTyping.editorRepairCount !== 0 ||
+    promptTyping.editorText !== '**입력 39**'
+  ) {
+    throw new Error(
+      `Firefox prompt typing regression: ${JSON.stringify(promptTyping)}`
+    );
+  }
+
   await page.evaluate(() => {
     window.__timeOffset += 100000;
   });
@@ -1417,6 +1473,7 @@ async (page) => {
     duringStreaming,
     dynamicRepair,
     cachedMathFit,
+    promptTyping,
     preflight
   };
 }

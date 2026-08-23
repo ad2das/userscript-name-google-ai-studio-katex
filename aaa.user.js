@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.0
+// @version      1.10.1
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.0';
-  const STYLE_ID = 'aistudio-mobile-safe-1100-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1100';
+  const VERSION = '1.10.1';
+  const STYLE_ID = 'aistudio-mobile-safe-1101-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1101';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -263,13 +263,22 @@
     'ms-chat-input'
   ].join(',');
 
-  const SKIP_SELECTOR = [
+  const PROMPT_EDITOR_SELECTOR = [
     'textarea',
     'input',
+    '[contenteditable]:not([contenteditable="false"])',
+    '[role="textbox"]',
+    'ms-prompt-input',
+    'ms-autosize-textarea',
+    'ms-chat-input',
+    '.ql-editor',
+    '.ProseMirror'
+  ].join(',');
+
+  const SKIP_SELECTOR = [
+    PROMPT_EDITOR_SELECTOR,
     'select',
     'button',
-    '[contenteditable="true"]',
-    '[role="textbox"]',
 
     'a',
     'code',
@@ -496,7 +505,8 @@
     'aistudio-mobile-safe-196-style',
     'aistudio-mobile-safe-197-style',
     'aistudio-mobile-safe-198-style',
-    'aistudio-mobile-safe-199-style'
+    'aistudio-mobile-safe-199-style',
+    'aistudio-mobile-safe-1100-style'
   ];
 
   const CSS_TEXT = `
@@ -6343,10 +6353,25 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
+  function promptEditorFor(node) {
+    return closest(node, PROMPT_EDITOR_SELECTOR);
+  }
+
+  function promptEditorActive() {
+    return Boolean(
+      document.activeElement &&
+      promptEditorFor(document.activeElement)
+    );
+  }
+
   function knownRepairRootForMutation(node) {
     const element = elementOf(node);
 
-    if (!element || closest(element, USER_SELECTOR)) {
+    if (
+      !element ||
+      promptEditorFor(element) ||
+      closest(element, USER_SELECTOR)
+    ) {
       return null;
     }
 
@@ -6391,6 +6416,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     if (
       !element ||
+      promptEditorFor(element) ||
       closest(element, USER_SELECTOR)
     ) {
       return false;
@@ -6445,6 +6471,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (
       !element ||
       !element.querySelector ||
+      promptEditorFor(element) ||
       closest(element, USER_SELECTOR)
     ) {
       return false;
@@ -6483,6 +6510,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         const mutationElement = elementOf(mutation.target);
+
+        if (promptEditorFor(mutationElement)) {
+          continue;
+        }
 
         if (mutation.type === 'attributes') {
           clearFallbackRootsInsideUser(mutationElement);
@@ -6588,7 +6619,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     window.addEventListener(
       'scroll',
-      () => schedule(250),
+      () => {
+        if (!promptEditorActive()) {
+          schedule(250);
+        }
+      },
       { passive: true }
     );
 
@@ -6596,7 +6631,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       'resize',
       () => {
         mathFitResizeDirty = true;
-        schedule(150);
+
+        if (!promptEditorActive()) {
+          schedule(150);
+        }
       },
       { passive: true }
     );
@@ -6605,7 +6643,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       'orientationchange',
       () => {
         mathFitResizeDirty = true;
-        schedule(150);
+
+        if (!promptEditorActive()) {
+          schedule(150);
+        }
       },
       { passive: true }
     );
@@ -6629,8 +6670,22 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       { passive: true }
     );
 
+    document.addEventListener(
+      'focusout',
+      (event) => {
+        if (promptEditorFor(event.target)) {
+          schedule(250);
+        }
+      },
+      true
+    );
+
     window.setInterval(installStyle, 10000);
-    window.setInterval(schedule, SCAN_MS);
+    window.setInterval(() => {
+      if (!promptEditorActive()) {
+        schedule();
+      }
+    }, SCAN_MS);
   }
 
   if (document.readyState === 'loading') {
