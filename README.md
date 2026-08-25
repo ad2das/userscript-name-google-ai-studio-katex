@@ -78,6 +78,9 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   AI Studio splits numbers and text into differently styled inline spans
 - Multi-stage Korean balance timelines with dates, amounts, and several arrows
   use a bounded character grid so every stage stays on its intended column
+- Generic Korean pseudo-tables inside code blocks use measured Unicode columns
+  and normalized `|` axes; this covers multi-row and single-row journal entries
+  without account-name-specific rules, while real source code stays untouched
 - Long-running AI Studio document sessions kept warm without reloading the tab
 - A Google-auth/session preflight before stale Run/`Ctrl+Enter` submissions
 
@@ -91,7 +94,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.10.5 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.10.6 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script

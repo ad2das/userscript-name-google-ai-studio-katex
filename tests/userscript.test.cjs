@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.5/);
+assert.match(source, /\/\/ @version\s+1\.10\.6/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -79,6 +79,7 @@ const instrumented = source.replace(
     analyzeAsciiBoxTree,
     analyzeAsciiArrowDiagram,
     analyzeAsciiTimelineDiagram,
+    analyzeDelimitedAsciiTable,
     analyzeAsciiDiagram,
     analyzeMultiPanelAsciiTable,
     asciiCharacterGridLine,
@@ -463,6 +464,67 @@ assert.equal(
   ].join('\n')),
   null
 );
+const reportedAsciiJournal = [
+  '(차변) 충당부채(부채의 감소)       1,200,000   | (대변) 미지급금(확정부채 증가)    1,150,000',
+  '                                                   | (대변) 충당부채환입(당기이익)         50,000'
+].join('\n');
+const asciiJournal = api.analyzeDelimitedAsciiTable(reportedAsciiJournal);
+
+assert.ok(asciiJournal);
+assert.equal(asciiJournal.kind, 'character-grid');
+assert.equal(asciiJournal.layout, 'delimited');
+assert.equal(asciiJournal.source, reportedAsciiJournal);
+assert.equal(asciiJournal.lines.length, 2);
+assert.equal(asciiJournal.columnAnchors.length, 1);
+assert.deepEqual(
+  Array.from(new Set(
+    asciiJournal.lines.flatMap((line) => Array.from(line.runs))
+      .filter((run) => run.structural)
+      .map((run) => run.start)
+  )),
+  Array.from(asciiJournal.columnAnchors)
+);
+const reportedSingleRowJournal =
+  '(차변) 미지급금(부채의 감소)  1,150,000   | (대변) 현금(자산의 감소)  1,150,000';
+const singleRowJournal = api.analyzeDelimitedAsciiTable(
+  reportedSingleRowJournal
+);
+
+assert.ok(singleRowJournal);
+assert.equal(singleRowJournal.lines.length, 1);
+assert.equal(singleRowJournal.columnAnchors.length, 1);
+assert.ok(api.analyzeAsciiDiagram(reportedAsciiJournal));
+assert.equal(
+  api.analyzeDelimitedAsciiTable([
+    'const 설명 = "매출 1,200,000 | 비용 1,150,000";',
+    'const 차이 = 설명.length;'
+  ].join('\n')),
+  null
+);
+assert.equal(
+  api.analyzeDelimitedAsciiTable(
+    '설명 = "매출 1,200,000 | 비용 1,150,000"'
+  ),
+  null
+);
+const genericThreeColumnTable = api.analyzeDelimitedAsciiTable([
+  '매출 1,000   | 비용 2,000       | 이익 3,000',
+  '',
+  '현금 4,000           | 부채 5,000 | 자본 6,000'
+].join('\n'));
+
+assert.ok(genericThreeColumnTable);
+assert.equal(genericThreeColumnTable.columnAnchors.length, 2);
+for (let axisIndex = 0; axisIndex < 2; axisIndex += 1) {
+  assert.deepEqual(
+    Array.from(new Set(
+      genericThreeColumnTable.lines.flatMap((line) => Array.from(line.runs))
+        .filter((run) => run.structural && run.panelIndex === axisIndex)
+        .map((run) => run.start)
+    )),
+    [genericThreeColumnTable.columnAnchors[axisIndex]]
+  );
+}
 assert.equal(api.asciiCharacterWidth('A'), 1);
 assert.equal(api.asciiCharacterWidth('가'), 2);
 const reportedAsciiComparison = [

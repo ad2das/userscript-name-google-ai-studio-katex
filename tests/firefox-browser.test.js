@@ -258,6 +258,27 @@ async (page) => {
       '    -₩25,000       ──▶ (손실 25,000 상계 후) ──▶ (이익 15,000 상계 후) ──▶    -₩20,000',
       '                       (처분이익 +15,000 됨)      (처분손실 -20,000 됨)'
     ].join('\n');
+    const asciiJournal = document.getElementById('reported-ascii-journal');
+    const asciiJournalCode = asciiJournal.querySelector('code');
+    const asciiJournalOriginal = [
+      '(차변) 충당부채(부채의 감소)       1,200,000   | (대변) 미지급금(확정부채 증가)    1,150,000',
+      '                                                   | (대변) 충당부채환입(당기이익)         50,000'
+    ].join('\n');
+    const asciiJournalSingle = document.getElementById(
+      'reported-ascii-journal-single'
+    );
+    const asciiJournalSingleOriginal =
+      '(차변) 미지급금(부채의 감소)  1,150,000   | (대변) 현금(자산의 감소)  1,150,000';
+    const journalRowOverlap = (root) => Array.from(root.querySelectorAll(
+      '.aistudio-ascii-tree-row'
+    )).some((row) => {
+      const cells = Array.from(row.querySelectorAll(
+        '.aistudio-ascii-grid-run'
+      )).map((cell) => cell.getBoundingClientRect());
+      return cells.some((cell, index) => (
+        index > 0 && cells[index - 1].right > cell.left + 0.5
+      ));
+    });
     const asciiComparison = document.getElementById(
       'reported-ascii-comparison'
     );
@@ -843,6 +864,44 @@ async (page) => {
       }),
       asciiTimelineScrollable:
         asciiTimeline.scrollWidth > asciiTimeline.clientWidth,
+      asciiJournalRepaired:
+        asciiJournal.classList.contains('aistudio-ascii-tree-block-repaired') &&
+        asciiJournal.querySelector(
+          '.aistudio-ascii-delimited-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiJournalOriginalPreserved:
+        asciiJournalCode.textContent === asciiJournalOriginal &&
+        asciiJournalCode.innerText === asciiJournalOriginal &&
+        asciiJournal.textContent === asciiJournalOriginal,
+      asciiJournalDividerXs: Array.from(asciiJournal.querySelectorAll(
+        '.aistudio-ascii-grid-structural'
+      )).map((divider) => divider.getBoundingClientRect().left),
+      asciiJournalRowsOverlap: journalRowOverlap(asciiJournal),
+      asciiJournalScrollable:
+        asciiJournal.scrollWidth > asciiJournal.clientWidth,
+      asciiJournalSingleRepaired:
+        asciiJournalSingle.querySelector(
+          '.aistudio-ascii-delimited-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiJournalSingleOriginalPreserved:
+        asciiJournalSingle.querySelector('code').textContent ===
+          asciiJournalSingleOriginal &&
+        asciiJournalSingle.textContent === asciiJournalSingleOriginal,
+      asciiJournalSingleDividerCount: asciiJournalSingle.querySelectorAll(
+        '.aistudio-ascii-grid-structural'
+      ).length,
+      actualCodePipePreserved:
+        document.getElementById('actual-code-pipe').textContent ===
+          'const 설명 = "매출 1,200,000 | 비용 1,150,000";' &&
+        document.querySelector(
+          '#actual-code-pipe .aistudio-ascii-tree-visual'
+        ) === null,
+      actualCodeKoreanAssignmentPreserved:
+        document.getElementById('actual-code-korean-assignment').textContent ===
+          '설명 = "매출 1,200,000 | 비용 1,150,000"' &&
+        document.querySelector(
+          '#actual-code-korean-assignment .aistudio-ascii-tree-visual'
+        ) === null,
       asciiComparisonRepaired:
         asciiComparison.classList.contains(
           'aistudio-ascii-tree-block-repaired'
@@ -1072,7 +1131,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1105'
+        'data-aistudio-mobile-safe-1106'
       )
     };
   });
@@ -1249,6 +1308,18 @@ async (page) => {
     )) ||
     rendering.asciiTimelineRowsOverlap ||
     !rendering.asciiTimelineScrollable ||
+    !rendering.asciiJournalRepaired ||
+    !rendering.asciiJournalOriginalPreserved ||
+    rendering.asciiJournalDividerXs.length !== 2 ||
+    Math.max(...rendering.asciiJournalDividerXs) -
+      Math.min(...rendering.asciiJournalDividerXs) > 0.5 ||
+    rendering.asciiJournalRowsOverlap ||
+    !rendering.asciiJournalScrollable ||
+    !rendering.asciiJournalSingleRepaired ||
+    !rendering.asciiJournalSingleOriginalPreserved ||
+    rendering.asciiJournalSingleDividerCount !== 1 ||
+    !rendering.actualCodePipePreserved ||
+    !rendering.actualCodeKoreanAssignmentPreserved ||
     !rendering.asciiComparisonRepaired ||
     !rendering.asciiComparisonOriginalPreserved ||
     rendering.asciiComparisonStructuralCount < 8 ||
@@ -1348,7 +1419,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.5'
+    rendering.version !== '1.10.6'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

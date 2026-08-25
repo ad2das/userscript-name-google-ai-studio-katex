@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.5
+// @version      1.10.6
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.5';
-  const STYLE_ID = 'aistudio-mobile-safe-1105-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1105';
+  const VERSION = '1.10.6';
+  const STYLE_ID = 'aistudio-mobile-safe-1106-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1106';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -510,7 +510,8 @@
     'aistudio-mobile-safe-1101-style',
     'aistudio-mobile-safe-1102-style',
     'aistudio-mobile-safe-1103-style',
-    'aistudio-mobile-safe-1104-style'
+    'aistudio-mobile-safe-1104-style',
+    'aistudio-mobile-safe-1105-style'
   ];
 
   const CSS_TEXT = `
@@ -917,7 +918,10 @@ ${SCOPE} .aistudio-ascii-grid-wide {
   font-family: var(--as-mono) !important;
 }
 
-${SCOPE} .aistudio-ascii-timeline-grid .aistudio-ascii-tree-row {
+${SCOPE} :where(
+  .aistudio-ascii-timeline-grid,
+  .aistudio-ascii-delimited-grid
+) .aistudio-ascii-tree-row {
   min-height: 1.65em !important;
 }
 
@@ -3419,6 +3423,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return result;
   }
 
+  function hasExecutableCodeSignals(source) {
+    return Boolean(
+      /```|~~~/i.test(source) ||
+      /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|switch|try|catch)\b/im.test(source) ||
+      /(?:^|\n)\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/im.test(source) ||
+      /(?:^|\n)\s*[$>#]\s/m.test(source) ||
+      /(?:^|\n)\s*(?:\/\/|\/\*|\*\/|<!--)/m.test(source) ||
+      /(?:^|\n)\s*[A-Za-z_$가-힣][\w$.[\]\-가-힣]*\s*(?:=|\+=|-=|\*=|\/=)/m.test(source) ||
+      /(?:^|\n)\s*[A-Za-z_][\w.-]*\s*:\s+\S/m.test(source) ||
+      /^\s*["'`][\s\S]*["'`]\s*;?\s*$/.test(source) ||
+      /(?:=>|===|!==|&&|\|\||::|[{}]|;\s*(?:\n|$))/m.test(source) ||
+      /<\/?[A-Za-z][^>]*>/.test(source) ||
+      /\b(?:console\.(?:log|error|warn)|print|printf|echo)\s*\(/i.test(source) ||
+      /\b[A-Za-z_$][\w$]*\s*\(/.test(source) ||
+      /(?:Markdown|마크다운|문법|리터럴|literal|raw|코드\s*예시)/i.test(source)
+    );
+  }
+
   function isLikelyProseCodeText(text) {
     const source = (text || '').trim();
 
@@ -3451,21 +3473,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
      * 언어 표식, 실행 구문, 괄호 블록, 셸/SQL 시작 토큰이 있으면
      * 한국어 주석이나 문자열이 섞여 있어도 실제 코드로 간주한다.
      */
-    if (
-      /```|~~~/i.test(source) ||
-      /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|switch|try|catch)\b/im.test(source) ||
-      /(?:^|\n)\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/im.test(source) ||
-      /(?:^|\n)\s*[$>#]\s/m.test(source) ||
-      /(?:^|\n)\s*(?:\/\/|\/\*|\*\/|<!--)/m.test(source) ||
-      /(?:^|\n)\s*[A-Za-z_$][\w$.[\]-]*\s*(?:=|\+=|-=|\*=|\/=)/m.test(source) ||
-      /(?:^|\n)\s*[A-Za-z_][\w.-]*\s*:\s+\S/m.test(source) ||
-      /^\s*["'`][\s\S]*["'`]\s*;?\s*$/.test(source) ||
-      /(?:=>|===|!==|&&|\|\||::|[{}]|;\s*(?:\n|$))/m.test(source) ||
-      /<\/?[A-Za-z][^>]*>/.test(source) ||
-      /\b(?:console\.(?:log|error|warn)|print|printf|echo)\s*\(/i.test(source) ||
-      /\b[A-Za-z_$][\w$]*\s*\(/.test(source) ||
-      /(?:Markdown|마크다운|문법|리터럴|literal|raw|코드\s*예시)/i.test(source)
-    ) {
+    if (hasExecutableCodeSignals(source)) {
       return false;
     }
 
@@ -3989,6 +3997,99 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     });
   }
 
+  function createAsciiCharacterGridAnalysis(
+    source,
+    rawLines,
+    lines = rawLines.map(asciiCharacterGridLine),
+    metadata = {}
+  ) {
+    const columns = Math.max(...lines.map((line) => line.columns));
+    const runCount = lines.reduce(
+      (total, line) => total + line.runs.length,
+      0
+    );
+
+    if (
+      columns < 1 ||
+      columns > MAX_ASCII_GRID_COLUMNS ||
+      runCount > MAX_ASCII_GRID_RUNS
+    ) {
+      return null;
+    }
+
+    return {
+      columns,
+      kind: 'character-grid',
+      lines,
+      runCount,
+      source,
+      ...metadata
+    };
+  }
+
+  function asciiVerticalRunEntries(line) {
+    return line.runs
+      .map((run, runIndex) => ({ run, runIndex }))
+      .filter((entry) => isAsciiVerticalGridCharacter(entry.run.text));
+  }
+
+  function normalizeAsciiDelimitedAxes(lines, separatorCount) {
+    const entriesByLine = lines.map(asciiVerticalRunEntries);
+    const populatedEntries = entriesByLine.filter((entries) => entries.length);
+    const anchors = [];
+
+    for (let axisIndex = 0; axisIndex < separatorCount; axisIndex += 1) {
+      const widths = populatedEntries.map((entries) => (
+        axisIndex === 0
+          ? entries[axisIndex].run.start
+          : entries[axisIndex].run.start - entries[axisIndex - 1].run.start
+      ));
+      const width = Math.max(...widths);
+      anchors.push(axisIndex === 0 ? width : anchors[axisIndex - 1] + width);
+    }
+
+    const normalized = lines.map((line, lineIndex) => {
+      const runs = line.runs.map((run) => ({ ...run }));
+      const entries = entriesByLine[lineIndex];
+      const sourceAxes = entries.map((entry) => entry.run.start);
+      const structuralIndexes = new Map(entries.map((entry, axisIndex) => (
+        [entry.runIndex, axisIndex]
+      )));
+
+      runs.forEach((run, runIndex) => {
+        if (structuralIndexes.has(runIndex)) {
+          const axisIndex = structuralIndexes.get(runIndex);
+          run.start = anchors[axisIndex];
+          run.structural = true;
+          run.panelIndex = axisIndex;
+          return;
+        }
+
+        let precedingAxis = -1;
+        for (let axisIndex = 0; axisIndex < sourceAxes.length; axisIndex += 1) {
+          if (run.start <= sourceAxes[axisIndex]) {
+            break;
+          }
+          precedingAxis = axisIndex;
+        }
+
+        if (precedingAxis >= 0) {
+          run.start += anchors[precedingAxis] - sourceAxes[precedingAxis];
+        }
+      });
+
+      return {
+        columns: Math.max(
+          line.columns,
+          ...runs.map((run) => run.start + run.columns)
+        ),
+        runs
+      };
+    });
+
+    return { anchors, lines: normalized };
+  }
+
   function analyzeMultiPanelAsciiTable(text) {
     if (
       !text ||
@@ -4048,28 +4149,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       panelStarts,
       panelAnchors
     );
-    const columns = Math.max(...lines.map((line) => line.columns));
-    const runCount = lines.reduce(
-      (total, line) => total + line.runs.length,
-      0
+    const analysis = createAsciiCharacterGridAnalysis(
+      source,
+      rawLines,
+      lines,
+      { panelAnchors }
     );
 
-    if (
-      columns < 30 ||
-      columns > MAX_ASCII_GRID_COLUMNS ||
-      runCount > MAX_ASCII_GRID_RUNS
-    ) {
-      return null;
-    }
-
-    return {
-      columns,
-      kind: 'character-grid',
-      lines,
-      panelAnchors,
-      runCount,
-      source
-    };
+    return analysis && analysis.columns >= 30 ? analysis : null;
   }
 
   function analyzeAsciiArrowDiagram(text) {
@@ -4160,29 +4247,73 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return null;
     }
 
-    const lines = rawLines.map(asciiCharacterGridLine);
-    const columns = Math.max(...lines.map((line) => line.columns));
-    const runCount = lines.reduce(
-      (total, line) => total + line.runs.length,
-      0
+    const analysis = createAsciiCharacterGridAnalysis(
+      source,
+      rawLines,
+      undefined,
+      { layout: 'timeline' }
     );
 
+    return analysis && analysis.columns >= 30 ? analysis : null;
+  }
+
+  function analyzeDelimitedAsciiTable(text) {
     if (
-      columns < 30 ||
-      columns > MAX_ASCII_GRID_COLUMNS ||
-      runCount > MAX_ASCII_GRID_RUNS
+      !text ||
+      text.length > MAX_ASCII_TREE_LENGTH ||
+      !/[가-힣]/.test(text) ||
+      hasExecutableCodeSignals(text)
     ) {
       return null;
     }
 
-    return {
-      columns,
-      kind: 'character-grid',
-      layout: 'timeline',
-      lines,
-      runCount,
-      source
-    };
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+    const nonemptyLines = rawLines.filter((line) => line.trim());
+    const amounts = source.match(/[+-]?\s*₩?\d{1,3}(?:,\d{3})+/g) || [];
+
+    if (
+      !nonemptyLines.length ||
+      nonemptyLines.length > 40 ||
+      amounts.length < 2
+    ) {
+      return null;
+    }
+
+    const sourceLines = rawLines.map(asciiCharacterGridLine);
+    const separatorCounts = sourceLines.map((line, lineIndex) => (
+      rawLines[lineIndex].trim()
+        ? asciiVerticalRunEntries(line).length
+        : 0
+    ));
+    const nonemptyCounts = separatorCounts.filter((count) => count > 0);
+    const separatorCount = nonemptyCounts[0] || 0;
+
+    if (
+      separatorCount < 1 ||
+      separatorCount > 4 ||
+      nonemptyCounts.length !== nonemptyLines.length ||
+      nonemptyCounts.some((count) => count !== separatorCount) ||
+      nonemptyLines.some((line) => !/\s[|│]\s/.test(line))
+    ) {
+      return null;
+    }
+
+    const normalized = normalizeAsciiDelimitedAxes(
+      sourceLines,
+      separatorCount
+    );
+    const analysis = createAsciiCharacterGridAnalysis(
+      source,
+      rawLines,
+      normalized.lines,
+      {
+        columnAnchors: normalized.anchors,
+        layout: 'delimited'
+      }
+    );
+
+    return analysis && analysis.columns >= 20 ? analysis : null;
   }
 
   function analyzeAsciiDiagram(text) {
@@ -4190,7 +4321,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       analyzeAsciiBoxTree(text) ||
       analyzeAsciiTimelineDiagram(text) ||
       analyzeAsciiArrowDiagram(text) ||
-      analyzeMultiPanelAsciiTable(text)
+      analyzeMultiPanelAsciiTable(text) ||
+      analyzeDelimitedAsciiTable(text)
     );
   }
 
@@ -4249,6 +4381,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           /[가-힣]/.test(text) &&
           /\[[^\]\n]{2,}\]/.test(text) &&
           /(?:─{2,}|-{2,})\s*[▶►>]/.test(text)
+        ) ||
+        (
+          /[가-힣]/.test(text) &&
+          /\s[|│]\s/.test(text) &&
+          /[+-]?\s*₩?\d{1,3}(?:,\d{3})+/.test(text)
         )
       )
     );
@@ -4293,8 +4430,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       if (analysis.kind === 'character-grid') {
         visual.classList.add('aistudio-ascii-character-grid');
-        if (analysis.layout === 'timeline') {
-          visual.classList.add('aistudio-ascii-timeline-grid');
+        if (analysis.layout) {
+          visual.classList.add(`aistudio-ascii-${analysis.layout}-grid`);
         }
         visual.style.setProperty(
           '--aistudio-ascii-columns',
