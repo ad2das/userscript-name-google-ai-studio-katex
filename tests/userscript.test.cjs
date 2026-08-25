@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.6/);
+assert.match(source, /\/\/ @version\s+1\.10\.7/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -80,6 +80,7 @@ const instrumented = source.replace(
     analyzeAsciiArrowDiagram,
     analyzeAsciiTimelineDiagram,
     analyzeDelimitedAsciiTable,
+    analyzeFramedAsciiBlock,
     analyzeAsciiDiagram,
     analyzeMultiPanelAsciiTable,
     asciiCharacterGridLine,
@@ -471,19 +472,23 @@ const reportedAsciiJournal = [
 const asciiJournal = api.analyzeDelimitedAsciiTable(reportedAsciiJournal);
 
 assert.ok(asciiJournal);
-assert.equal(asciiJournal.kind, 'character-grid');
+assert.equal(asciiJournal.kind, 'delimited-grid');
 assert.equal(asciiJournal.layout, 'delimited');
 assert.equal(asciiJournal.source, reportedAsciiJournal);
-assert.equal(asciiJournal.lines.length, 2);
-assert.equal(asciiJournal.columnAnchors.length, 1);
+assert.equal(asciiJournal.rows.length, 2);
+assert.equal(asciiJournal.segmentCount, 2);
 assert.deepEqual(
-  Array.from(new Set(
-    asciiJournal.lines.flatMap((line) => Array.from(line.runs))
-      .filter((run) => run.structural)
-      .map((run) => run.start)
-  )),
-  Array.from(asciiJournal.columnAnchors)
+  Array.from(asciiJournal.rows[0].segments, (segment) => ({
+    label: segment.label,
+    amount: segment.amount
+  })),
+  [
+    { label: '(차변) 충당부채(부채의 감소)', amount: '1,200,000' },
+    { label: '(대변) 미지급금(확정부채 증가)', amount: '1,150,000' }
+  ]
 );
+assert.equal(asciiJournal.rows[1].segments[0].label, '');
+assert.equal(asciiJournal.rows[1].segments[1].amount, '50,000');
 const reportedSingleRowJournal =
   '(차변) 미지급금(부채의 감소)  1,150,000   | (대변) 현금(자산의 감소)  1,150,000';
 const singleRowJournal = api.analyzeDelimitedAsciiTable(
@@ -491,9 +496,24 @@ const singleRowJournal = api.analyzeDelimitedAsciiTable(
 );
 
 assert.ok(singleRowJournal);
-assert.equal(singleRowJournal.lines.length, 1);
-assert.equal(singleRowJournal.columnAnchors.length, 1);
+assert.equal(singleRowJournal.rows.length, 1);
+assert.equal(singleRowJournal.segmentCount, 2);
 assert.ok(api.analyzeAsciiDiagram(reportedAsciiJournal));
+const reportedJournalWithContinuation = [
+  '[20X2년 분개]',
+  '1. 판매시: (차) 현금                12,000,000   | (대) 매출             12,000,000',
+  '2. 수리 지출: (차) 제품보증충당부채     160,000   | (대) 현금                460,000',
+  '              (차) 품질보증비용         300,000   |',
+  '3. 기말 결산: (차) 품질보증비용         200,000   | (대) 제품보증충당부채      200,000'
+].join('\n');
+const journalWithContinuation = api.analyzeDelimitedAsciiTable(
+  reportedJournalWithContinuation
+);
+
+assert.ok(journalWithContinuation);
+assert.equal(journalWithContinuation.rows.length, 5);
+assert.equal(journalWithContinuation.rows[0].spanning, true);
+assert.equal(journalWithContinuation.rows[3].segments[1].label, '');
 assert.equal(
   api.analyzeDelimitedAsciiTable([
     'const 설명 = "매출 1,200,000 | 비용 1,150,000";',
@@ -514,15 +534,37 @@ const genericThreeColumnTable = api.analyzeDelimitedAsciiTable([
 ].join('\n'));
 
 assert.ok(genericThreeColumnTable);
-assert.equal(genericThreeColumnTable.columnAnchors.length, 2);
+assert.equal(genericThreeColumnTable.segmentCount, 3);
+assert.equal(genericThreeColumnTable.rows.length, 3);
+assert.equal(genericThreeColumnTable.rows[1].spanning, true);
+assert.deepEqual(
+  Array.from(genericThreeColumnTable.rows[0].segments, (segment) => (
+    segment.amount
+  )),
+  ['1,000', '2,000', '3,000']
+);
+const reportedFramedBlock = [
+  '┌──────────────────────────────────────────────────────────────┐',
+  '│ [예제 8-7 소송 진행경과에 따른 회계처리 변화]                │',
+  '│ 1. 20X0년 말: 기업에 책임이 밝혀지지 않을 가능성 높음        │',
+  '│    ➜ 회계처리: 충당부채 인식 안 함.                          │',
+  '└──────────────────────────────────────────────────────────────┘'
+].join('\n');
+const framedBlock = api.analyzeFramedAsciiBlock(reportedFramedBlock);
+
+assert.ok(framedBlock);
+assert.equal(framedBlock.kind, 'character-grid');
+assert.equal(framedBlock.layout, 'framed');
+assert.equal(framedBlock.lines.length, 5);
+assert.equal(framedBlock.columnAnchors.length, 2);
 for (let axisIndex = 0; axisIndex < 2; axisIndex += 1) {
   assert.deepEqual(
     Array.from(new Set(
-      genericThreeColumnTable.lines.flatMap((line) => Array.from(line.runs))
+      framedBlock.lines.flatMap((line) => Array.from(line.runs))
         .filter((run) => run.structural && run.panelIndex === axisIndex)
         .map((run) => run.start)
     )),
-    [genericThreeColumnTable.columnAnchors[axisIndex]]
+    [framedBlock.columnAnchors[axisIndex]]
   );
 }
 assert.equal(api.asciiCharacterWidth('A'), 1);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.6
+// @version      1.10.7
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.6';
-  const STYLE_ID = 'aistudio-mobile-safe-1106-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1106';
+  const VERSION = '1.10.7';
+  const STYLE_ID = 'aistudio-mobile-safe-1107-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1107';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -511,7 +511,8 @@
     'aistudio-mobile-safe-1102-style',
     'aistudio-mobile-safe-1103-style',
     'aistudio-mobile-safe-1104-style',
-    'aistudio-mobile-safe-1105-style'
+    'aistudio-mobile-safe-1105-style',
+    'aistudio-mobile-safe-1106-style'
   ];
 
   const CSS_TEXT = `
@@ -920,9 +921,45 @@ ${SCOPE} .aistudio-ascii-grid-wide {
 
 ${SCOPE} :where(
   .aistudio-ascii-timeline-grid,
-  .aistudio-ascii-delimited-grid
+  .aistudio-ascii-framed-grid
 ) .aistudio-ascii-tree-row {
   min-height: 1.65em !important;
+}
+
+/* 공백 패딩 대신 실제 grid 열로 pseudo-table을 정렬한다. */
+${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-delimited-grid {
+  grid-template-columns: var(--aistudio-delimited-columns) !important;
+  column-gap: 0.55ch !important;
+  row-gap: 0.12em !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-cell {
+  min-width: 0 !important;
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+  align-self: baseline !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-cell::before {
+  content: attr(data-aistudio-ascii-cell) !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-label {
+  justify-self: start !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-amount {
+  justify-self: end !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-separator {
+  justify-self: center !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-spanning {
+  grid-column: 1 / -1 !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
@@ -4257,6 +4294,76 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return analysis && analysis.columns >= 30 ? analysis : null;
   }
 
+  function parseAsciiDelimitedCell(source) {
+    const text = (source || '').trim();
+    const amount = text.match(
+      /^(.*?)([+-]?\s*₩?\s*\d{1,3}(?:,\d{3})+(?:\s*원)?)$/
+    );
+
+    if (!amount) {
+      return { label: text, amount: '' };
+    }
+
+    return {
+      label: amount[1].trim(),
+      amount: amount[2].replace(/\s+/g, ' ').trim()
+    };
+  }
+
+  function analyzeFramedAsciiBlock(text) {
+    if (
+      !text ||
+      text.length > MAX_ASCII_TREE_LENGTH ||
+      !/[가-힣]/.test(text) ||
+      hasExecutableCodeSignals(text)
+    ) {
+      return null;
+    }
+
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+    const horizontalFrames = rawLines.filter((line) => (
+      /^\s*[┌└╔╚+][─━═_=\-]{4,}[┐┘╗╝+]?\s*$/.test(line)
+    ));
+    const sideLines = rawLines.filter((line) => (
+      /^\s*[|│┃║].*[|│┃║]\s*$/.test(line)
+    ));
+
+    if (
+      rawLines.length < 3 ||
+      rawLines.length > 40 ||
+      horizontalFrames.length < 2 ||
+      !sideLines.length
+    ) {
+      return null;
+    }
+
+    const sourceLines = rawLines.map(asciiCharacterGridLine);
+    const populated = sourceLines.filter((line) => (
+      asciiVerticalRunEntries(line).length > 0
+    ));
+
+    if (
+      !populated.length ||
+      populated.some((line) => asciiVerticalRunEntries(line).length !== 2)
+    ) {
+      return null;
+    }
+
+    const normalized = normalizeAsciiDelimitedAxes(sourceLines, 2);
+    const analysis = createAsciiCharacterGridAnalysis(
+      source,
+      rawLines,
+      normalized.lines,
+      {
+        columnAnchors: normalized.anchors,
+        layout: 'framed'
+      }
+    );
+
+    return analysis && analysis.columns >= 20 ? analysis : null;
+  }
+
   function analyzeDelimitedAsciiTable(text) {
     if (
       !text ||
@@ -4270,55 +4377,62 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const source = text.replace(/\r\n?/g, '\n');
     const rawLines = source.split('\n');
     const nonemptyLines = rawLines.filter((line) => line.trim());
-    const amounts = source.match(/[+-]?\s*₩?\d{1,3}(?:,\d{3})+/g) || [];
 
     if (
       !nonemptyLines.length ||
-      nonemptyLines.length > 40 ||
-      amounts.length < 2
+      nonemptyLines.length > 40
     ) {
       return null;
     }
 
     const sourceLines = rawLines.map(asciiCharacterGridLine);
-    const separatorCounts = sourceLines.map((line, lineIndex) => (
-      rawLines[lineIndex].trim()
-        ? asciiVerticalRunEntries(line).length
-        : 0
+    const separatorCounts = sourceLines.map((line) => (
+      asciiVerticalRunEntries(line).length
     ));
-    const nonemptyCounts = separatorCounts.filter((count) => count > 0);
-    const separatorCount = nonemptyCounts[0] || 0;
+    const populatedCounts = separatorCounts.filter((count) => count > 0);
+    const separatorCount = populatedCounts[0] || 0;
+    const separatedLines = rawLines.filter((line, lineIndex) => (
+      separatorCounts[lineIndex] > 0
+    ));
 
     if (
       separatorCount < 1 ||
       separatorCount > 4 ||
-      nonemptyCounts.length !== nonemptyLines.length ||
-      nonemptyCounts.some((count) => count !== separatorCount) ||
-      nonemptyLines.some((line) => !/\s[|│]\s/.test(line))
+      populatedCounts.some((count) => count !== separatorCount) ||
+      separatedLines.some((line) => !/(?:^|\s)[|│](?:\s|$)/.test(line)) ||
+      !(
+        rawLines.length > 1 ||
+        /\s{2,}/.test(source) ||
+        /\d{1,3}(?:,\d{3})+/.test(source)
+      )
     ) {
       return null;
     }
 
-    const normalized = normalizeAsciiDelimitedAxes(
-      sourceLines,
-      separatorCount
-    );
-    const analysis = createAsciiCharacterGridAnalysis(
-      source,
-      rawLines,
-      normalized.lines,
-      {
-        columnAnchors: normalized.anchors,
-        layout: 'delimited'
+    const rows = rawLines.map((line, lineIndex) => {
+      if (!separatorCounts[lineIndex]) {
+        return { spanning: true, text: line.trim() };
       }
-    );
 
-    return analysis && analysis.columns >= 20 ? analysis : null;
+      return {
+        spanning: false,
+        segments: line.split(/[|│]/).map(parseAsciiDelimitedCell)
+      };
+    });
+
+    return {
+      kind: 'delimited-grid',
+      layout: 'delimited',
+      rows,
+      segmentCount: separatorCount + 1,
+      source
+    };
   }
 
   function analyzeAsciiDiagram(text) {
     return (
       analyzeAsciiBoxTree(text) ||
+      analyzeFramedAsciiBlock(text) ||
       analyzeAsciiTimelineDiagram(text) ||
       analyzeAsciiArrowDiagram(text) ||
       analyzeMultiPanelAsciiTable(text) ||
@@ -4384,8 +4498,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         ) ||
         (
           /[가-힣]/.test(text) &&
-          /\s[|│]\s/.test(text) &&
-          /[+-]?\s*₩?\d{1,3}(?:,\d{3})+/.test(text)
+          /^[ \t]*[┌└╔╚+][─━═_=\-]{4,}/m.test(text) &&
+          /^[ \t]*[|│┃║].*[|│┃║][ \t]*$/m.test(text)
+        ) ||
+        (
+          /[가-힣]/.test(text) &&
+          /(?:^|\s)[|│](?:\s|$)/m.test(text) &&
+          (/\s{2,}/.test(text) || /\d{1,3}(?:,\d{3})+/.test(text))
         )
       )
     );
@@ -4439,9 +4558,63 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         );
       } else if (analysis.kind === 'arrow-grid') {
         visual.classList.add('aistudio-ascii-arrow-grid');
+      } else if (analysis.kind === 'delimited-grid') {
+        const columns = [];
+        visual.classList.add('aistudio-ascii-delimited-grid');
+        for (
+          let segmentIndex = 0;
+          segmentIndex < analysis.segmentCount;
+          segmentIndex += 1
+        ) {
+          columns.push('minmax(max-content, auto)', 'max-content');
+          if (segmentIndex < analysis.segmentCount - 1) {
+            columns.push('max-content');
+          }
+        }
+        visual.style.setProperty(
+          '--aistudio-delimited-columns',
+          columns.join(' ')
+        );
       }
 
-      analysis.lines.forEach((line, lineIndex) => {
+      if (analysis.kind === 'delimited-grid') {
+        analysis.rows.forEach((line, lineIndex) => {
+          const row = document.createElement('span');
+          row.className = 'aistudio-ascii-tree-row';
+          row.setAttribute('data-aistudio-ascii-tree-line', String(lineIndex));
+
+          if (line.spanning) {
+            const cell = document.createElement('span');
+            cell.className =
+              'aistudio-ascii-delimited-cell aistudio-ascii-delimited-spanning';
+            cell.setAttribute('data-aistudio-ascii-cell', line.text);
+            row.appendChild(cell);
+          } else {
+            line.segments.forEach((segment, segmentIndex) => {
+              const label = document.createElement('span');
+              const amount = document.createElement('span');
+              label.className =
+                'aistudio-ascii-delimited-cell aistudio-ascii-delimited-label';
+              amount.className =
+                'aistudio-ascii-delimited-cell aistudio-ascii-delimited-amount';
+              label.setAttribute('data-aistudio-ascii-cell', segment.label);
+              amount.setAttribute('data-aistudio-ascii-cell', segment.amount);
+              row.append(label, amount);
+
+              if (segmentIndex < line.segments.length - 1) {
+                const separator = document.createElement('span');
+                separator.className =
+                  'aistudio-ascii-delimited-cell aistudio-ascii-delimited-separator';
+                separator.setAttribute('data-aistudio-ascii-cell', '|');
+                row.appendChild(separator);
+              }
+            });
+          }
+
+          visual.appendChild(row);
+        });
+      } else {
+        analysis.lines.forEach((line, lineIndex) => {
         const row = document.createElement('span');
         row.className = 'aistudio-ascii-tree-row';
         row.setAttribute('data-aistudio-ascii-tree-line', String(lineIndex));
@@ -4484,7 +4657,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         }
 
         visual.appendChild(row);
-      });
+        });
+      }
 
       code.classList.add('aistudio-ascii-tree-repaired');
       code.setAttribute('data-aistudio-ascii-tree-repaired', '1');

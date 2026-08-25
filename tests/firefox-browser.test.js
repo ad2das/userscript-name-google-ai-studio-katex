@@ -269,16 +269,43 @@ async (page) => {
     );
     const asciiJournalSingleOriginal =
       '(차변) 미지급금(부채의 감소)  1,150,000   | (대변) 현금(자산의 감소)  1,150,000';
+    const asciiJournalHeading = document.getElementById(
+      'reported-ascii-journal-with-heading'
+    );
+    const asciiJournalContinuation = document.getElementById(
+      'reported-ascii-journal-with-continuation'
+    );
+    const asciiFramed = document.getElementById(
+      'reported-ascii-framed-example'
+    );
+    const asciiFramedOriginal = [
+      '┌──────────────────────────────────────────────────────────────┐',
+      '│ [예제 8-7 소송 진행경과에 따른 회계처리 변화]                │',
+      '│ 1. 20X0년 말: 기업에 책임이 밝혀지지 않을 가능성 높음        │',
+      '│    ➜ 회계처리: 충당부채 인식 안 함.                          │',
+      '│ 2. 20X1년 말: 기업에 책임이 있다고 밝혀질 가능성 높음        │',
+      '│    ➜ 회계처리: 최선의 추정치를 충당부채로 공식 인식!         │',
+      '└──────────────────────────────────────────────────────────────┘'
+    ].join('\n');
     const journalRowOverlap = (root) => Array.from(root.querySelectorAll(
       '.aistudio-ascii-tree-row'
     )).some((row) => {
       const cells = Array.from(row.querySelectorAll(
-        '.aistudio-ascii-grid-run'
+        '.aistudio-ascii-delimited-cell'
       )).map((cell) => cell.getBoundingClientRect());
       return cells.some((cell, index) => (
         index > 0 && cells[index - 1].right > cell.left + 0.5
       ));
     });
+    const framedAxes = new Map();
+    for (const edge of asciiFramed.querySelectorAll(
+      '.aistudio-ascii-grid-structural'
+    )) {
+      const axis = edge.getAttribute('data-aistudio-ascii-panel');
+      const positions = framedAxes.get(axis) || [];
+      positions.push(edge.getBoundingClientRect().left);
+      framedAxes.set(axis, positions);
+    }
     const asciiComparison = document.getElementById(
       'reported-ascii-comparison'
     );
@@ -874,11 +901,11 @@ async (page) => {
         asciiJournalCode.innerText === asciiJournalOriginal &&
         asciiJournal.textContent === asciiJournalOriginal,
       asciiJournalDividerXs: Array.from(asciiJournal.querySelectorAll(
-        '.aistudio-ascii-grid-structural'
+        '.aistudio-ascii-delimited-separator'
       )).map((divider) => divider.getBoundingClientRect().left),
       asciiJournalRowsOverlap: journalRowOverlap(asciiJournal),
-      asciiJournalScrollable:
-        asciiJournal.scrollWidth > asciiJournal.clientWidth,
+      asciiJournalCompact:
+        asciiJournal.scrollWidth <= asciiJournal.clientWidth,
       asciiJournalSingleRepaired:
         asciiJournalSingle.querySelector(
           '.aistudio-ascii-delimited-grid[aria-hidden="true"]'
@@ -888,8 +915,58 @@ async (page) => {
           asciiJournalSingleOriginal &&
         asciiJournalSingle.textContent === asciiJournalSingleOriginal,
       asciiJournalSingleDividerCount: asciiJournalSingle.querySelectorAll(
-        '.aistudio-ascii-grid-structural'
+        '.aistudio-ascii-delimited-separator'
       ).length,
+      asciiJournalHeadingRepaired:
+        asciiJournalHeading.querySelector(
+          '.aistudio-ascii-delimited-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiJournalHeadingRows: asciiJournalHeading.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
+      asciiJournalHeadingSpans: asciiJournalHeading.querySelectorAll(
+        '.aistudio-ascii-delimited-spanning'
+      ).length,
+      asciiJournalHeadingDividers: asciiJournalHeading.querySelectorAll(
+        '.aistudio-ascii-delimited-separator'
+      ).length,
+      asciiJournalHeadingOverlap: journalRowOverlap(asciiJournalHeading),
+      asciiJournalContinuationRepaired:
+        asciiJournalContinuation.querySelector(
+          '.aistudio-ascii-delimited-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiJournalContinuationRows: asciiJournalContinuation.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
+      asciiJournalContinuationSpans:
+        asciiJournalContinuation.querySelectorAll(
+          '.aistudio-ascii-delimited-spanning'
+        ).length,
+      asciiJournalContinuationDividers:
+        asciiJournalContinuation.querySelectorAll(
+          '.aistudio-ascii-delimited-separator'
+        ).length,
+      asciiJournalContinuationAmounts: Array.from(
+        asciiJournalContinuation.querySelectorAll(
+          '.aistudio-ascii-delimited-amount'
+        ),
+        (cell) => cell.getAttribute('data-aistudio-ascii-cell')
+      ).filter(Boolean),
+      asciiJournalContinuationOverlap:
+        journalRowOverlap(asciiJournalContinuation),
+      asciiFramedRepaired:
+        asciiFramed.querySelector(
+          '.aistudio-ascii-framed-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiFramedOriginalPreserved:
+        asciiFramed.querySelector('code').textContent === asciiFramedOriginal &&
+        asciiFramed.textContent === asciiFramedOriginal,
+      asciiFramedRows: asciiFramed.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
+      asciiFramedAxisDrifts: Array.from(framedAxes.values()).map(
+        (positions) => Math.max(...positions) - Math.min(...positions)
+      ),
       actualCodePipePreserved:
         document.getElementById('actual-code-pipe').textContent ===
           'const 설명 = "매출 1,200,000 | 비용 1,150,000";' &&
@@ -1131,7 +1208,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1106'
+        'data-aistudio-mobile-safe-1107'
       )
     };
   });
@@ -1314,10 +1391,26 @@ async (page) => {
     Math.max(...rendering.asciiJournalDividerXs) -
       Math.min(...rendering.asciiJournalDividerXs) > 0.5 ||
     rendering.asciiJournalRowsOverlap ||
-    !rendering.asciiJournalScrollable ||
+    !rendering.asciiJournalCompact ||
     !rendering.asciiJournalSingleRepaired ||
     !rendering.asciiJournalSingleOriginalPreserved ||
     rendering.asciiJournalSingleDividerCount !== 1 ||
+    !rendering.asciiJournalHeadingRepaired ||
+    rendering.asciiJournalHeadingRows !== 4 ||
+    rendering.asciiJournalHeadingSpans !== 1 ||
+    rendering.asciiJournalHeadingDividers !== 3 ||
+    rendering.asciiJournalHeadingOverlap ||
+    !rendering.asciiJournalContinuationRepaired ||
+    rendering.asciiJournalContinuationRows !== 5 ||
+    rendering.asciiJournalContinuationSpans !== 1 ||
+    rendering.asciiJournalContinuationDividers !== 4 ||
+    !rendering.asciiJournalContinuationAmounts.includes('300,000') ||
+    rendering.asciiJournalContinuationOverlap ||
+    !rendering.asciiFramedRepaired ||
+    !rendering.asciiFramedOriginalPreserved ||
+    rendering.asciiFramedRows !== 7 ||
+    rendering.asciiFramedAxisDrifts.length !== 2 ||
+    rendering.asciiFramedAxisDrifts.some((drift) => drift > 0.5) ||
     !rendering.actualCodePipePreserved ||
     !rendering.actualCodeKoreanAssignmentPreserved ||
     !rendering.asciiComparisonRepaired ||
@@ -1419,7 +1512,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.6'
+    rendering.version !== '1.10.7'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
