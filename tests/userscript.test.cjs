@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.3/);
+assert.match(source, /\/\/ @version\s+1\.10\.4/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -77,6 +77,7 @@ const instrumented = source.replace(
   `
   globalThis.__userscriptTest = {
     analyzeAsciiBoxTree,
+    analyzeAsciiArrowDiagram,
     analyzeAsciiDiagram,
     analyzeMultiPanelAsciiTable,
     asciiCharacterGridLine,
@@ -392,6 +393,48 @@ assert.equal(
     '│ A │ B │',
     '└──┴──┘'
   ].join('\n')),
+  null
+);
+const reportedAsciiArrowDiagram = [
+  '[종이에 떡하니 인쇄된 100,000원]  ──▶  "액면가" (법적 기준 금액)',
+  '    [내 지갑에서 실제로 나간 95,000원]  ──▶  "발행가 / 실제 거래가" (실제 현금)',
+  '       [그 차이인 5,000원 이득]  ──▶  "할인차금 / 초과금 (차액)"'
+].join('\n');
+const asciiArrowDiagram = api.analyzeAsciiArrowDiagram(
+  reportedAsciiArrowDiagram
+);
+
+assert.ok(asciiArrowDiagram);
+assert.equal(asciiArrowDiagram.kind, 'arrow-grid');
+assert.equal(asciiArrowDiagram.source, reportedAsciiArrowDiagram);
+assert.deepEqual(
+  Array.from(asciiArrowDiagram.lines, (line) => ({
+    junction: line.junction,
+    left: line.left,
+    right: line.right
+  })),
+  [
+    {
+      junction: '──▶',
+      left: '[종이에 떡하니 인쇄된 100,000원]',
+      right: '"액면가" (법적 기준 금액)'
+    },
+    {
+      junction: '──▶',
+      left: '[내 지갑에서 실제로 나간 95,000원]',
+      right: '"발행가 / 실제 거래가" (실제 현금)'
+    },
+    {
+      junction: '──▶',
+      left: '[그 차이인 5,000원 이득]',
+      right: '"할인차금 / 초과금 (차액)"'
+    }
+  ]
+);
+assert.equal(
+  api.analyzeAsciiArrowDiagram(
+    'const result = [value] --> "not a Korean explanatory diagram";'
+  ),
   null
 );
 assert.equal(api.asciiCharacterWidth('A'), 1);

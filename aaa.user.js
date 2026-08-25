@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.3
+// @version      1.10.4
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.3';
-  const STYLE_ID = 'aistudio-mobile-safe-1103-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1103';
+  const VERSION = '1.10.4';
+  const STYLE_ID = 'aistudio-mobile-safe-1104-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1104';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -508,7 +508,8 @@
     'aistudio-mobile-safe-199-style',
     'aistudio-mobile-safe-1100-style',
     'aistudio-mobile-safe-1101-style',
-    'aistudio-mobile-safe-1102-style'
+    'aistudio-mobile-safe-1102-style',
+    'aistudio-mobile-safe-1103-style'
   ];
 
   const CSS_TEXT = `
@@ -870,6 +871,12 @@ ${SCOPE} .aistudio-ascii-tree-right {
 
 ${SCOPE} .aistudio-ascii-tree-plain {
   grid-column: 1 / -1 !important;
+}
+
+/* [설명] ──▶ "결과" 도식은 세 행 모두 같은 화살표 축에 맞춘다. */
+${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-arrow-grid {
+  column-gap: 0.75ch !important;
+  row-gap: 0.08em !important;
 }
 
 /* 좌우 표처럼 여러 축을 가진 ASCII 도식은 1ch 논리 격자에 배치한다. */
@@ -4060,9 +4067,69 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     };
   }
 
+  function analyzeAsciiArrowDiagram(text) {
+    if (
+      !text ||
+      text.length > MAX_ASCII_TREE_LENGTH ||
+      !/[가-힣]/.test(text)
+    ) {
+      return null;
+    }
+
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+    const nonemptyLines = rawLines.filter((line) => line.trim());
+
+    if (
+      nonemptyLines.length < 2 ||
+      nonemptyLines.length > 12 ||
+      rawLines.length > MAX_ASCII_TREE_LINES
+    ) {
+      return null;
+    }
+
+    const lines = [];
+
+    for (const line of rawLines) {
+      if (!line.trim()) {
+        lines.push({ plain: line });
+        continue;
+      }
+
+      const arrows = Array.from(
+        line.matchAll(/(?:─{2,}|-{2,})\s*[▶►>]/g)
+      );
+
+      if (arrows.length !== 1) {
+        return null;
+      }
+
+      const arrow = arrows[0][0];
+      const index = arrows[0].index;
+      const left = line.slice(0, index).trim();
+      const right = line.slice(index + arrow.length).trim();
+
+      if (
+        !/^\[[^\]\n]{2,}\]$/.test(left) ||
+        !/^["“][^"”\n]+["”]/.test(right)
+      ) {
+        return null;
+      }
+
+      lines.push({
+        junction: arrow.replace(/\s+/g, ''),
+        left,
+        right
+      });
+    }
+
+    return { kind: 'arrow-grid', lines, source };
+  }
+
   function analyzeAsciiDiagram(text) {
     return (
       analyzeAsciiBoxTree(text) ||
+      analyzeAsciiArrowDiagram(text) ||
       analyzeMultiPanelAsciiTable(text)
     );
   }
@@ -4117,6 +4184,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           /<[^>\n]{2,}>[\s\S]*<[^>\n]{2,}>/.test(text) &&
           /_{6,}|─{6,}/.test(text) &&
           /[|│]/.test(text)
+        ) ||
+        (
+          /[가-힣]/.test(text) &&
+          /\[[^\]\n]{2,}\]/.test(text) &&
+          /(?:─{2,}|-{2,})\s*[▶►>]/.test(text)
         )
       )
     );
@@ -4165,6 +4237,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           '--aistudio-ascii-columns',
           String(analysis.columns)
         );
+      } else if (analysis.kind === 'arrow-grid') {
+        visual.classList.add('aistudio-ascii-arrow-grid');
       }
 
       analysis.lines.forEach((line, lineIndex) => {

@@ -239,6 +239,15 @@ async (page) => {
       '계약 ─┤',
       '      └─ 확정 금액 ── 주가 변동에 따라 수량 변동? ───> 【금융부채】'
     ].join('\n');
+    const asciiArrow = document.getElementById(
+      'reported-ascii-arrow-diagram'
+    );
+    const asciiArrowCode = asciiArrow.querySelector('code');
+    const asciiArrowOriginal = [
+      '[종이에 떡하니 인쇄된 100,000원]  ──▶  "액면가" (법적 기준 금액)',
+      '    [내 지갑에서 실제로 나간 95,000원]  ──▶  "발행가 / 실제 거래가" (실제 현금)',
+      '       [그 차이인 5,000원 이득]  ──▶  "할인차금 / 초과금 (차액)"'
+    ].join('\n');
     const asciiComparison = document.getElementById(
       'reported-ascii-comparison'
     );
@@ -766,6 +775,30 @@ async (page) => {
       asciiContractTreeRowCount: asciiContractTree.querySelectorAll(
         '.aistudio-ascii-tree-row'
       ).length,
+      asciiArrowRepaired:
+        asciiArrow.classList.contains('aistudio-ascii-tree-block-repaired') &&
+        asciiArrow.querySelector(
+          '.aistudio-ascii-arrow-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiArrowOriginalPreserved:
+        asciiArrowCode.textContent === asciiArrowOriginal &&
+        asciiArrowCode.innerText === asciiArrowOriginal &&
+        asciiArrow.textContent === asciiArrowOriginal,
+      asciiArrowJunctions: Array.from(asciiArrow.querySelectorAll(
+        '.aistudio-ascii-tree-junction'
+      )).map((junction) => ({
+        text: junction.getAttribute('data-aistudio-ascii-cell'),
+        x: junction.getBoundingClientRect().left
+      })),
+      asciiArrowLeftEdges: Array.from(asciiArrow.querySelectorAll(
+        '.aistudio-ascii-tree-left'
+      )).map((cell) => cell.getBoundingClientRect().right),
+      asciiArrowRightEdges: Array.from(asciiArrow.querySelectorAll(
+        '.aistudio-ascii-tree-right'
+      )).map((cell) => cell.getBoundingClientRect().left),
+      asciiArrowRowCount: asciiArrow.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
       asciiComparisonRepaired:
         asciiComparison.classList.contains(
           'aistudio-ascii-tree-block-repaired'
@@ -995,7 +1028,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1103'
+        'data-aistudio-mobile-safe-1104'
       )
     };
   });
@@ -1145,6 +1178,21 @@ async (page) => {
     )) - Math.min(...rendering.asciiContractTreeJunctions.map(
       (junction) => junction.x
     )) > 0.5 ||
+    !rendering.asciiArrowRepaired ||
+    !rendering.asciiArrowOriginalPreserved ||
+    rendering.asciiArrowRowCount !== 3 ||
+    JSON.stringify(rendering.asciiArrowJunctions.map(
+      (junction) => junction.text
+    )) !== JSON.stringify(['──▶', '──▶', '──▶']) ||
+    Math.max(...rendering.asciiArrowJunctions.map(
+      (junction) => junction.x
+    )) - Math.min(...rendering.asciiArrowJunctions.map(
+      (junction) => junction.x
+    )) > 0.5 ||
+    Math.max(...rendering.asciiArrowLeftEdges) -
+      Math.min(...rendering.asciiArrowLeftEdges) > 0.5 ||
+    Math.max(...rendering.asciiArrowRightEdges) -
+      Math.min(...rendering.asciiArrowRightEdges) > 0.5 ||
     !rendering.asciiComparisonRepaired ||
     !rendering.asciiComparisonOriginalPreserved ||
     rendering.asciiComparisonStructuralCount < 8 ||
@@ -1244,7 +1292,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.3'
+    rendering.version !== '1.10.4'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
