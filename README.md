@@ -23,6 +23,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Raw TeX environments whose `\begin`/`\end` or row-separator backslashes were
   lost by AI Studio, including arrays, aligned equations, matrices, cases,
   split/equation, align/alignat, and gather variants
+- Broken accounting arrays with `\multicolumn` headings and `\hline` rules are
+  restored as aligned, responsive T-accounts instead of exposing TeX commands
 - Raw display/inline delimiters and bold math commands such as `\mathbf`,
   `\boldsymbol`, `\bm`, `\bold`, `\pmb`, `\textbf`, `\bf`, and nested
   `\text{...}`
@@ -85,7 +87,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.10.2 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.10.3 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script

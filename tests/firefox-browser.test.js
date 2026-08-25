@@ -162,6 +162,7 @@ async (page) => {
     );
     const rawMathIds = [
       'raw-accounting-array',
+      'raw-t-account-array',
       'raw-aligned-equation',
       'raw-cases',
       'raw-matrix',
@@ -506,6 +507,39 @@ async (page) => {
         count + node.querySelectorAll('.katex-error').length
       ), 0),
       arraySource: sourceOf('raw-accounting-array'),
+      tAccountFallback: (() => {
+        const root = document.getElementById('raw-t-account-array');
+        const table = root.querySelector('.aistudio-array-repaired');
+        const rows = Array.from(table?.querySelectorAll(
+          '.aistudio-array-row'
+        ) || []);
+        const heading = rows[0]?.querySelector('.aistudio-array-cell');
+        const ending = rows.at(-1)?.querySelector('.aistudio-array-cell');
+
+        return {
+          repaired: Boolean(table),
+          display: table ? getComputedStyle(table).display : '',
+          rawCommandsVisible: /\\(?:multicolumn|hline|textbf)\b/.test(
+            root.textContent
+          ),
+          texts: rows.map((row) => Array.from(
+            row.querySelectorAll('.aistudio-array-cell'),
+            (cell) => cell.textContent.trim()
+          )),
+          headingSpan: heading?.style.getPropertyValue(
+            '--aistudio-array-span'
+          ),
+          ruledRows: rows.filter((row) => (
+            row.querySelector('.aistudio-array-rule')
+          )).length,
+          headingWeight: heading
+            ? Number(getComputedStyle(heading.querySelector('strong')).fontWeight)
+            : 0,
+          endingWeight: ending
+            ? Number(getComputedStyle(ending.querySelector('strong')).fontWeight)
+            : 0
+        };
+      })(),
       alignedSource: sourceOf('raw-aligned-equation'),
       casesSource: sourceOf('raw-cases'),
       matrixSource: sourceOf('raw-matrix'),
@@ -961,7 +995,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1102'
+        'data-aistudio-mobile-safe-1103'
       )
     };
   });
@@ -1006,6 +1040,21 @@ async (page) => {
     rendering.rawMathErrorCount !== 0 ||
     !rendering.arraySource?.startsWith('\\begin{array}{ll|ll}') ||
     !rendering.arraySource?.includes('\\\\') ||
+    !rendering.tAccountFallback.repaired ||
+    rendering.tAccountFallback.display !== 'inline-grid' ||
+    rendering.tAccountFallback.rawCommandsVisible ||
+    rendering.tAccountFallback.headingSpan !== '2' ||
+    rendering.tAccountFallback.ruledRows !== 3 ||
+    rendering.tAccountFallback.headingWeight < 600 ||
+    rendering.tAccountFallback.endingWeight < 600 ||
+    JSON.stringify(rendering.tAccountFallback.texts) !== JSON.stringify([
+      ['보통주주식발행초과금 (자본잉여금)'],
+      ['차변 (감소)', '대변 (증가)'],
+      ['', '기초잔액: 4,000,000'],
+      ['', '3/1 증자: 2,000,000'],
+      ['', '12/1 현물출자: 3,000,000'],
+      ['기말잔액: 9,000,000', '']
+    ]) ||
     !rendering.alignedSource?.startsWith('\\begin{aligned}') ||
     !rendering.alignedSource?.includes('\\mathbf{+10,000') ||
     !rendering.alignedSource?.includes('\\text{\\bf 원 (처분이익)}') ||
@@ -1195,7 +1244,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.2'
+    rendering.version !== '1.10.3'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

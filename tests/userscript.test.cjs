@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.2/);
+assert.match(source, /\/\/ @version\s+1\.10\.3/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -513,6 +513,40 @@ assert.deepEqual(
   ]
 );
 assert.equal(api.parseRawArray('begin{array}{ll} no columns end{array}'), null);
+
+const brokenTAccount = String.raw`begin{array}{c|c}
+\multicolumn{2}{c}{\textbf{보통주주식발행초과금 (자본잉여금)}} \
+\hline \
+\text{차변 (감소)} & \text{대변 (증가)} \
+\hline \
+& \text{기초잔액: 4,000,000} \
+& \text{3/1 증자: 2,000,000} \
+& \text{12/1 현물출자: 3,000,000} \
+\hline \textbf{기말잔액: 9,000,000} &
+end{array}`;
+const parsedTAccount = api.parseRawArray(brokenTAccount);
+assert.ok(parsedTAccount);
+assert.deepEqual(
+  Array.from(parsedTAccount.rows, (row) => Array.from(row)),
+  [
+    ['보통주주식발행초과금 (자본잉여금)', ''],
+    ['차변 (감소)', '대변 (증가)'],
+    ['', '기초잔액: 4,000,000'],
+    ['', '3/1 증자: 2,000,000'],
+    ['', '12/1 현물출자: 3,000,000'],
+    ['기말잔액: 9,000,000', '']
+  ]
+);
+assert.deepEqual(
+  Array.from(parsedTAccount.rowMeta, (row) => row.beforeRule),
+  [false, true, true, false, false, true]
+);
+assert.equal(parsedTAccount.rowMeta[0].cells[0].colspan, 2);
+assert.equal(parsedTAccount.rowMeta[0].cells[0].alignment, 'c');
+assert.equal(
+  parsedTAccount.rowMeta[0].cells[0].source,
+  String.raw`\textbf{보통주주식발행초과금 (자본잉여금)}`
+);
 
 const brokenAligned = String.raw`begin{aligned}
 \text{기계장치 처분손익} &= \text{\bf [기계장치]의 공정가치(시세)} - \text{\bf [기계장치]의 장부원가(장부금액)} \

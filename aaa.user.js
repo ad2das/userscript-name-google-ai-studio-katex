@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.2
+// @version      1.10.3
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.2';
-  const STYLE_ID = 'aistudio-mobile-safe-1102-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1102';
+  const VERSION = '1.10.3';
+  const STYLE_ID = 'aistudio-mobile-safe-1103-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1103';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -507,7 +507,8 @@
     'aistudio-mobile-safe-198-style',
     'aistudio-mobile-safe-199-style',
     'aistudio-mobile-safe-1100-style',
-    'aistudio-mobile-safe-1101-style'
+    'aistudio-mobile-safe-1101-style',
+    'aistudio-mobile-safe-1102-style'
   ];
 
   const CSS_TEXT = `
@@ -681,10 +682,12 @@ ${SCOPE} .aistudio-rendered-math-bold-repaired {
  * 일부 잃어버린 경우에만 쓰는 보수적인 HTML fallback이다.
  */
 ${SCOPE} .aistudio-array-repaired {
-  display: inline-table !important;
+  display: inline-grid !important;
+  grid-template-columns:
+    repeat(var(--aistudio-array-columns), max-content) !important;
+  grid-auto-flow: row !important;
   max-width: 100% !important;
   margin: 0.65em auto !important;
-  border-collapse: collapse !important;
   font-family: var(--as-font) !important;
   font-size: 1em !important;
   line-height: 1.45 !important;
@@ -692,16 +695,21 @@ ${SCOPE} .aistudio-array-repaired {
 }
 
 ${SCOPE} .aistudio-array-row {
-  display: table-row !important;
+  display: contents !important;
 }
 
 ${SCOPE} .aistudio-array-cell {
-  display: table-cell !important;
+  display: block !important;
+  grid-column: span var(--aistudio-array-span, 1) !important;
   padding: 0.12em 0.45em !important;
   white-space: nowrap !important;
   overflow-wrap: normal !important;
   word-break: normal !important;
   vertical-align: baseline !important;
+}
+
+${SCOPE} .aistudio-array-rule {
+  border-top: 1px solid currentColor !important;
 }
 
 ${SCOPE} .aistudio-array-align-l {
@@ -2085,20 +2093,53 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function plainArrayCellText(source) {
-    let text = (source || '').trim();
-    let previous;
-
-    do {
-      previous = text;
-      text = text.replace(/\\text\s*\{([^{}]*)\}/gi, '$1');
-    } while (text !== previous);
-
-    return text
-      .replace(/\\(?:qquad|quad)\b/g, ' ')
-      .replace(/\\[,;:!]/g, ' ')
-      .replace(/\\([&%_#$\\{}])/g, '$1')
+    return simpleTexRuns((source || '').trim())
+      .map((run) => run.text)
+      .join('')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  function stripLeadingArrayRules(source) {
+    let text = (source || '').trim();
+    let hasRule = false;
+    let match;
+
+    while ((match = text.match(/^\\hline\b\s*/i))) {
+      hasRule = true;
+      text = text.slice(match[0].length).trim();
+    }
+
+    return { text, hasRule };
+  }
+
+  function parseRawArrayCell(source) {
+    const text = (source || '').trim();
+    const opening = text.match(
+      /^\\multicolumn\s*\{(\d+)\}\s*\{\s*([lcr])\s*\}\s*/i
+    );
+
+    if (!opening) {
+      return { source: text, colspan: 1, alignment: null };
+    }
+
+    const group = readTexGroup(text, opening[0].length);
+    const colspan = Number(opening[1]);
+
+    if (
+      !group ||
+      !Number.isInteger(colspan) ||
+      colspan < 1 ||
+      text.slice(group.end + 1).trim()
+    ) {
+      return null;
+    }
+
+    return {
+      source: group.content.trim(),
+      colspan,
+      alignment: opening[2].toLowerCase()
+    };
   }
 
   function readTexGroup(source, openingIndex) {
@@ -2442,25 +2483,56 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return null;
     }
 
-    const rows = splitRawMathRows(body).map(splitRawMathCells);
+    const parsedRows = [];
+    let pendingRule = false;
 
-    if (
-      !rows.length ||
-      rows.some((row) => row.length > columns.alignments.length)
-    ) {
-      return null;
+    for (const rawRow of splitRawMathRows(body)) {
+      const stripped = stripLeadingArrayRules(rawRow);
+
+      if (!stripped.text) {
+        pendingRule = pendingRule || stripped.hasRule;
+        continue;
+      }
+
+      const cells = splitRawMathCells(stripped.text).map(parseRawArrayCell);
+
+      if (cells.some((cell) => !cell)) {
+        return null;
+      }
+
+      let occupiedColumns = cells.reduce(
+        (total, cell) => total + cell.colspan,
+        0
+      );
+
+      if (occupiedColumns > columns.alignments.length) {
+        return null;
+      }
+
+      while (occupiedColumns < columns.alignments.length) {
+        cells.push({ source: '', colspan: 1, alignment: null });
+        occupiedColumns += 1;
+      }
+
+      parsedRows.push({
+        beforeRule: pendingRule || stripped.hasRule,
+        cells
+      });
+      pendingRule = false;
     }
 
-    for (const row of rows) {
-      while (row.length < columns.alignments.length) {
-        row.push('');
-      }
+    if (!parsedRows.length) {
+      return null;
     }
 
     return {
       alignments: columns.alignments,
       dividers: columns.dividers,
-      rows: rows.map((row) => row.map(plainArrayCellText))
+      rows: parsedRows.map((row) => row.cells.flatMap((cell) => [
+        plainArrayCellText(cell.source),
+        ...Array(Math.max(0, cell.colspan - 1)).fill('')
+      ])),
+      rowMeta: parsedRows
     };
   }
 
@@ -2469,28 +2541,44 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     array.className = 'aistudio-array-repaired';
     array.setAttribute('data-aistudio-array-repaired', '1');
     array.setAttribute('role', 'table');
+    array.style.setProperty(
+      '--aistudio-array-columns',
+      String(parsed.alignments.length)
+    );
 
-    for (const rowValues of parsed.rows) {
+    parsed.rows.forEach((rowValues, rowIndex) => {
       const row = document.createElement('span');
+      const rowMeta = parsed.rowMeta?.[rowIndex];
+      const cells = rowMeta?.cells || rowValues.map((value) => ({
+        source: value,
+        colspan: 1,
+        alignment: null
+      }));
       row.className = 'aistudio-array-row';
       row.setAttribute('role', 'row');
+      let columnIndex = 0;
 
-      rowValues.forEach((value, index) => {
+      cells.forEach((cellMeta) => {
         const cell = document.createElement('span');
-        const alignment = parsed.alignments[index] || 'l';
-        const divider = parsed.dividers.includes(index)
+        const colspan = Math.max(1, cellMeta.colspan || 1);
+        const alignment =
+          cellMeta.alignment || parsed.alignments[columnIndex] || 'l';
+        const divider = parsed.dividers.includes(columnIndex)
           ? ' aistudio-array-divider'
           : '';
+        const rule = rowMeta?.beforeRule ? ' aistudio-array-rule' : '';
 
         cell.className =
-          `aistudio-array-cell aistudio-array-align-${alignment}${divider}`;
+          `aistudio-array-cell aistudio-array-align-${alignment}${divider}${rule}`;
         cell.setAttribute('role', 'cell');
-        cell.textContent = value;
+        cell.style.setProperty('--aistudio-array-span', String(colspan));
+        appendSimpleTex(cell, cellMeta.source);
         row.appendChild(cell);
+        columnIndex += colspan;
       });
 
       array.appendChild(row);
-    }
+    });
 
     return array;
   }
