@@ -248,6 +248,16 @@ async (page) => {
       '    [내 지갑에서 실제로 나간 95,000원]  ──▶  "발행가 / 실제 거래가" (실제 현금)',
       '       [그 차이인 5,000원 이득]  ──▶  "할인차금 / 초과금 (차액)"'
     ].join('\n');
+    const asciiTimeline = document.getElementById(
+      'reported-ascii-balance-timeline'
+    );
+    const asciiTimelineCode = asciiTimeline.querySelector('code');
+    const asciiTimelineOriginal = [
+      '[기초 잔액]             10/1 처분이익             10/9 처분손실             [기말 최종잔액]',
+      ' 자기주식처분손실          +₩40,000                  -₩35,000              자기주식처분손실',
+      '    -₩25,000       ──▶ (손실 25,000 상계 후) ──▶ (이익 15,000 상계 후) ──▶    -₩20,000',
+      '                       (처분이익 +15,000 됨)      (처분손실 -20,000 됨)'
+    ].join('\n');
     const asciiComparison = document.getElementById(
       'reported-ascii-comparison'
     );
@@ -799,6 +809,40 @@ async (page) => {
       asciiArrowRowCount: asciiArrow.querySelectorAll(
         '.aistudio-ascii-tree-row'
       ).length,
+      asciiTimelineRepaired:
+        asciiTimeline.classList.contains(
+          'aistudio-ascii-tree-block-repaired'
+        ) &&
+        asciiTimeline.querySelector(
+          '.aistudio-ascii-timeline-grid[aria-hidden="true"]'
+        ) !== null,
+      asciiTimelineOriginalPreserved:
+        asciiTimelineCode.textContent === asciiTimelineOriginal &&
+        asciiTimelineCode.innerText === asciiTimelineOriginal &&
+        asciiTimeline.textContent === asciiTimelineOriginal,
+      asciiTimelineRowCount: asciiTimeline.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      ).length,
+      asciiTimelineArrowPositions: Array.from(
+        asciiTimeline.querySelectorAll(
+          '.aistudio-ascii-grid-run[data-aistudio-ascii-cell="──▶"]'
+        )
+      ).map((arrow) => ({
+        left: arrow.getBoundingClientRect().left,
+        top: arrow.getBoundingClientRect().top
+      })),
+      asciiTimelineRowsOverlap: Array.from(asciiTimeline.querySelectorAll(
+        '.aistudio-ascii-tree-row'
+      )).some((row) => {
+        const cells = Array.from(row.querySelectorAll(
+          '.aistudio-ascii-grid-run'
+        )).map((cell) => cell.getBoundingClientRect());
+        return cells.some((cell, index) => (
+          index > 0 && cells[index - 1].right > cell.left + 0.5
+        ));
+      }),
+      asciiTimelineScrollable:
+        asciiTimeline.scrollWidth > asciiTimeline.clientWidth,
       asciiComparisonRepaired:
         asciiComparison.classList.contains(
           'aistudio-ascii-tree-block-repaired'
@@ -1028,7 +1072,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1104'
+        'data-aistudio-mobile-safe-1105'
       )
     };
   });
@@ -1193,6 +1237,18 @@ async (page) => {
       Math.min(...rendering.asciiArrowLeftEdges) > 0.5 ||
     Math.max(...rendering.asciiArrowRightEdges) -
       Math.min(...rendering.asciiArrowRightEdges) > 0.5 ||
+    !rendering.asciiTimelineRepaired ||
+    !rendering.asciiTimelineOriginalPreserved ||
+    rendering.asciiTimelineRowCount !== 4 ||
+    rendering.asciiTimelineArrowPositions.length !== 3 ||
+    new Set(rendering.asciiTimelineArrowPositions.map(
+      (arrow) => Math.round(arrow.top * 10) / 10
+    )).size !== 1 ||
+    rendering.asciiTimelineArrowPositions.some((arrow, index, arrows) => (
+      index > 0 && arrow.left <= arrows[index - 1].left
+    )) ||
+    rendering.asciiTimelineRowsOverlap ||
+    !rendering.asciiTimelineScrollable ||
     !rendering.asciiComparisonRepaired ||
     !rendering.asciiComparisonOriginalPreserved ||
     rendering.asciiComparisonStructuralCount < 8 ||
@@ -1292,7 +1348,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.4'
+    rendering.version !== '1.10.5'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

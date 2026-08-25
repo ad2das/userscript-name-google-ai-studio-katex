@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.4/);
+assert.match(source, /\/\/ @version\s+1\.10\.5/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -78,6 +78,7 @@ const instrumented = source.replace(
   globalThis.__userscriptTest = {
     analyzeAsciiBoxTree,
     analyzeAsciiArrowDiagram,
+    analyzeAsciiTimelineDiagram,
     analyzeAsciiDiagram,
     analyzeMultiPanelAsciiTable,
     asciiCharacterGridLine,
@@ -435,6 +436,31 @@ assert.equal(
   api.analyzeAsciiArrowDiagram(
     'const result = [value] --> "not a Korean explanatory diagram";'
   ),
+  null
+);
+const reportedAsciiBalanceTimeline = [
+  '[기초 잔액]             10/1 처분이익             10/9 처분손실             [기말 최종잔액]',
+  ' 자기주식처분손실          +₩40,000                  -₩35,000              자기주식처분손실',
+  '    -₩25,000       ──▶ (손실 25,000 상계 후) ──▶ (이익 15,000 상계 후) ──▶    -₩20,000',
+  '                       (처분이익 +15,000 됨)      (처분손실 -20,000 됨)'
+].join('\n');
+const asciiBalanceTimeline = api.analyzeAsciiTimelineDiagram(
+  reportedAsciiBalanceTimeline
+);
+
+assert.ok(asciiBalanceTimeline);
+assert.equal(asciiBalanceTimeline.kind, 'character-grid');
+assert.equal(asciiBalanceTimeline.layout, 'timeline');
+assert.equal(asciiBalanceTimeline.source, reportedAsciiBalanceTimeline);
+assert.equal(asciiBalanceTimeline.lines.length, 4);
+assert.ok(asciiBalanceTimeline.columns > 60);
+assert.ok(asciiBalanceTimeline.runCount < 100);
+assert.equal(
+  api.analyzeAsciiTimelineDiagram([
+    'const dates = ["10/1", "10/9"];',
+    'const values = [25000, 40000, 35000];',
+    'const result = values.map(value => value);'
+  ].join('\n')),
   null
 );
 assert.equal(api.asciiCharacterWidth('A'), 1);

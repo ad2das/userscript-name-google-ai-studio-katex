@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.4
+// @version      1.10.5
 // @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.4';
-  const STYLE_ID = 'aistudio-mobile-safe-1104-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1104';
+  const VERSION = '1.10.5';
+  const STYLE_ID = 'aistudio-mobile-safe-1105-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1105';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -509,7 +509,8 @@
     'aistudio-mobile-safe-1100-style',
     'aistudio-mobile-safe-1101-style',
     'aistudio-mobile-safe-1102-style',
-    'aistudio-mobile-safe-1103-style'
+    'aistudio-mobile-safe-1103-style',
+    'aistudio-mobile-safe-1104-style'
   ];
 
   const CSS_TEXT = `
@@ -914,6 +915,10 @@ ${SCOPE} .aistudio-ascii-grid-run::before {
 
 ${SCOPE} .aistudio-ascii-grid-wide {
   font-family: var(--as-mono) !important;
+}
+
+${SCOPE} .aistudio-ascii-timeline-grid .aistudio-ascii-tree-row {
+  min-height: 1.65em !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
@@ -4126,9 +4131,64 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return { kind: 'arrow-grid', lines, source };
   }
 
+  function analyzeAsciiTimelineDiagram(text) {
+    if (
+      !text ||
+      text.length > MAX_ASCII_TREE_LENGTH ||
+      !/[가-힣]/.test(text)
+    ) {
+      return null;
+    }
+
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+    const bracketHeadings = source.match(/\[[^\]\n]{2,}\]/g) || [];
+    const arrows = source.match(/(?:─{2,}|-{2,})\s*[▶►>]/g) || [];
+    const dates = source.match(/\b\d{1,2}\/\d{1,2}\b/g) || [];
+    const amounts = source.match(/[+-]?\s*₩?\d{1,3}(?:,\d{3})+/g) || [];
+
+    if (
+      rawLines.length < 3 ||
+      rawLines.length > 12 ||
+      bracketHeadings.length < 2 ||
+      arrows.length < 2 ||
+      dates.length < 2 ||
+      amounts.length < 3 ||
+      !/잔액/.test(source) ||
+      !/(?:이익|손실)/.test(source)
+    ) {
+      return null;
+    }
+
+    const lines = rawLines.map(asciiCharacterGridLine);
+    const columns = Math.max(...lines.map((line) => line.columns));
+    const runCount = lines.reduce(
+      (total, line) => total + line.runs.length,
+      0
+    );
+
+    if (
+      columns < 30 ||
+      columns > MAX_ASCII_GRID_COLUMNS ||
+      runCount > MAX_ASCII_GRID_RUNS
+    ) {
+      return null;
+    }
+
+    return {
+      columns,
+      kind: 'character-grid',
+      layout: 'timeline',
+      lines,
+      runCount,
+      source
+    };
+  }
+
   function analyzeAsciiDiagram(text) {
     return (
       analyzeAsciiBoxTree(text) ||
+      analyzeAsciiTimelineDiagram(text) ||
       analyzeAsciiArrowDiagram(text) ||
       analyzeMultiPanelAsciiTable(text)
     );
@@ -4233,6 +4293,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       if (analysis.kind === 'character-grid') {
         visual.classList.add('aistudio-ascii-character-grid');
+        if (analysis.layout === 'timeline') {
+          visual.classList.add('aistudio-ascii-timeline-grid');
+        }
         visual.style.setProperty(
           '--aistudio-ascii-columns',
           String(analysis.columns)
