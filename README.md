@@ -83,8 +83,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   and single-row entries share the same parser without account-name rules
 - Fully framed Korean code diagrams normalize both outer edges in the shared
   Unicode character grid, while real source code and copy text stay untouched
-- Long-running AI Studio document sessions kept warm without reloading the tab
-- A Google-auth/session preflight before stale Run/`Ctrl+Enter` submissions
+- Authentication, prompt input, Run/`Ctrl+Enter`, and AI Studio network requests
+  remain entirely native and are never intercepted by the display repair
 
 ## Target
 
@@ -96,13 +96,13 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.10.7 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.10.8 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
-does not retry a failed generation. It refreshes an exposed Google auth token when
-needed, warms the authenticated AI Studio document session before generation, and
-defers DOM repair only for the active latest answer while AI Studio is streaming.
+does not access Google auth state, issue session requests, intercept prompt events,
+or retry a failed generation. It defers DOM repair only for the active latest answer
+while AI Studio is streaming.
 
 Raw math repair is fail-closed: it replaces either an entire completed model-output
 container or complete line-bounded TeX blocks inside plain response text, and only
@@ -126,3 +126,5 @@ The test matrix runs the normalized sources through the same pinned KaTeX releas
 covers environment variants, bold commands, collapsed row separators, malformed input,
 and untrusted links. The browser fixture additionally verifies DOM boundaries, MathML,
 existing rendered math, and user-message preservation.
+It also verifies that loading the userscript and pressing Run trigger no auth refresh
+or userscript-originated fetch and preserve exactly one native Run click.

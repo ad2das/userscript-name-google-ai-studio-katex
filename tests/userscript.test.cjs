@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.7/);
+assert.match(source, /\/\/ @version\s+1\.10\.8/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -68,6 +68,18 @@ assert.match(
   /hasLocalGenerationActivity\(root, rootTurn\)[\s\S]*?deferredThisScan \+= 1;[\s\S]*?continue;/
 );
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
+assert.doesNotMatch(
+  source,
+  /gapi\.auth2|reloadAuthResponse|keepSessionFresh|refreshSessionDocument|installSessionKeepalive/
+);
+assert.doesNotMatch(
+  source,
+  /window\.fetch\(|preventDefault\(\)[\s\S]{0,300}stopImmediatePropagation\(\)/
+);
+assert.doesNotMatch(
+  source,
+  /document\.addEventListener\(\s*['"](?:click|keydown|keypress|input|beforeinput)['"]/
+);
 
 const tail = /\n  if \(document\.readyState === 'loading'\) \{[\s\S]*?\n\}\(\)\);\s*$/;
 assert.match(source, tail);
@@ -90,19 +102,16 @@ const instrumented = source.replace(
     MODEL_ACTIVITY_SELECTOR,
     RAW_MATH_ENVIRONMENTS,
     buttonLabel,
-    canSubmit,
     findMatches,
     findUnderlineMatches,
     findEmbeddedRawMathBlocks,
     generating,
     hasLiteralTableBreak,
     hasLiteralUnderline,
-    installSessionKeepalive,
     isRunActionLabel,
     isLikelyProseCodeText,
     isPromptRunButton,
     isStopActionLabel,
-    keepSessionFresh,
     hasRawMathText,
     normalizeCollapsedRowSeparators,
     normalizeKatexCommands,
@@ -115,12 +124,6 @@ const instrumented = source.replace(
   };
 }());`
 );
-
-let fetchCalls = 0;
-let authReloadCalls = 0;
-let statusElement = null;
-const htmlAttributes = new Map();
-const listeners = new Map();
 
 const context = {
   Array,
@@ -142,14 +145,8 @@ const context = {
   clearTimeout,
   console,
   document: {
-    addEventListener(type, listener) {
-      listeners.set(type, listener);
-    },
-    body: {
-      appendChild(child) {
-        statusElement = child;
-      }
-    },
+    addEventListener() {},
+    body: {},
     createDocumentFragment() {
       return {
         children: [],
@@ -174,16 +171,8 @@ const context = {
     createTextNode(text) {
       return { nodeType: 3, nodeValue: text };
     },
-    documentElement: {
-      setAttribute(name, value) {
-        htmlAttributes.set(name, value);
-      }
-    },
-    getElementById(id) {
-      return statusElement && statusElement.id === id
-        ? statusElement
-        : null;
-    },
+    documentElement: { setAttribute() {} },
+    getElementById() { return null; },
     querySelectorAll() {
       return [];
     }
@@ -194,38 +183,6 @@ const context = {
   setTimeout,
   window: {
     clearTimeout,
-    fetch: async (_url, options) => {
-      fetchCalls += 1;
-      assert.equal(options.credentials, 'include');
-      assert.equal(options.cache, 'no-store');
-      return {
-        ok: true,
-        url: 'https://aistudio.google.com/prompts/example',
-        body: {
-          cancel: async () => {}
-        }
-      };
-    },
-    gapi: {
-      auth2: {
-        getAuthInstance() {
-          return {
-            currentUser: {
-              get() {
-                return {
-                  getAuthResponse() {
-                    return { expires_at: Date.now() + 1000 };
-                  },
-                  async reloadAuthResponse() {
-                    authReloadCalls += 1;
-                  }
-                };
-              }
-            }
-          };
-        }
-      }
-    },
     location: {
       href: 'https://aistudio.google.com/prompts/example#fragment',
       origin: 'https://aistudio.google.com'
@@ -1313,11 +1270,6 @@ const currentRunButton = {
 
 assert.match(api.buttonLabel(currentRunButton), /Run/);
 assert.equal(api.isPromptRunButton(currentRunButton), true);
-assert.equal(api.canSubmit(currentRunButton), true);
-currentRunButton.getAttribute = (name) => (
-  name === 'aria-disabled' ? 'true' : null
-);
-assert.equal(api.canSubmit(currentRunButton), false);
 
 const makeVisibleButton = (label) => ({
   isConnected: true,
@@ -1347,74 +1299,4 @@ context.document.querySelectorAll = (selector) => {
 };
 assert.equal(api.generating(), false);
 
-let programmaticRunClicks = 0;
-const preflightRunButton = makeVisibleButton('Run');
-preflightRunButton.disabled = false;
-preflightRunButton.nodeType = 1;
-preflightRunButton.getAttribute = (name) => (
-  name === 'aria-disabled' ? 'false' : null
-);
-preflightRunButton.closest = (selector) => (
-  selector.includes('button') ? preflightRunButton : null
-);
-preflightRunButton.matches = (selector) => (
-  selector.includes('ctrl-enter-submits')
-);
-preflightRunButton.click = () => {
-  programmaticRunClicks += 1;
-};
-
-context.document.querySelectorAll = (selector) => {
-  if (selector === 'button') return [preflightRunButton];
-  return [];
-};
-
-api.installSessionKeepalive();
-assert.equal(typeof listeners.get('click'), 'function');
-
-const staleClick = {
-  isTrusted: true,
-  target: preflightRunButton,
-  preventDefault() {
-    this.prevented = true;
-  },
-  stopImmediatePropagation() {
-    this.stopped = true;
-  }
-};
-listeners.get('click')(staleClick);
-assert.equal(staleClick.prevented, true);
-assert.equal(staleClick.stopped, true);
-
-(async () => {
-  assert.equal(await api.keepSessionFresh(true), true);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(fetchCalls, 1);
-  assert.equal(authReloadCalls, 1);
-  assert.equal(programmaticRunClicks, 1);
-  assert.ok(htmlAttributes.has('data-aistudio-session-fresh-at'));
-
-  assert.equal(await api.keepSessionFresh(false), true);
-  assert.equal(fetchCalls, 1, 'fresh sessions must not fetch again');
-  assert.equal(authReloadCalls, 1, 'fresh sessions must not reload auth again');
-
-  const freshClick = {
-    isTrusted: true,
-    target: preflightRunButton,
-    preventDefault() {
-      this.prevented = true;
-    },
-    stopImmediatePropagation() {
-      this.stopped = true;
-    }
-  };
-  listeners.get('click')(freshClick);
-  assert.equal(freshClick.prevented, undefined);
-  assert.equal(freshClick.stopped, undefined);
-  assert.equal(programmaticRunClicks, 1, 'fresh clicks must not be duplicated');
-
-  console.log('userscript tests passed');
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+console.log('userscript tests passed');

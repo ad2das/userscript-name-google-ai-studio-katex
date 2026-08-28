@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.7
-// @description  Mobile-safe KaTeX recovery, Markdown repairs, and guarded AI Studio session keepalive.
+// @version      1.10.8
+// @description  Mobile-safe KaTeX recovery and Markdown display repairs that leave AI Studio authentication and input untouched.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.7';
-  const STYLE_ID = 'aistudio-mobile-safe-1107-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1107';
+  const VERSION = '1.10.8';
+  const STYLE_ID = 'aistudio-mobile-safe-1108-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1108';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -138,13 +138,6 @@
     '.MathJax',
     'mjx-container'
   ].join(',');
-
-  const ENABLE_SESSION_KEEPALIVE = true;
-  const AUTH_EXPIRY_MARGIN_MS = 10 * 60 * 1000;
-  const AUTH_HEARTBEAT_MS = 5 * 60 * 1000;
-  const SESSION_FRESH_MS = 90 * 1000;
-  const SESSION_PREFLIGHT_TIMEOUT_MS = 6000;
-  const RECOVERY_STATUS_ID = 'aistudio-session-recovery-status';
 
   const RUN_BUTTON_SELECTOR = [
     'button[type="submit"]',
@@ -319,8 +312,7 @@
     '[role="dialog"]',
     '[role="alertdialog"]',
     '[aria-modal="true"]',
-    '.cdk-overlay-container',
-    `#${RECOVERY_STATUS_ID}`
+    '.cdk-overlay-container'
   ].join(',');
 
   const INLINE_REPAIR_CONTAINER_SELECTOR = [
@@ -512,7 +504,8 @@
     'aistudio-mobile-safe-1103-style',
     'aistudio-mobile-safe-1104-style',
     'aistudio-mobile-safe-1105-style',
-    'aistudio-mobile-safe-1106-style'
+    'aistudio-mobile-safe-1106-style',
+    'aistudio-mobile-safe-1107-style'
   ];
 
   const CSS_TEXT = `
@@ -1187,29 +1180,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   word-break: normal !important;
 }
 
-#${RECOVERY_STATUS_ID} {
-  position: fixed !important;
-  right: max(12px, env(safe-area-inset-right)) !important;
-  bottom: max(12px, env(safe-area-inset-bottom)) !important;
-  z-index: 2147483647 !important;
-  max-width: min(88vw, 420px) !important;
-  padding: 10px 13px !important;
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
-  border-radius: 12px !important;
-  background: rgba(32, 33, 36, 0.94) !important;
-  color: #fff !important;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28) !important;
-  font: 500 13px/1.45 var(--as-font) !important;
-  pointer-events: none !important;
-  opacity: 0 !important;
-  transform: translateY(8px) !important;
-  transition: opacity 160ms ease, transform 160ms ease !important;
-}
-
-#${RECOVERY_STATUS_ID}[data-visible="true"] {
-  opacity: 1 !important;
-  transform: translateY(0) !important;
-}
 `;
 
   const states = new WeakMap();
@@ -1222,12 +1192,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let pendingDueAt = Infinity;
   let scanQueued = false;
   let observer = null;
-  let authRefreshPromise = null;
-  let sessionRefreshPromise = null;
-  let runPreflightPromise = null;
-  let lastSessionRefreshAt = 0;
-  let bypassRunPreflight = false;
-  let statusTimer = null;
   let repairedTotal = 0;
   let mathFitResizeDirty = true;
   let fallbackDirty = true;
@@ -6198,14 +6162,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function canSubmit(button) {
-    return Boolean(
-      button &&
-      !button.disabled &&
-      button.getAttribute('aria-disabled') !== 'true'
-    );
-  }
-
   function isPromptRunButton(button) {
     if (!button) {
       return false;
@@ -6303,314 +6259,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       visible(indicator) &&
       fallbackActivityHasRepairHint(indicator)
     ));
-  }
-
-  function showRecoveryStatus(message, visibleForMs = 3500) {
-    const parent = document.body || document.documentElement;
-
-    if (!parent) {
-      return;
-    }
-
-    let status = document.getElementById(RECOVERY_STATUS_ID);
-
-    if (!status) {
-      status = document.createElement('div');
-      status.id = RECOVERY_STATUS_ID;
-      status.setAttribute('role', 'status');
-      status.setAttribute('aria-live', 'polite');
-      parent.appendChild(status);
-    }
-
-    status.textContent = message;
-    status.setAttribute('data-visible', 'true');
-
-    if (statusTimer) {
-      window.clearTimeout(statusTimer);
-    }
-
-    statusTimer = window.setTimeout(() => {
-      status.removeAttribute('data-visible');
-    }, visibleForMs);
-  }
-
-  function googleAuthUser() {
-    try {
-      const gapi = window.gapi;
-      const auth =
-        gapi &&
-        gapi.auth2 &&
-        typeof gapi.auth2.getAuthInstance === 'function'
-          ? gapi.auth2.getAuthInstance()
-          : null;
-
-      return (
-        auth &&
-        auth.currentUser &&
-        typeof auth.currentUser.get === 'function'
-      )
-        ? auth.currentUser.get()
-        : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function refreshGoogleAuthIfNeeded() {
-    if (authRefreshPromise) {
-      return authRefreshPromise;
-    }
-
-    const user = googleAuthUser();
-
-    if (
-      !user ||
-      typeof user.getAuthResponse !== 'function' ||
-      typeof user.reloadAuthResponse !== 'function'
-    ) {
-      return Promise.resolve(false);
-    }
-
-    try {
-      const response = user.getAuthResponse(true);
-      const expiresAt = response && Number(response.expires_at);
-
-      if (
-        !Number.isFinite(expiresAt) ||
-        expiresAt - Date.now() >= AUTH_EXPIRY_MARGIN_MS
-      ) {
-        return Promise.resolve(false);
-      }
-    } catch (_) {
-      return Promise.resolve(false);
-    }
-
-    authRefreshPromise = Promise.resolve()
-      .then(() => user.reloadAuthResponse())
-      .then(() => true)
-      .catch(() => false)
-      .finally(() => {
-        authRefreshPromise = null;
-      });
-
-    return authRefreshPromise;
-  }
-
-  function withTimeout(promise, timeoutMs) {
-    return Promise.race([
-      promise,
-      new Promise((resolve) => {
-        window.setTimeout(() => resolve(false), timeoutMs);
-      })
-    ]);
-  }
-
-  function refreshSessionDocument() {
-    if (typeof window.fetch !== 'function') {
-      return Promise.resolve(false);
-    }
-
-    /*
-     * This GET keeps the authenticated AI Studio document session warm and verifies
-     * that it is still reachable. It does not claim to replace app-internal tokens;
-     * the exposed Google auth object above is the only token we refresh directly.
-     */
-    return window.fetch(
-      window.location.href.split('#')[0],
-      {
-        method: 'GET',
-        credentials: 'include',
-        cache: 'no-store',
-        redirect: 'follow',
-        headers: {
-          Accept: 'text/html'
-        }
-      }
-    ).then((response) => {
-      let responseUrl = null;
-
-      try {
-        responseUrl = new URL(response.url || window.location.href);
-      } catch (_) {
-        responseUrl = null;
-      }
-
-      const refreshed = Boolean(
-        response.ok &&
-        responseUrl &&
-        responseUrl.origin === window.location.origin &&
-        !/^\/(?:welcome|available[_-]regions?)(?:\/|$)/i.test(
-          responseUrl.pathname
-        )
-      );
-
-      if (response.body && typeof response.body.cancel === 'function') {
-        response.body.cancel().catch(() => {});
-      }
-
-      return refreshed;
-    }).catch(() => false);
-  }
-
-  function keepSessionFresh(force = false) {
-    if (!ENABLE_SESSION_KEEPALIVE) {
-      return Promise.resolve(true);
-    }
-
-    if (
-      !force &&
-      Date.now() - lastSessionRefreshAt < SESSION_FRESH_MS
-    ) {
-      return Promise.resolve(true);
-    }
-
-    if (sessionRefreshPromise) {
-      return sessionRefreshPromise;
-    }
-
-    sessionRefreshPromise = withTimeout(
-      Promise.all([
-        refreshGoogleAuthIfNeeded(),
-        refreshSessionDocument()
-      ]).then(([tokenRefreshed, documentRefreshed]) => (
-        tokenRefreshed || documentRefreshed
-      )),
-      SESSION_PREFLIGHT_TIMEOUT_MS
-    ).then((refreshed) => {
-      if (refreshed) {
-        lastSessionRefreshAt = Date.now();
-        document.documentElement.setAttribute(
-          'data-aistudio-session-fresh-at',
-          String(lastSessionRefreshAt)
-        );
-      }
-
-      return Boolean(refreshed);
-    }).finally(() => {
-      sessionRefreshPromise = null;
-    });
-
-    return sessionRefreshPromise;
-  }
-
-  function clickedRunButton(target) {
-    const button = closest(target, RUN_BUTTON_SELECTOR);
-
-    if (
-      !button ||
-      !visible(button) ||
-      !isPromptRunButton(button) ||
-      !canSubmit(button) ||
-      !isRunActionLabel(buttonLabel(button)) ||
-      isStopActionLabel(buttonLabel(button))
-    ) {
-      return null;
-    }
-
-    return button;
-  }
-
-  function runAfterSessionPreflight(button) {
-    if (!button || runPreflightPromise) {
-      return;
-    }
-
-    showRecoveryStatus('답변 생성 전에 AI Studio 세션을 확인하고 있습니다…');
-
-    runPreflightPromise = keepSessionFresh(true).then((refreshed) => {
-      if (
-        !button.isConnected ||
-        !canSubmit(button) ||
-        generating()
-      ) {
-        showRecoveryStatus(
-          'AI Studio가 아직 생성 중이거나 Run 버튼 상태가 바뀌어 요청을 보내지 않았습니다.',
-          6000
-        );
-        return;
-      }
-
-      bypassRunPreflight = true;
-      showRecoveryStatus(
-        refreshed
-          ? '세션 확인 완료 · 답변 생성을 시작합니다.'
-          : '세션 선제 갱신을 확인하지 못해 AI Studio 기본 방식으로 전송합니다.',
-        refreshed ? 3500 : 6000
-      );
-
-      try {
-        button.click();
-      } finally {
-        window.setTimeout(() => {
-          bypassRunPreflight = false;
-        }, 0);
-      }
-    }).finally(() => {
-      runPreflightPromise = null;
-    });
-  }
-
-  function installSessionKeepalive() {
-    if (!ENABLE_SESSION_KEEPALIVE) {
-      return;
-    }
-
-    document.addEventListener(
-      'click',
-      (event) => {
-        if (bypassRunPreflight || !event.isTrusted) {
-          return;
-        }
-
-        const button = clickedRunButton(event.target);
-
-        if (
-          !button ||
-          Date.now() - lastSessionRefreshAt < SESSION_FRESH_MS
-        ) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        runAfterSessionPreflight(button);
-      },
-      true
-    );
-
-    document.addEventListener(
-      'keydown',
-      (event) => {
-        if (
-          bypassRunPreflight ||
-          event.key !== 'Enter' ||
-          (!event.ctrlKey && !event.metaKey) ||
-          Date.now() - lastSessionRefreshAt < SESSION_FRESH_MS
-        ) {
-          return;
-        }
-
-        const prompt = closest(
-          event.target,
-          'ms-prompt-input, ms-autosize-textarea, textarea, [contenteditable="true"], [role="textbox"]'
-        );
-        const button = findRunButton();
-
-        if (!prompt || !button || !canSubmit(button)) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        runAfterSessionPreflight(button);
-      },
-      true
-    );
-
-    window.setInterval(
-      () => keepSessionFresh(true),
-      AUTH_HEARTBEAT_MS
-    );
   }
 
   function scan() {
@@ -7123,14 +6771,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     installStyle();
     installObserver();
-    installSessionKeepalive();
     schedule(250);
-    keepSessionFresh(true);
 
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(
       'data-aistudio-mobile-fix',
-      'katex-engine-safe-math-markdown-repair-session-keepalive'
+      'katex-engine-safe-math-markdown-display-repair'
     );
 
     window.addEventListener(
@@ -7139,7 +6785,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         installStyle();
         mathFitResizeDirty = true;
         schedule(150);
-        keepSessionFresh(false);
       },
       { passive: true }
     );
@@ -7197,15 +6842,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           installStyle();
           mathFitResizeDirty = true;
           schedule(150);
-          keepSessionFresh(false);
         }
       },
-      { passive: true }
-    );
-
-    window.addEventListener(
-      'focus',
-      () => keepSessionFresh(false),
       { passive: true }
     );
 

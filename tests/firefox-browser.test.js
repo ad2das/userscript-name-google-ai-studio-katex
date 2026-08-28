@@ -1,8 +1,5 @@
 async (page) => {
   await page.evaluate(() => {
-    const realDateNow = Date.now.bind(Date);
-    window.__timeOffset = 0;
-    Date.now = () => realDateNow() + window.__timeOffset;
     window.__fetchCalls = 0;
     window.__authReloadCalls = 0;
     window.__appRunCount = 0;
@@ -1208,7 +1205,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1107'
+        'data-aistudio-mobile-safe-1108'
       )
     };
   });
@@ -1512,7 +1509,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.7'
+    rendering.version !== '1.10.8'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -1793,11 +1790,8 @@ async (page) => {
     );
   }
 
-  await page.evaluate(() => {
-    window.__timeOffset += 100000;
-  });
-  /* Date.now is intentionally offset above. Use a trusted pointer event
-     without the locator actionability clock, which shares that page shim. */
+  /* Use a trusted pointer event to prove the userscript leaves AI Studio's
+     native Run dispatch, authentication object, and network layer untouched. */
   const runButtonPoint = await page.evaluate(() => {
     const button = document.querySelector('button.ctrl-enter-submits');
     button.scrollIntoView({ block: 'center', inline: 'center' });
@@ -1811,18 +1805,20 @@ async (page) => {
   await page.mouse.click(runButtonPoint.x, runButtonPoint.y);
   await page.waitForTimeout(250);
 
-  const preflight = await page.evaluate(() => ({
+  const nativeRun = await page.evaluate(() => ({
     appRunCount: window.__appRunCount,
     authReloadCalls: window.__authReloadCalls,
     fetchCalls: window.__fetchCalls
   }));
 
   if (
-    preflight.appRunCount !== 1 ||
-    preflight.authReloadCalls !== 2 ||
-    preflight.fetchCalls !== 2
+    nativeRun.appRunCount !== 1 ||
+    nativeRun.authReloadCalls !== 0 ||
+    nativeRun.fetchCalls !== 0
   ) {
-    throw new Error(`Firefox preflight regression: ${JSON.stringify(preflight)}`);
+    throw new Error(
+      `Firefox native Run isolation regression: ${JSON.stringify(nativeRun)}`
+    );
   }
 
   return {
@@ -1831,6 +1827,6 @@ async (page) => {
     dynamicRepair,
     cachedMathFit,
     promptTyping,
-    preflight
+    nativeRun
   };
 }
