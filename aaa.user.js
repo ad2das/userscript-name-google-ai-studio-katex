@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.8
-// @description  Mobile-safe KaTeX recovery and Markdown display repairs that leave AI Studio authentication and input untouched.
+// @version      1.10.9
+// @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
 // @match        https://*.aistudio.google.com/*
@@ -12,7 +12,7 @@
 // @homepageURL  https://github.com/ad2das/userscript-name-google-ai-studio-katex
 // @supportURL   https://github.com/ad2das/userscript-name-google-ai-studio-katex/issues
 // @run-at       document-idle
-// @inject-into  auto
+// @inject-into  content
 // @noframes
 // @grant        none
 // ==/UserScript==
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.8';
-  const STYLE_ID = 'aistudio-mobile-safe-1108-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1108';
+  const VERSION = '1.10.9';
+  const STYLE_ID = 'aistudio-mobile-safe-1109-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1109';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -505,7 +505,8 @@
     'aistudio-mobile-safe-1104-style',
     'aistudio-mobile-safe-1105-style',
     'aistudio-mobile-safe-1106-style',
-    'aistudio-mobile-safe-1107-style'
+    'aistudio-mobile-safe-1107-style',
+    'aistudio-mobile-safe-1108-style'
   ];
 
   const CSS_TEXT = `
@@ -6081,39 +6082,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function hasVisibleActivityInside(container) {
-    if (!container || !container.querySelectorAll) {
-      return false;
-    }
-
-    return Array.from(container.querySelectorAll(
-      MODEL_ACTIVITY_INDICATORS.join(',')
-    )).some(visible);
-  }
-
-  function hasLocalGenerationActivity(root, rootTurn) {
-    if (hasVisibleActivityInside(rootTurn)) {
-      return true;
-    }
-
-    const surface = closest(root, FALLBACK_SURFACE_SELECTOR);
-    let current = root && root.parentElement;
-
-    for (
-      let depth = 0;
-      current && current !== surface && depth < MAX_FALLBACK_ASCENT;
-      depth += 1
-    ) {
-      if (hasVisibleActivityInside(current)) {
-        return true;
-      }
-
-      current = current.parentElement;
-    }
-
-    return false;
-  }
-
   function visible(element) {
     if (
       !element ||
@@ -6269,10 +6237,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return;
     }
 
-    const now = Date.now();
     const html = document.documentElement;
-    const fittedMathCount = fitWideDisplayMath(mathFitResizeDirty);
-    mathFitResizeDirty = false;
     const pageGenerating = generating();
 
     if (html) {
@@ -6280,6 +6245,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         'data-aistudio-mobile-fix-generating',
         pageGenerating ? 'true' : 'false'
       );
+    }
+
+    if (pageGenerating) {
+      /*
+       * AI Studio owns the document while a request is being submitted or a
+       * response is streaming. Do not measure, mark, or repair any response
+       * DOM in this state, including completed historical turns. Apart from
+       * avoiding app-state races, this removes all rendering work from the
+       * latency-sensitive generation path.
+       */
+      if (html) {
+        html.setAttribute('data-aistudio-mobile-fix-last-repairs', '0');
+        html.setAttribute('data-aistudio-mobile-fix-deferred-roots', '-1');
+      }
+
+      schedule(GENERATION_RECHECK_MS);
+      return;
+    }
+
+    const now = Date.now();
+    const fittedMathCount = fitWideDisplayMath(mathFitResizeDirty);
+    mathFitResizeDirty = false;
+
+    if (html) {
       html.setAttribute(
         'data-aistudio-mobile-fix-fitted-math',
         String(fittedMathCount)
@@ -6289,21 +6278,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const roots = collectRoots();
     const lastTurn = lastModelTurn(roots);
 
-    if (pageGenerating) {
-      /*
-       * 현재 작성 중인 마지막 turn만 건드리지 않는다. 다른 과거 turn은
-       * 이미 완성된 DOM이므로 정상적인 안정화 검사 후 복구할 수 있다.
-       * Stop 하나 때문에 긴 세션의 모든 과거 답변이 영구 동결되지 않도록
-       * 재확인도 계속한다.
-       */
-      schedule(GENERATION_RECHECK_MS);
-    }
-
     const fallbackCount = roots.filter((root) => (
       fallbackRoots.has(root)
     )).length;
     let repairedThisScan = 0;
-    let deferredThisScan = 0;
 
     if (html) {
       html.setAttribute(
@@ -6329,17 +6307,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         closest(root, MODEL_TURN_SELECTOR) ||
         root;
       const isLastTurn = sameTurnOrInside(rootTurn, lastTurn);
-
-      if (
-        pageGenerating &&
-        (
-          isLastTurn ||
-          hasLocalGenerationActivity(root, rootTurn)
-        )
-      ) {
-        deferredThisScan += 1;
-        continue;
-      }
 
       let state = states.get(root);
 
@@ -6441,7 +6408,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       );
       html.setAttribute(
         'data-aistudio-mobile-fix-deferred-roots',
-        String(deferredThisScan)
+        '0'
       );
     }
 

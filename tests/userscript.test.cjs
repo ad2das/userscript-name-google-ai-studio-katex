@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.8/);
+assert.match(source, /\/\/ @version\s+1\.10\.9/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -16,7 +16,7 @@ assert.match(
   source,
   /\/\/ @updateURL\s+https:\/\/raw\.githubusercontent\.com\/ad2das\/userscript-name-google-ai-studio-katex\/main\/aaa\.user\.js/
 );
-assert.match(source, /\/\/ @inject-into\s+auto/);
+assert.match(source, /\/\/ @inject-into\s+content/);
 assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
 assert.match(source, /function promptEditorFor/);
@@ -65,7 +65,7 @@ assert.match(
 );
 assert.match(
   source,
-  /hasLocalGenerationActivity\(root, rootTurn\)[\s\S]*?deferredThisScan \+= 1;[\s\S]*?continue;/
+  /const pageGenerating = generating\(\);[\s\S]*?if \(pageGenerating\) \{[\s\S]*?schedule\(GENERATION_RECHECK_MS\);\s*return;[\s\S]*?fitWideDisplayMath\(mathFitResizeDirty\)/
 );
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 assert.doesNotMatch(

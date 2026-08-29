@@ -1205,7 +1205,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1108'
+        'data-aistudio-mobile-safe-1109'
       )
     };
   });
@@ -1509,7 +1509,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.8'
+    rendering.version !== '1.10.9'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -1589,8 +1589,8 @@ async (page) => {
     completedStrongWeights: Array.from(document.querySelectorAll(
       '#dynamic-completed-old-response strong.aistudio-md-repaired'
     )).map((element) => Number(getComputedStyle(element).fontWeight)),
-    completedMarkersRemoved:
-      !document.getElementById('dynamic-completed-old-response')
+    completedMarkersPreserved:
+      document.getElementById('dynamic-completed-old-response')
         .textContent.includes('**'),
     modelText: document.getElementById(
       'dynamic-roleless-model-response'
@@ -1621,12 +1621,9 @@ async (page) => {
   }));
 
   if (
-    JSON.stringify(duringStreaming.completedStrongTexts) !== JSON.stringify([
-      '개발단계',
-      '모두 연구단계에서 발생한 것(전액 당기비용)'
-    ]) ||
-    duringStreaming.completedStrongWeights.some((weight) => weight < 600) ||
-    !duringStreaming.completedMarkersRemoved ||
+    duringStreaming.completedStrongTexts.length !== 0 ||
+    duringStreaming.completedStrongWeights.length !== 0 ||
+    !duringStreaming.completedMarkersPreserved ||
     !duringStreaming.modelText.includes('**동적 모델 출력**') ||
     !duringStreaming.modelText.includes('<u>동적 밑줄</u>') ||
     duringStreaming.modelRepairs !== 0 ||
@@ -1636,7 +1633,7 @@ async (page) => {
     !duringStreaming.userText.includes('<u>원문 밑줄</u>') ||
     duringStreaming.userRepairs !== 0 ||
     duringStreaming.generating !== 'true' ||
-    duringStreaming.deferredRoots < 1
+    duringStreaming.deferredRoots !== -1
   ) {
     throw new Error(
       `Firefox streaming guard regression: ${JSON.stringify(duringStreaming)}`
@@ -1675,6 +1672,12 @@ async (page) => {
       mathFitChecked: document.querySelector(
         '#dynamic-photo-split-aligned .katex-display'
       )?.getAttribute('data-aistudio-math-fit-checked') === '1',
+      completedStrongTexts: Array.from(document.querySelectorAll(
+        '#dynamic-completed-old-response strong.aistudio-md-repaired'
+      )).map((element) => element.textContent),
+      completedMarkersRemoved:
+        !document.getElementById('dynamic-completed-old-response')
+          .textContent.includes('**'),
       userText: user.textContent,
       userRepairs: user.querySelectorAll('strong, u').length
     };
@@ -1692,6 +1695,11 @@ async (page) => {
     !dynamicRepair.mathSource.startsWith('\\begin{aligned}') ||
     !dynamicRepair.mathSource.includes('사채상환손익') ||
     !dynamicRepair.mathFitChecked ||
+    JSON.stringify(dynamicRepair.completedStrongTexts) !== JSON.stringify([
+      '개발단계',
+      '모두 연구단계에서 발생한 것(전액 당기비용)'
+    ]) ||
+    !dynamicRepair.completedMarkersRemoved ||
     !dynamicRepair.userText.includes('**원문 굵게**') ||
     !dynamicRepair.userText.includes('<u>원문 밑줄</u>') ||
     dynamicRepair.userRepairs !== 0

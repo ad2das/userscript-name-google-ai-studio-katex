@@ -85,6 +85,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   Unicode character grid, while real source code and copy text stay untouched
 - Authentication, prompt input, Run/`Ctrl+Enter`, and AI Studio network requests
   remain entirely native and are never intercepted by the display repair
+- The userscript runs in Violentmonkey's isolated content context and suspends
+  all response measurement and repair while AI Studio is generating
 
 ## Target
 
@@ -96,13 +98,13 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.10.8 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.10.9 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey may inject it into
 the page context when allowed and safely fall back to the content context. The script
 does not access Google auth state, issue session requests, intercept prompt events,
-or retry a failed generation. It defers DOM repair only for the active latest answer
-while AI Studio is streaming.
+or retry a failed generation. It performs no response-DOM measurement or repair at
+all while AI Studio is submitting or streaming, then resumes after generation ends.
 
 Raw math repair is fail-closed: it replaces either an entire completed model-output
 container or complete line-bounded TeX blocks inside plain response text, and only
