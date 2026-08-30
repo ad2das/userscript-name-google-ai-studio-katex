@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.10
+// @version      1.10.11
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.10';
-  const STYLE_ID = 'aistudio-mobile-safe-11010-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-11010';
+  const VERSION = '1.10.11';
+  const STYLE_ID = 'aistudio-mobile-safe-11011-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-11011';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -139,11 +139,7 @@
     'mjx-container'
   ].join(',');
 
-  const RUN_BUTTON_SELECTOR = [
-    'button[type="submit"]',
-    'button.ctrl-enter-submits',
-    'button.run-button'
-  ].join(',');
+  const RUN_BUTTON_SELECTOR = 'button';
 
   /*
    * AI Studio has used both Model/model and assistant role values. Attribute
@@ -507,7 +503,8 @@
     'aistudio-mobile-safe-1106-style',
     'aistudio-mobile-safe-1107-style',
     'aistudio-mobile-safe-1108-style',
-    'aistudio-mobile-safe-1109-style'
+    'aistudio-mobile-safe-1109-style',
+    'aistudio-mobile-safe-11010-style'
   ];
 
   const CSS_TEXT = `
@@ -6178,7 +6175,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return Boolean(
       (
         button.matches &&
-        button.matches('button.ctrl-enter-submits, button.run-button')
+        button.matches('button')
       ) ||
       (
         button.querySelector &&

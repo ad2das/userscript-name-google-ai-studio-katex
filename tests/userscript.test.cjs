@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.10/);
+assert.match(source, /\/\/ @version\s+1\.10\.11/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -1319,8 +1319,11 @@ context.document.querySelectorAll = (selector) => {
 assert.equal(api.generating(), false);
 
 context.document.querySelectorAll = (selector) => {
-  if (selector === 'button' || selector.includes('button[type="submit"]')) {
-    return [makeVisibleButton('Stop'), makeVisibleButton('Run')];
+  if (selector === 'button') {
+    const genericRun = makeVisibleButton('Run');
+    genericRun.querySelector = () => null;
+    genericRun.matches = (candidate) => candidate === 'button';
+    return [makeVisibleButton('Stop'), genericRun];
   }
   return [];
 };

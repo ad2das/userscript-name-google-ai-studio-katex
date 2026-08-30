@@ -100,7 +100,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.10.10 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.10.11 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

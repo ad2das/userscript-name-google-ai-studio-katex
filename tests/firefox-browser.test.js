@@ -507,6 +507,12 @@ async (page) => {
         !quotedEmphasisCard.textContent.includes('**') &&
         !quotedEmphasisCard.textContent.includes('*"') &&
         !quotedEmphasisCard.textContent.includes('"*'),
+      ordinaryAmountBoldText: document.querySelector(
+        '#ordinary-amount-bold strong.aistudio-md-repaired'
+      )?.textContent,
+      ordinaryTipBoldText: document.querySelector(
+        '#ordinary-tip-bold strong.aistudio-md-repaired'
+      )?.textContent,
       boldContainerMatrixRepaired: [
         ['heading-bold', '항상 충족'],
         ['blockquote-bold', '신뢰성 있게 측정'],
@@ -1221,7 +1227,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-11010'
+        'data-aistudio-mobile-safe-11011'
       )
     };
   });
@@ -1247,6 +1253,9 @@ async (page) => {
     ]) ||
     rendering.quotedItalicStyles.some((style) => style !== 'italic') ||
     !rendering.quotedMarkersRemoved ||
+    rendering.ordinaryAmountBoldText !== '6,000원' ||
+    rendering.ordinaryTipBoldText !==
+      '20x2년 손익계산서 보증비는 딱 15,000원' ||
     !rendering.boldContainerMatrixRepaired ||
     !rendering.nativeBoldMixedMarkerRepaired ||
     !rendering.nativeBoldInnerMarkerRepaired ||
@@ -1533,7 +1542,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.10'
+    rendering.version !== '1.10.11'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -1666,7 +1675,10 @@ async (page) => {
 
   await page.evaluate(() => {
     document.getElementById('dynamic-model-progress').remove();
-    document.querySelector('.run-button-label').textContent = 'Run';
+    const runButton = document.getElementById('fixture-run-button');
+    runButton.removeAttribute('type');
+    runButton.className = 'new-generic-composer-action';
+    runButton.replaceChildren(document.createTextNode('Run'));
   });
   await page.waitForTimeout(2700);
 
@@ -1825,7 +1837,7 @@ async (page) => {
   /* Use a trusted pointer event to prove the userscript leaves AI Studio's
      native Run dispatch, authentication object, and network layer untouched. */
   const runButtonPoint = await page.evaluate(() => {
-    const button = document.querySelector('button.ctrl-enter-submits');
+    const button = document.getElementById('fixture-run-button');
     button.scrollIntoView({ block: 'center', inline: 'center' });
     const rect = button.getBoundingClientRect();
 
