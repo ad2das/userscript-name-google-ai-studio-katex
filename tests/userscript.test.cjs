@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.9/);
+assert.match(source, /\/\/ @version\s+1\.10\.10/);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -256,6 +256,25 @@ assert.equal(
   api.findMatches('Render ***bold italic*** too.')[0].marker,
   '***'
 );
+const quotedSceneMatches = api.findMatches(
+  '이 위원회는 **"축구는 관중에게 박진감과 공정함을 주어야 한다"**라는 ' +
+  '철학집을 만들었습니다. 규칙에는 *"오프사이드는 반칙이다"*라고 적고, ' +
+  '선수는 *"골로 인정해 달라!"*고 주장했습니다.'
+);
+assert.deepEqual(
+  Array.from(quotedSceneMatches, (match) => match.marker),
+  ['**', '*', '*']
+);
+assert.deepEqual(
+  Array.from(quotedSceneMatches, (match) => match.inner),
+  [
+    '"축구는 관중에게 박진감과 공정함을 주어야 한다"',
+    '"오프사이드는 반칙이다"',
+    '"골로 인정해 달라!"'
+  ]
+);
+assert.equal(api.findMatches('2 * 3 * 4와 *.js 파일').length, 0);
+assert.equal(api.findMatches('일반 *기울임*은 보수적으로 유지').length, 0);
 
 const reportedProseCode =
   '이미 자산으로 잡혀있는 브랜드라도 **"취득 후의 지출(후속지출)"은 ' +
@@ -1298,5 +1317,17 @@ context.document.querySelectorAll = (selector) => {
   return [];
 };
 assert.equal(api.generating(), false);
+
+context.document.querySelectorAll = (selector) => {
+  if (selector === 'button' || selector.includes('button[type="submit"]')) {
+    return [makeVisibleButton('Stop'), makeVisibleButton('Run')];
+  }
+  return [];
+};
+assert.equal(
+  api.generating(),
+  false,
+  'a visible composer Run must override stale Stop-like controls'
+);
 
 console.log('userscript tests passed');

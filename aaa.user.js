@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.9
+// @version      1.10.10
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.9';
-  const STYLE_ID = 'aistudio-mobile-safe-1109-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1109';
+  const VERSION = '1.10.10';
+  const STYLE_ID = 'aistudio-mobile-safe-11010-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-11010';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -506,7 +506,8 @@
     'aistudio-mobile-safe-1105-style',
     'aistudio-mobile-safe-1106-style',
     'aistudio-mobile-safe-1107-style',
-    'aistudio-mobile-safe-1108-style'
+    'aistudio-mobile-safe-1108-style',
+    'aistudio-mobile-safe-1109-style'
   ];
 
   const CSS_TEXT = `
@@ -588,7 +589,7 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-${SCOPE} :where(strong, b, .aistudio-md-repaired) {
+${SCOPE} :where(strong, b, .aistudio-md-repaired:not(.aistudio-md-italic)) {
   font-family: inherit !important;
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
@@ -769,6 +770,11 @@ ${SCOPE} .aistudio-tex-bold {
 
 ${SCOPE} .aistudio-md-bold-italic {
   font-style: italic !important;
+}
+
+${SCOPE} .aistudio-md-italic {
+  font-style: italic !important;
+  font-weight: inherit !important;
 }
 
 ${SCOPE} :where(a) {
@@ -1310,7 +1316,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       text &&
       (
         text.includes('**') ||
-        text.includes('__')
+        text.includes('__') ||
+        /(?:^|[^*])\*["'“‘][^\n]{1,2000}["'”’]\*(?!\*)/.test(text)
       )
     );
   }
@@ -3341,9 +3348,25 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
+  function isQuotedEmphasis(text) {
+    const pairs = new Map([
+      ['"', '"'],
+      ["'", "'"],
+      ['“', '”'],
+      ['‘', '’']
+    ]);
+    const closing = pairs.get(text[0]);
+
+    return Boolean(
+      closing &&
+      text.length > 2 &&
+      text[text.length - 1] === closing
+    );
+  }
+
   function findMatches(text) {
     const result = [];
-    const regex = /(\*\*\*|___|\*\*|__)(\S(?:[\s\S]*?\S)?)\1/g;
+    const regex = /(\*\*\*|___|\*\*|__|\*)(\S(?:[\s\S]*?\S)?)\1/g;
 
     let match;
 
@@ -3352,6 +3375,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const sourceInner = match[2] || '';
       const openingTrim = (
         marker[0] === '*' &&
+        marker.length > 1 &&
         sourceInner.startsWith('__') &&
         !sourceInner.endsWith('__')
       ) ? 2 : 0;
@@ -3379,6 +3403,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
 
       if (/\n\s*\n/.test(inner)) {
+        continue;
+      }
+
+      /*
+       * Single asterisks are much more ambiguous than bold markers. Repair
+       * only quoted prose, which covers AI Studio's leaked *"..."* emphasis
+       * without treating multiplication, wildcards, or list markers as HTML.
+       */
+      if (marker === '*' && !isQuotedEmphasis(inner)) {
         continue;
       }
 
@@ -3577,18 +3610,25 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function createRepairedStrong(text, marker = '**') {
-    const strong = document.createElement('strong');
-    strong.className = marker.length === 3
+  function createRepairedEmphasis(text, marker = '**') {
+    const italicOnly = marker === '*';
+    const emphasis = document.createElement(italicOnly ? 'em' : 'strong');
+    emphasis.className = marker.length === 3
       ? 'aistudio-md-repaired aistudio-md-bold-italic'
-      : 'aistudio-md-repaired';
-    strong.setAttribute('data-aistudio-md-repaired', '1');
-    strong.setAttribute(
+      : italicOnly
+        ? 'aistudio-md-repaired aistudio-md-italic'
+        : 'aistudio-md-repaired';
+    emphasis.setAttribute('data-aistudio-md-repaired', '1');
+    emphasis.setAttribute(
       'data-aistudio-md-emphasis',
-      marker.length === 3 ? 'bold-italic' : 'bold'
+      marker.length === 3
+        ? 'bold-italic'
+        : italicOnly
+          ? 'italic'
+          : 'bold'
     );
-    strong.textContent = text;
-    return strong;
+    emphasis.textContent = text;
+    return emphasis;
   }
 
   function trimFragmentText(fragment, leadingLength, trailingLength) {
@@ -3666,7 +3706,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
 
       fragment.appendChild(
-        createRepairedStrong(match.inner, match.marker)
+        createRepairedEmphasis(match.inner, match.marker)
       );
       cursor = match.end;
     }
@@ -5086,7 +5126,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       fragment.appendChild(
         insideContent
-          ? createRepairedStrong(part, match.marker)
+          ? createRepairedEmphasis(part, match.marker)
           : document.createTextNode(part)
       );
     }
@@ -5207,7 +5247,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
     markEmbeddedMathRoots(contents);
 
-    const strong = createRepairedStrong('', match.marker);
+    const strong = createRepairedEmphasis('', match.marker);
 
     strong.classList.add('aistudio-md-contains-math');
     strong.replaceChildren(contents);
@@ -6191,6 +6231,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function generating() {
+    /* A visible composer Run action is the authoritative completed state. */
+    if (findRunButton()) {
+      return false;
+    }
+
     const activeStopButton = Array.from(
       document.querySelectorAll('button')
     ).some((button) => (
@@ -6200,15 +6245,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     if (activeStopButton) {
       return true;
-    }
-
-    /*
-     * AI Studio keeps token/progress widgets mounted after a response has
-     * finished. A visible Run action is the authoritative completed state;
-     * stale spinners inside an old model turn must not freeze every repair.
-     */
-    if (findRunButton()) {
-      return false;
     }
 
     const indicators = document.querySelectorAll(

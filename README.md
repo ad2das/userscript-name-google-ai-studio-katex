@@ -46,6 +46,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   emphasis that spans an already-rendered KaTeX, MathML, or custom inline-math
   host and literal nested markers left inside AI Studio's native bold elements—even
   inside virtualized historical responses outside known renderer tags
+- Leaked quoted emphasis such as `*"quoted Korean prose"*`, rendered as
+  italics without mistaking multiplication, wildcards, or list markers
 - Bold single- or multi-paragraph Korean prose that AI Studio misclassifies as
   an indented code block, preserving paragraph breaks and adjacent Korean text,
   while preserving actual code and literal Markdown syntax examples
@@ -98,10 +100,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.10.9 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.10.10 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
-Violentmonkey may inject it into
-the page context when allowed and safely fall back to the content context. The script
+Violentmonkey runs it in the isolated content-script context, where it can repair the
+rendered DOM without accessing AI Studio's page JavaScript objects. The script
 does not access Google auth state, issue session requests, intercept prompt events,
 or retry a failed generation. It performs no response-DOM measurement or repair at
 all while AI Studio is submitting or streaming, then resumes after generation ends.

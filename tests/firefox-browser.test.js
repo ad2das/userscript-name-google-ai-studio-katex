@@ -141,6 +141,9 @@ async (page) => {
     const multipleBold = document.getElementById('multiple-bold');
     const splitBoldItalic = document.getElementById('split-bold-italic');
     const mathAdjacentBold = document.getElementById('math-adjacent-bold');
+    const quotedEmphasisCard = document.getElementById(
+      'quoted-emphasis-card'
+    );
     const nativeBoldMixedMarker = document.getElementById(
       'native-bold-mixed-marker'
     );
@@ -491,6 +494,19 @@ async (page) => {
       mathAdjacentBoldText: mathAdjacentBold.querySelector(
         'strong.aistudio-md-repaired'
       )?.textContent,
+      quotedBoldText: quotedEmphasisCard.querySelector(
+        'strong.aistudio-md-repaired'
+      )?.textContent,
+      quotedItalicTexts: Array.from(quotedEmphasisCard.querySelectorAll(
+        'em.aistudio-md-italic'
+      )).map((element) => element.textContent),
+      quotedItalicStyles: Array.from(quotedEmphasisCard.querySelectorAll(
+        'em.aistudio-md-italic'
+      )).map((element) => getComputedStyle(element).fontStyle),
+      quotedMarkersRemoved:
+        !quotedEmphasisCard.textContent.includes('**') &&
+        !quotedEmphasisCard.textContent.includes('*"') &&
+        !quotedEmphasisCard.textContent.includes('"*'),
       boldContainerMatrixRepaired: [
         ['heading-bold', '항상 충족'],
         ['blockquote-bold', '신뢰성 있게 측정'],
@@ -1205,7 +1221,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1109'
+        'data-aistudio-mobile-safe-11010'
       )
     };
   });
@@ -1223,6 +1239,14 @@ async (page) => {
     rendering.splitBoldItalicStyle !== 'italic' ||
     rendering.mathAdjacentBoldCount !== 1 ||
     rendering.mathAdjacentBoldText !== 'this is bold' ||
+    rendering.quotedBoldText !==
+      '"축구는 관중에게 박진감과 공정함을 주어야 한다"' ||
+    JSON.stringify(rendering.quotedItalicTexts) !== JSON.stringify([
+      '"오프사이드는 공격수가 수비수보다 앞서면 반칙이다"',
+      '"철학집에 박진감 넘치게 하라고 적혀 있으니 골로 인정해 달라!"'
+    ]) ||
+    rendering.quotedItalicStyles.some((style) => style !== 'italic') ||
+    !rendering.quotedMarkersRemoved ||
     !rendering.boldContainerMatrixRepaired ||
     !rendering.nativeBoldMixedMarkerRepaired ||
     !rendering.nativeBoldInnerMarkerRepaired ||
@@ -1509,7 +1533,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.9'
+    rendering.version !== '1.10.10'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
