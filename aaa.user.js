@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.7
+// @version      1.13.8
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.7';
-  const STYLE_ID = 'aistudio-mobile-safe-1137-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1137';
+  const VERSION = '1.13.8';
+  const STYLE_ID = 'aistudio-mobile-safe-1138-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1138';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -1282,6 +1282,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   const rootEligibility = new WeakMap();
   const inlineCursors = new WeakMap();
   const visibleInlinePriority = new Set();
+  let expandedVisibleRoots = new WeakSet();
   let scrollViewportTarget = null;
   let scrollViewportDirty = false;
   const fallbackRoots = new WeakSet();
@@ -5741,18 +5742,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    let repaired = 0;
-    const priorityStarted = schedulerNow();
-    for (const container of visibleInlinePriority) {
-      if (!root.contains(container)) continue;
-      if (schedulerNow() - priorityStarted >= SCAN_BUDGET_MS) {
-        schedule(16, true);
-        return repaired;
-      }
-      visibleInlinePriority.delete(container);
-      repaired += repairInlineEmphasisInContainer(container);
-    }
-
     const containers = Array.from(
       root.querySelectorAll(INLINE_REPAIR_CONTAINER_SELECTOR)
     );
@@ -5787,6 +5776,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     containers.push(...nativeEmphasis);
 
+    if (!expandedVisibleRoots.has(root)) {
+      expandedVisibleRoots.add(root);
+      // Hit-test rows may fall between short adjacent paragraphs. Include at
+      // most two neighboring containers on each side, without reading layout.
+      const sampled = Array.from(visibleInlinePriority).filter(node => root.contains(node));
+      for (const node of sampled) {
+        const index = containers.indexOf(node);
+        if (index < 0) continue;
+        for (let i = Math.max(0, index - 2); i <= Math.min(containers.length - 1, index + 2); i++) {
+          if (containers[i] !== root) visibleInlinePriority.add(containers[i]);
+        }
+      }
+    }
+    let repaired = 0;
+    const priorityStarted = schedulerNow();
+    for (const container of visibleInlinePriority) {
+      if (!root.contains(container)) continue;
+      if (schedulerNow() - priorityStarted >= SCAN_BUDGET_MS) {
+        schedule(16, true);
+        return repaired;
+      }
+      visibleInlinePriority.delete(container);
+      repaired += repairInlineEmphasisInContainer(container);
+    }
     const visited = new Set();
     const started = priorityStarted;
     const start = Math.min(inlineCursors.get(root) || 0, containers.length);
@@ -6558,6 +6571,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (!scrollViewportDirty || typeof document.elementFromPoint !== 'function') return;
     scrollViewportDirty = false;
     visibleInlinePriority.clear();
+    expandedVisibleRoots = new WeakSet();
     const rect = scrollViewportTarget?.getBoundingClientRect?.();
     const left = Math.max(0, rect?.left || 0);
     const right = Math.min(window.innerWidth, rect?.right || window.innerWidth);

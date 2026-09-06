@@ -104,7 +104,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.7 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.8 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -168,6 +168,12 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.13.8 includes two neighboring containers on either side of each sampled
+paragraph, so short lines between sample points also receive priority. This
+uses the existing container list without extra hit tests and retains the same
+per-pass processing budget. The regression explicitly excludes one paragraph
+from direct hit testing and verifies it is still repaired before offscreen work.
 
 1.13.7 captures nested conversation scrolling and prioritizes visible prose
 within the existing sliced repair budget. It samples at most 21 points per

@@ -1,6 +1,8 @@
 async (page) => {
   const fs = require('node:fs');
-  const source = fs.readFileSync('aaa.user.js', 'utf8')
+  const source = (process.argv.includes('--baseline')
+    ? require('node:child_process').execFileSync('git', ['show', '3ca5253:aaa.user.js'], { encoding: 'utf8' })
+    : fs.readFileSync('aaa.user.js', 'utf8'))
     .replace('  function repairInlineEmphasisInContainer(container, depth = 0, nested = false) {',
       '  function repairInlineEmphasisInContainer(container, depth = 0, nested = false) { if (container?.id) globalThis.__repairOrder.push(container.id);')
     .replace(/\n  if \(document\.readyState === 'loading'\)/,
@@ -13,6 +15,10 @@ async (page) => {
       p.textContent = '설명 문단 ' + i + ' 내용은 그대로 보존합니다.';
       root.append(p);
     }
+    const gap = document.createElement('p');
+    gap.id = 'gap';
+    gap.textContent = '**샘플 사이 강조**';
+    root.append(gap);
     const tail = document.createElement('p');
     tail.id = 'tail';
     tail.textContent = '**마지막 강조**';
@@ -22,7 +28,11 @@ async (page) => {
     globalThis.__scrollEvents = 0;
     document.addEventListener('scroll', () => __scrollEvents++, { capture: true, passive: true });
     const nativeHitTest = document.elementFromPoint.bind(document);
-    document.elementFromPoint = (...args) => { __hitTests++; return nativeHitTest(...args); };
+    document.elementFromPoint = (...args) => {
+      __hitTests++;
+      const hit = nativeHitTest(...args);
+      return hit?.closest('#gap') ? root : hit; // The gap paragraph is never directly sampled.
+    };
     globalThis.__idleId = 0;
     window.requestIdleCallback = () => ++__idleId; // Simulate a busy app's idle starvation.
     window.cancelIdleCallback = () => {};
@@ -43,6 +53,9 @@ async (page) => {
     scrollEvents: __scrollEvents,
     tailBeforeHead: __repairOrder.indexOf('tail') >= 0 &&
       (__repairOrder.indexOf('head') < 0 || __repairOrder.indexOf('tail') < __repairOrder.indexOf('head')),
+    gapBeforeHead: __repairOrder.indexOf('gap') >= 0 &&
+      (__repairOrder.indexOf('head') < 0 || __repairOrder.indexOf('gap') < __repairOrder.indexOf('head')),
+    gapRepaired: !!document.querySelector('#gap strong'),
     tailText: document.getElementById('tail').textContent
   }));
   await page.focus('textarea');
@@ -65,6 +78,6 @@ async (page) => {
   });
   await page.waitForTimeout(300);
   result.generationSourceProtected = await page.evaluate(() => document.getElementById('tail').textContent === '**생성 중 원문**' && !document.querySelector('#tail strong'));
-  if (!result.tailBeforeHead || result.tailText !== '마지막 강조' || !result.typingProtected || !result.typingDoesNotHitTest || !result.generationSourceProtected || result.hitTests > 21 * result.scrollEvents) throw new Error(JSON.stringify(result));
+  if (!result.gapBeforeHead || !result.gapRepaired || !result.tailBeforeHead || result.tailText !== '마지막 강조' || !result.typingProtected || !result.typingDoesNotHitTest || !result.generationSourceProtected || result.hitTests > 21 * result.scrollEvents) throw new Error(JSON.stringify(result));
   return result;
 }
