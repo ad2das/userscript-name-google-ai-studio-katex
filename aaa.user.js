@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.6
+// @version      1.13.7
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.6';
-  const STYLE_ID = 'aistudio-mobile-safe-1136-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1136';
+  const VERSION = '1.13.7';
+  const STYLE_ID = 'aistudio-mobile-safe-1137-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1137';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -1281,6 +1281,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   const states = new WeakMap();
   const rootEligibility = new WeakMap();
   const inlineCursors = new WeakMap();
+  const visibleInlinePriority = new Set();
+  let scrollViewportTarget = null;
+  let scrollViewportDirty = false;
   const fallbackRoots = new WeakSet();
   const rawMathScopeRoots = new WeakSet();
   const mathFitOriginalStyles = new WeakMap();
@@ -5738,6 +5741,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
+    let repaired = 0;
+    const priorityStarted = schedulerNow();
+    for (const container of visibleInlinePriority) {
+      if (!root.contains(container)) continue;
+      if (schedulerNow() - priorityStarted >= SCAN_BUDGET_MS) {
+        schedule(16, true);
+        return repaired;
+      }
+      visibleInlinePriority.delete(container);
+      repaired += repairInlineEmphasisInContainer(container);
+    }
+
     const containers = Array.from(
       root.querySelectorAll(INLINE_REPAIR_CONTAINER_SELECTOR)
     );
@@ -5772,9 +5787,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     containers.push(...nativeEmphasis);
 
-    let repaired = 0;
     const visited = new Set();
-    const started = schedulerNow();
+    const started = priorityStarted;
     const start = Math.min(inlineCursors.get(root) || 0, containers.length);
     inlineCursors.delete(root);
     for (let index = start; index < containers.length; index++) {
@@ -6540,6 +6554,32 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
+  function refreshVisibleInlinePriority() {
+    if (!scrollViewportDirty || typeof document.elementFromPoint !== 'function') return;
+    scrollViewportDirty = false;
+    visibleInlinePriority.clear();
+    const rect = scrollViewportTarget?.getBoundingClientRect?.();
+    const left = Math.max(0, rect?.left || 0);
+    const right = Math.min(window.innerWidth, rect?.right || window.innerWidth);
+    const top = Math.max(0, rect?.top || 0);
+    const bottom = Math.min(window.innerHeight, rect?.bottom || window.innerHeight);
+    if (right <= left || bottom <= top) return;
+    // Twenty-one hit tests, only after an actual scroll and outside typing or
+    // generation. No full document walk or per-paragraph geometry scan.
+    for (let row = 0; row < 7; row++) {
+      const y = top + Math.min(24, (bottom - top) / 2) +
+        Math.max(0, bottom - top - 48) * row / 6;
+      for (const fraction of [0.25, 0.5, 0.75]) {
+        const hit = document.elementFromPoint(left + (right - left) * fraction, y);
+        const container = closest(hit, INLINE_REPAIR_CONTAINER_SELECTOR);
+        if (container && closest(container, MODEL_TURN_SELECTOR) &&
+            !closest(container, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',pre,code,a')) {
+          visibleInlinePriority.add(container);
+        }
+      }
+    }
+  }
+
   function scanResponses() {
     if (
       document.hidden ||
@@ -6576,6 +6616,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return;
     }
 
+    refreshVisibleInlinePriority();
     flushPendingCleanup();
     const now = Date.now();
     const fittedMathCount = (mathFitDirty || mathFitResizeDirty)
@@ -6621,7 +6662,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
       scanCursor = (index + 1) % roots.length;
       const previous = states.get(root);
-      if (!inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
+      const visiblePriority = Array.from(visibleInlinePriority).some(container => root.contains(container));
+      if (!visiblePriority && !inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
           now - previous.lastAttemptAt < retryDelay(previous.attempts)) continue;
       const text = root.textContent || '';
 
@@ -6655,7 +6697,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
         states.set(root, state);
         schedule(
-          (isLastTurn ? LAST_TURN_WAIT_MS : OLD_TURN_WAIT_MS) + 50
+          (isLastTurn ? LAST_TURN_WAIT_MS : OLD_TURN_WAIT_MS) + 50,
+          visiblePriority
         );
         continue;
       }
@@ -6673,12 +6716,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const stabilityRemaining = wait - (now - state.since);
 
       if (stabilityRemaining > 0) {
-        schedule(stabilityRemaining + 50);
+        schedule(stabilityRemaining + 50, visiblePriority);
         continue;
       }
 
       if (
-        !inlineCursors.has(root) && state.attempted === text &&
+        !visiblePriority && !inlineCursors.has(root) && state.attempted === text &&
         now - (state.lastAttemptAt || 0) < retryWait
       ) {
         continue;
@@ -7475,14 +7518,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       { passive: true }
     );
 
-    window.addEventListener(
+    document.addEventListener(
       'scroll',
-      () => {
+      (event) => {
         if (!promptEditorActive()) {
-          schedule(250);
+          scrollViewportTarget = event.target;
+          scrollViewportDirty = true;
+          schedule(100, true);
         }
       },
-      { passive: true }
+      { passive: true, capture: true }
     );
 
     window.addEventListener(
