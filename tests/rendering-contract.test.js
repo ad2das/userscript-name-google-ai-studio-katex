@@ -65,6 +65,26 @@ async (page) => {
     response.append(table);
     __contract.repairRoot(table);
     checks.literalTableBreak = table.querySelector('td').textContent === '`<br>`';
+    const nativeCodeLiteral = document.createElement('p');
+    nativeCodeLiteral.innerHTML = '<span class="inline-code">**literal** &lt;u&gt;sample&lt;/u&gt;</span>';
+    response.append(nativeCodeLiteral);
+    const nativeCodeBefore = nativeCodeLiteral.innerHTML;
+    __contract.repairRoot(nativeCodeLiteral);
+    checks.nativeInlineCodeLiteral = nativeCodeLiteral.innerHTML === nativeCodeBefore;
+    const nativeCodeEmphasis = document.createElement('p');
+    nativeCodeEmphasis.innerHTML = '<span>앞 **</span><!--anchor--><span class="inline-code" id="native-code-atom">**literal**</span><!--anchor--><span>** 뒤</span>';
+    response.append(nativeCodeEmphasis);
+    const nativeCodeAtom = nativeCodeEmphasis.querySelector('.inline-code');
+    nativeCodeAtom.style.fontFamily = 'monospace';
+    let nativeCodeClicks = 0;
+    nativeCodeAtom.addEventListener('click', () => nativeCodeClicks++);
+    __contract.repairRoot(nativeCodeEmphasis);
+    nativeCodeAtom.click();
+    checks.boldAroundNativeCode = nativeCodeEmphasis.textContent === '앞 **literal** 뒤' &&
+      !!nativeCodeAtom.closest('strong') && !nativeCodeAtom.querySelector('strong');
+    checks.nativeInlineCodeIdentity = nativeCodeAtom.isConnected && nativeCodeClicks === 1;
+    checks.nativeInlineCodeTypography = getComputedStyle(nativeCodeAtom).fontFamily.includes('monospace') &&
+      Number(getComputedStyle(nativeCodeAtom).fontWeight) >= 600;
     const plainTex = document.createElement('p');
     plainTex.textContent = '\\text{기본 텍스트}';
     response.append(plainTex);
@@ -220,6 +240,16 @@ async (page) => {
     }
     const strong = document.querySelector('#reuse-emphasis strong');
     strong.textContent = '**새 강조**';
+    const plain = document.createElement('p');
+    plain.id = 'reuse-plain';
+    plain.textContent = '**처음 강조**';
+    document.getElementById('response').append(plain);
+    __contract.repairRoot(plain);
+    const plainStrong = plain.querySelector('strong');
+    const retained = document.createTextNode('이제 일반 문장');
+    const anchor = document.createComment('framework anchor');
+    plainStrong.replaceChildren(anchor, retained);
+    window.__plainReuse = { retained, anchor };
     const math = document.getElementById('container-resize');
     window.__oldFitFont = math.querySelector('.katex').style.fontSize;
     math.style.width = '650px';
@@ -227,6 +257,11 @@ async (page) => {
   await page.waitForTimeout(3000);
   Object.assign(result.checks, await page.evaluate(() => ({
     reusedEmphasis: document.getElementById('reuse-emphasis').textContent === '새 강조',
+    reusedPlainNotBold: !document.querySelector('#reuse-plain strong, #reuse-plain em') &&
+      getComputedStyle(__plainReuse.retained.parentElement).fontWeight ===
+        getComputedStyle(document.getElementById('reuse-plain')).fontWeight,
+    reusedPlainNodesPreserved: __plainReuse.anchor.parentNode === document.getElementById('reuse-plain') &&
+      __plainReuse.anchor.nextSibling === __plainReuse.retained && __plainReuse.retained.nodeValue === '이제 일반 문장',
     containerResizeRefit: document.querySelector('#container-resize .katex').style.fontSize !== __oldFitFont,
     reinsertedRoot: document.getElementById('reinserted-article').textContent === '분리 후 재사용',
     tableRewrapped: !!document.querySelector('#rewrap-table')?.parentElement.classList.contains('aistudio-table-scroll'),

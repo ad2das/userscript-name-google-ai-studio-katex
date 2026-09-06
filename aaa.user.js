@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.12.1
+// @version      1.12.2
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.12.1';
-  const STYLE_ID = 'aistudio-mobile-safe-1121-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1121';
+  const VERSION = '1.12.2';
+  const STYLE_ID = 'aistudio-mobile-safe-1122-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1122';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -271,6 +271,7 @@
 
     'a',
     'code',
+    '.inline-code',
     'pre',
     'kbd',
     'samp',
@@ -394,6 +395,7 @@
     'u',
     'ins',
     'code',
+    '.inline-code',
     'pre',
     'kbd',
     'samp',
@@ -472,6 +474,7 @@
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:where(${PROTECTED_CSS_SELECTOR}) *):not(:has(${PROTECTED_CSS_SELECTOR}))`;
 
   const LEGACY_STYLE_IDS = [
+    'aistudio-mobile-safe-1121-style',
     'aistudio-mobile-safe-1120-style',
     'codex-aistudio-katex-display-fix',
     'tm-aistudio-katex-display-fix',
@@ -1259,6 +1262,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let pendingTimerId = null;
   let pendingDueAt = Infinity;
   let scanQueued = false;
+  let pendingIdleId = null;
+  let pendingUrgent = false;
   let observer = null;
   let repairedTotal = 0;
   let lastPromptActivity = -Infinity;
@@ -5251,6 +5256,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     embeddedMathRoots(clone).forEach((element) => (
       element.replaceWith(document.createTextNode(INLINE_MATH_ATOM))
     ));
+    embeddedInlineCodeRoots(clone).forEach((element) => (
+      element.replaceWith(document.createTextNode(INLINE_MATH_ATOM))
+    ));
     clone.querySelectorAll?.('br').forEach((element) => element.replaceWith(document.createTextNode('\n')));
 
     return clone.textContent || '';
@@ -5265,7 +5273,21 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function fragmentCrossesUnsafeInlineBoundary(fragment) {
     return Array.from(
       fragment.querySelectorAll(INLINE_EMPHASIS_BOUNDARY_SELECTOR)
-    ).some((element) => !insideEmbeddedMath(element));
+    ).some((element) => !insideEmbeddedMath(element) &&
+      !closest(element, '.inline-code'));
+  }
+
+  function isNativeInlineCodeAtom(element) {
+    return Boolean(element?.nodeType === 1 && element.matches('.inline-code') &&
+      !closest(element, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', pre') &&
+      !element.matches('[role], [tabindex], [contenteditable]') &&
+      !element.querySelector(USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', a, button, input, textarea, select, [contenteditable], [role], [tabindex], img, svg, math, iframe, .katex, ms-katex'));
+  }
+
+  function embeddedInlineCodeRoots(fragment) {
+    return Array.from(fragment.querySelectorAll?.('.inline-code') || [])
+      .filter((element) => isNativeInlineCodeAtom(element) &&
+        !closest(element.parentElement, '.inline-code'));
   }
 
   function repairInlineMatchContainingMath(range, match, containsMath = true, depth = 0, pieces = null) {
@@ -5354,7 +5376,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const selected = range.cloneContents();
     const containsEmbeddedMath = embeddedMathRoots(selected).length > 0;
-    const selectedText = containsEmbeddedMath || selected.querySelector?.('br')
+    const selectedText = containsEmbeddedMath || selected.querySelector?.('br, .inline-code')
       ? fragmentTextWithoutEmbeddedMath(selected)
       : selected.textContent || '';
     const crossesBoundary = Boolean(
@@ -5443,6 +5465,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         } else if (looksLikeEmbeddedMathElement(node) && !closest(node, USER_SELECTOR)) {
           // A placeholder keeps **<math>amount</math>** nonempty. Never read
           // hidden MathML/TeX or descend into a native math renderer.
+          const start = text.length;
+          text += INLINE_MATH_ATOM;
+          records.push({ node, start, end: text.length });
+        } else if (isNativeInlineCodeAtom(node)) {
+          // Preserve the literal payload (including ** and <u>) as one atom.
+          // Only delimiters outside the native code span may add emphasis.
           const start = text.length;
           text += INLINE_MATH_ATOM;
           records.push({ node, start, end: text.length });
@@ -5676,7 +5704,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     for (let index = start; index < containers.length; index++) {
       if (index > start && (index - start >= MAX_INLINE_CONTAINERS_PER_PASS || schedulerNow() - started >= SCAN_BUDGET_MS)) {
         inlineCursors.set(root, index);
-        schedule(50);
+        schedule(16, true);
         break;
       }
       const container = containers[index];
@@ -5731,7 +5759,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (node.nodeType === 3) return node.nodeValue;
       if (node.nodeType !== 1 ||
           !/^(SPAN|MS-CMARK-NODE|STRONG|EM|B|I)$/.test(node.tagName) ||
-          node.matches('[contenteditable], [role], [tabindex]') ||
+          node.matches('[contenteditable], [role], [tabindex], .inline-code') ||
           closest(node, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR)) return null;
       let text = '';
       for (const child of node.childNodes) {
@@ -5754,7 +5782,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     };
     let repaired = 0;
     for (const strike of root.querySelectorAll('s:not(.aistudio-page-range-repaired), del:not(.aistudio-page-range-repaired)')) {
-      if (closest(strike, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', code, pre, a')) continue;
+      if (closest(strike, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', code, .inline-code, pre, a')) continue;
       const before = adjacentText(strike, 'previousSibling');
       const after = adjacentText(strike, 'nextSibling');
       const parts = Array.from(strike.childNodes, child => inlineText(child));
@@ -6239,17 +6267,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function lastModelTurn(roots = []) {
-    const last = roots[roots.length - 1];
-
-    if (!last) {
-      return null;
+    let last = null;
+    for (const root of roots) {
+      const turn = closest(root, 'ms-chat-turn') ||
+        closest(root, MODEL_TURN_SELECTOR) || root;
+      if (!turn.isConnected) continue;
+      // Viewport-first work queues are not in chronological DOM order.
+      if (!last || (last.compareDocumentPosition(turn) & 4)) last = turn;
     }
+    return last;
+  }
 
-    return (
-      closest(last, 'ms-chat-turn') ||
-      closest(last, MODEL_TURN_SELECTOR) ||
-      last
-    );
+  function retryDelay(attempts) {
+    return Math.min(RETRY_MAX_MS,
+      RETRY_BASE_MS * Math.pow(2, Math.min(Math.max(0, (attempts || 0) - 1), 4)));
   }
 
   function sameTurnOrInside(root, turn) {
@@ -6501,13 +6532,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const root = roots[index];
       if (offset && schedulerNow() - sliceStarted >= SCAN_BUDGET_MS) {
         scanCursor = index;
-        schedule(50);
+        schedule(16, true);
         break;
       }
       scanCursor = (index + 1) % roots.length;
       const previous = states.get(root);
       if (!inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
-          now - previous.lastAttemptAt < RETRY_MAX_MS) continue;
+          now - previous.lastAttemptAt < retryDelay(previous.attempts)) continue;
       const text = root.textContent || '';
 
       if (!hasRepairableRoot(root, text)) {
@@ -6553,10 +6584,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         : OLD_TURN_WAIT_MS;
 
       const attempts = state.attempts || 0;
-      const retryWait = Math.min(
-        RETRY_MAX_MS,
-        RETRY_BASE_MS * Math.pow(2, Math.min(attempts, 4))
-      );
+      const retryWait = retryDelay(attempts);
 
       const stabilityRemaining = wait - (now - state.since);
 
@@ -6653,7 +6681,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
   }
 
-  function schedule(delay = 0) {
+  function schedule(delay = 0, urgent = false) {
     if (!ENABLE_SAFE_OUTPUT_REPAIR) {
       return;
     }
@@ -6661,8 +6689,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const dueAt = schedulerNow() + Math.max(0, delay);
 
     if (scanQueued) {
-      return;
+      if (!urgent || pendingIdleId === null ||
+          typeof window.cancelIdleCallback !== 'function') return;
+      window.cancelIdleCallback(pendingIdleId);
+      pendingIdleId = null;
+      scanQueued = false;
     }
+
+    pendingUrgent = pendingUrgent || urgent;
 
     if (
       pendingTimerId !== null &&
@@ -6681,16 +6715,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       pendingTimerId = null;
       pendingDueAt = Infinity;
       scanQueued = true;
+      const runUrgently = pendingUrgent;
+      pendingUrgent = false;
 
       const run = () => {
+        pendingIdleId = null;
         scanQueued = false;
         scan();
       };
 
-      if (
+      // Completed-response continuation work is already sliced by scan's
+      // budget. Do not add up to 900ms idle starvation to every small slice.
+      // scan() still rechecks generation, visibility and prompt activity.
+      if (runUrgently && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(run);
+      } else if (
         typeof window.requestIdleCallback === 'function'
       ) {
-        window.requestIdleCallback(run, { timeout: 900 });
+        pendingIdleId = window.requestIdleCallback(run, { timeout: 900 });
       } else {
         run();
       }
@@ -6834,8 +6876,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       let emphasis = closest(element, '.aistudio-md-repaired');
       while (emphasis) {
         const parent = emphasis.parentElement;
-        emphasis.classList.remove('aistudio-md-repaired');
-        emphasis.removeAttribute('data-aistudio-md-repaired');
+        // This wrapper is ours, not native emphasis. A framework rewrite can
+        // reuse it for plain text; retaining <strong>/<em> retains stale style.
+        // Move the existing children (including comments), never clone them.
+        emphasis.replaceWith(...emphasis.childNodes);
         emphasis = closest(parent, '.aistudio-md-repaired');
       }
       const nativeMath = closest(element, '.aistudio-rendered-math-bold-repaired');
