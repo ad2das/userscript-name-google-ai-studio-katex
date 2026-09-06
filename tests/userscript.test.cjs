@@ -577,6 +577,20 @@ const squareAccountPanels = [
   '차변합계           │ 대변합계                    차변합계           │ 대변합계'
 ].join('\n');
 const squareAccounts = api.analyzeMultiPanelAsciiTable(squareAccountPanels);
+const tightAccountSource = [
+  '매출채권 (자산)',
+  '─────────────────────────────────────────────',
+  '기초잔액        60,000 │ 회수액        250,000',
+  '★당기외상매출★ 【295,000】│ 기말잔액      105,000',
+  '─────────────────────────────────────────────',
+  '차변합계       355,000 │ 대변합계      355,000'
+].join('\n');
+const tightAccount = api.analyzeAsciiDiagram(tightAccountSource);
+assert.ok(tightAccount, 'A ruled account may have a tight Unicode divider');
+assert.equal(tightAccount.kind, 'delimited-grid');
+assert.equal(tightAccount.source, tightAccountSource);
+assert.equal(tightAccount.rows[3].segments[0].amount, '【295,000】');
+assert.equal(api.analyzeAsciiDiagram('예시 A│B\n둘째 C│D'), null);
 assert.ok(squareAccounts, 'Square-bracket T-account headings must select panel-aware alignment');
 assert.equal(squareAccounts.source, squareAccountPanels);
 assert.equal(squareAccounts.panelAnchors.length, 2);

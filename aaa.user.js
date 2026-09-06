@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.2
+// @version      1.13.3
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.2';
-  const STYLE_ID = 'aistudio-mobile-safe-1132-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1132';
+  const VERSION = '1.13.3';
+  const STYLE_ID = 'aistudio-mobile-safe-1133-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1133';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -4410,7 +4410,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function parseAsciiDelimitedCell(source) {
     const text = (source || '').trim();
     const amount = text.match(
-      /^(.*?)([+-]?\s*₩?\s*\d{1,3}(?:,\d{3})+(?:\s*원)?)$/
+      /^(.*?)([+-]?\s*₩?\s*(?:【\d{1,3}(?:,\d{3})+】|\d{1,3}(?:,\d{3})+)(?:\s*원)?)$/
     );
 
     if (!amount) {
@@ -4507,12 +4507,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const separatedLines = rawLines.filter((line, lineIndex) => (
       separatorCounts[lineIndex] > 0
     ));
+    const ruledAccount = separatorCount === 1 &&
+      rawLines.filter(line => /^\s*─{6,}\s*$/.test(line)).length >= 2 &&
+      separatedLines.filter(line => /\d{1,3}(?:,\d{3})+/.test(line)).length >= 2;
 
     if (
       separatorCount < 1 ||
       separatorCount > 4 ||
       populatedCounts.some((count) => count !== separatorCount) ||
-      separatedLines.some((line) => !/(?:^|\s)[|│](?:\s|$)/.test(line)) ||
+      separatedLines.some((line) => !/(?:^|\s)[|│](?:\s|$)/.test(line) &&
+        !(ruledAccount && line.includes('│') && !line.includes('|'))) ||
       !(
         rawLines.length > 1 ||
         /\s{2,}/.test(source) ||
