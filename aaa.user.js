@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.3
+// @version      1.13.4
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.3';
-  const STYLE_ID = 'aistudio-mobile-safe-1133-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1133';
+  const VERSION = '1.13.4';
+  const STYLE_ID = 'aistudio-mobile-safe-1134-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1134';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -982,6 +982,22 @@ ${SCOPE} .aistudio-ascii-delimited-separator {
 
 ${SCOPE} .aistudio-ascii-delimited-spanning {
   grid-column: 1 / -1 !important;
+}
+
+/* Keep horizontal account rules spanning the same columns as their amounts. */
+${SCOPE} .aistudio-ascii-delimited-rule {
+  display: flex !important;
+  align-items: center !important;
+  align-self: stretch !important;
+  justify-self: stretch !important;
+  min-height: 1.65em !important;
+}
+
+${SCOPE} .aistudio-ascii-delimited-rule::before {
+  content: "" !important;
+  display: block !important;
+  width: 100% !important;
+  border-top: 1px solid currentColor !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
@@ -4711,6 +4727,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
             cell.className =
               'aistudio-ascii-delimited-cell aistudio-ascii-delimited-spanning';
             cell.setAttribute('data-aistudio-ascii-cell', line.text);
+            if (/^─{6,}$/.test(line.text)) {
+              cell.classList.add('aistudio-ascii-delimited-rule');
+            }
             row.appendChild(cell);
           } else {
             line.segments.forEach((segment, segmentIndex) => {

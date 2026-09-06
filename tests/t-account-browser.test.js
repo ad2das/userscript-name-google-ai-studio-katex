@@ -44,13 +44,23 @@ async (page) => {
     pre.scrollLeft = pre.scrollWidth;
     const reachable = !overflow || (['auto','scroll'].includes(overflowMode) && pre.scrollLeft > 0);
     pre.scrollLeft = 0;
+    const grid = pre.querySelector('.aistudio-ascii-delimited-grid').getBoundingClientRect();
+    const rules = Array.from(pre.querySelectorAll('.aistudio-ascii-delimited-rule'));
+    const fullWidthRules = rules.length === 2 && rules.every(rule => {
+      const rect = rule.getBoundingClientRect();
+      const painted = getComputedStyle(rule, '::before');
+      return Math.abs(rect.left - grid.left) < 1 && Math.abs(rect.right - grid.right) < 1 &&
+        parseFloat(painted.borderTopWidth) >= 1 && painted.content === '""' &&
+        Math.abs(parseFloat(painted.width) - rect.width) < 1;
+    });
     return { axes, aligned:axes.length===3 && Math.max(...axes)-Math.min(...axes)<1,
+      fullWidthRules,
       horizontalContentReachable: reachable,
       sourcePreserved:pre.querySelector('code')===__singleCode && __singleCode.textContent===text,
       wrappedAmountPreserved:!!pre.querySelector('[data-aistudio-ascii-cell="【295,000】"]') };
   }, singleSource);
   await page.screenshot({path:'output/playwright/t-account-alignment.png'});
   if (!result.sourcePreserved || !result.aligned || !result.oneVisual) throw new Error(JSON.stringify(result));
-  if (!result.single.aligned || !result.single.sourcePreserved || !result.single.wrappedAmountPreserved || !result.single.horizontalContentReachable) throw new Error(JSON.stringify(result.single));
+  if (!result.single.fullWidthRules || !result.single.aligned || !result.single.sourcePreserved || !result.single.wrappedAmountPreserved || !result.single.horizontalContentReachable) throw new Error(JSON.stringify(result.single));
   return result;
 }
