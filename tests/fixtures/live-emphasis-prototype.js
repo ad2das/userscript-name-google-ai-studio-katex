@@ -1,6 +1,6 @@
 // Experimental, fixture-only. Not loaded by the userscript or published UI.
 // Deliberately declines heterogeneous, protected, and oversized text.
-globalThis.createLiveEmphasisPrototype = function (block, parse) {
+globalThis.createLiveEmphasisPrototype = function (block, parse, shared = null) {
   const key = 'aistudio-live-prototype';
   let layer = null;
   let frame = 0;
@@ -8,13 +8,18 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
   let paints = 0;
   let lastLatency = null;
   let dirtyAt = performance.now();
-  const style = document.createElement('style');
-  style.textContent = `::highlight(${key}) { color: transparent; text-shadow: none; }`;
-  document.head.append(style);
+  let ownedRanges = [];
+  const style = shared ? null : document.createElement('style');
+  if (style) {
+    style.textContent = `::highlight(${key}) { color: transparent; text-shadow: none; }`;
+    document.head.append(style);
+  }
   const supported = !!(globalThis.Highlight && CSS.highlights &&
     CSS.supports('selector(::highlight(aistudio-live-prototype))'));
   function clear() {
-    CSS.highlights?.delete(key);
+    if (shared) ownedRanges.forEach(range => shared.highlight.delete(range));
+    else CSS.highlights?.delete(key);
+    ownedRanges = [];
     layer?.remove();
     layer = null;
   }
@@ -92,7 +97,7 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
       s.color, s.letterSpacing, s.wordSpacing, s.textTransform, s.direction].join('|');
     const mask = [];
     const candidate = document.createElement('div');
-    candidate.className = 'aistudio-live-preview-layer';
+    candidate.className = shared ? 'aistudio-live-preview-block' : 'aistudio-live-preview-layer';
     candidate.setAttribute('aria-hidden', 'true');
     candidate.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:1;';
     for (const match of parse(text).slice(0, 12)) {
@@ -150,8 +155,10 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
     }
     if (!mask.length) return;
     // Source and geometry are read and committed in the same JS task.
-    document.body.append(candidate);
-    CSS.highlights.set(key, new Highlight(...mask));
+    (shared?.host || document.body).append(candidate);
+    if (shared) mask.forEach(range => shared.highlight.add(range));
+    else CSS.highlights.set(key, new Highlight(...mask));
+    ownedRanges = mask;
     layer = candidate;
     paints++;
     lastLatency = performance.now() - dirtyAt;
@@ -159,11 +166,11 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
   function invalidate() {
     clear();
     dirtyAt = performance.now();
-    if (!stopped && !frame) frame = requestAnimationFrame(render);
+    if (!shared && !stopped && !frame) frame = requestAnimationFrame(render);
   }
-  const observer = new MutationObserver(invalidate);
-  observer.observe(block, { subtree: true, childList: true, characterData: true, attributes: true });
-  const attachmentObserver = new MutationObserver(records => {
+  const observer = shared ? null : new MutationObserver(invalidate);
+  observer?.observe(block, { subtree: true, childList: true, characterData: true, attributes: true });
+  const attachmentObserver = shared ? null : new MutationObserver(records => {
     if (!block.isConnected) { clear(); return; }
     const owned = node => node.nodeType === 1 && node.matches('.aistudio-live-preview-layer');
     if (records.some(record => {
@@ -173,23 +180,25 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
       return nodes.some(node => !owned(node));
     })) invalidate();
   });
-  attachmentObserver.observe(document.body, { subtree: true, childList: true,
+  attachmentObserver?.observe(document.body, { subtree: true, childList: true,
     attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
-  const events = [[document, 'scroll'], [window, 'resize'], [document, 'selectionchange'],
+  const events = shared ? [] : [[document, 'scroll'], [window, 'resize'], [document, 'selectionchange'],
     [document, 'visibilitychange'], [document.fonts, 'loadingdone'],
     [window.visualViewport, 'scroll'], [window.visualViewport, 'resize']];
   for (const [target, type] of events) target?.addEventListener(type, invalidate, true);
   invalidate();
   return {
-    stats: () => ({ supported, paints, lastLatency, visible: !!layer, ranges: CSS.highlights?.get(key)?.size || 0 }),
+    refresh: render,
+    invalidate,
+    stats: () => ({ supported, paints, lastLatency, visible: !!layer, ranges: ownedRanges.length }),
     stop() {
       stopped = true;
       cancelAnimationFrame(frame);
-      observer.disconnect();
-      attachmentObserver.disconnect();
+      observer?.disconnect();
+      attachmentObserver?.disconnect();
       for (const [target, type] of events) target?.removeEventListener(type, invalidate, true);
       clear();
-      style.remove();
+      style?.remove();
     }
   };
 };
