@@ -1238,7 +1238,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1138'
+        'data-aistudio-mobile-safe-1139'
       )
     };
   });
@@ -1555,7 +1555,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.13.8'
+    rendering.version !== '1.13.9'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

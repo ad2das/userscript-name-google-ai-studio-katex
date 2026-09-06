@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.8
+// @version      1.13.9
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.8';
-  const STYLE_ID = 'aistudio-mobile-safe-1138-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1138';
+  const VERSION = '1.13.9';
+  const STYLE_ID = 'aistudio-mobile-safe-1139-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1139';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -7139,7 +7139,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         }
         if (Math.abs(line.bottom - rect.bottom) > 1) return [];
         line.right = Math.max(line.right, rect.right);
-        if (offset >= match.start + 2 && offset < match.end - 2 && rect.width > 0) {
+        if (offset >= match.start + 2 && offset < match.end - (match.pendingClose ?? 2) && rect.width > 0) {
           if (line.contentLeft === null) line.contentLeft = rect.left;
           line.text += char;
         }
@@ -7181,9 +7181,23 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       candidate.className = shared ? 'aistudio-live-preview-block' : 'aistudio-live-preview-layer';
       candidate.setAttribute('aria-hidden', 'true');
       candidate.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:1;';
-      for (const match of parse(parseText).slice(0, 12)) {
+      const matches = parse(parseText);
+      const pending = parseText.match(/(?:^|\s)(\*\*['"“‘][^*\n]{0,180}\*{0,1})$/);
+      if (pending) {
+        const raw = pending[1];
+        const start = parseText.length - raw.length;
+        if (!matches.some(match => match.end > start)) {
+          const pendingClose = raw.endsWith('*') ? 1 : 0;
+          matches.push({ marker: '**', start, end: parseText.length, raw,
+            inner: raw.slice(2, raw.length - pendingClose), children: [],
+            openingTrim: 0, pendingClose });
+        }
+      }
+      for (const match of matches.slice(0, 12)) {
+        const quoteEnd = ({ "'": "'", '"': '"', '“': '”', '‘': '’' })[match.inner[0]];
+        const quotedTail = quoteEnd && match.inner.length > 1 && match.inner.endsWith(quoteEnd);
         if (match.marker !== '**' || match.children.length || match.openingTrim ||
-            match.end === text.length || /[*_]/.test(match.inner)) continue;
+            (match.end === text.length && match.pendingClose === undefined && !quotedTail) || /[*_]/.test(match.inner)) continue;
         const matchedRecords = records.filter(r => r.start < match.end && r.end > match.start);
         if (matchedRecords.some(r => r.protectedCode)) continue;
         const base = getComputedStyle(matchedRecords[0].node.parentElement);
@@ -7195,7 +7209,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
             !['normal', '0px'].includes(base.wordSpacing) ||
             matchedRecords.some(r => signature(getComputedStyle(r.node.parentElement)) !== signature(base))) continue;
         const range = rangeAt(records, match.start, match.end);
-        const inner = rangeAt(records, match.start + 2, match.end - 2);
+        const inner = rangeAt(records, match.start + 2, match.end - (match.pendingClose ?? 2));
         if (!range || !inner || range.toString() !== match.raw) continue;
         // Complex shaping needs a richer source map; never split its clusters.
         if (/[\p{Mark}\u200c-\u200f\u202a-\u202e\u2066-\u2069]/u.test(match.inner)) continue;
@@ -7216,9 +7230,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         const ascent = metrics.fontBoundingBoxAscent;
         const descent = metrics.fontBoundingBoxDescent;
         // Do not squeeze true bold or cover the adjacent native suffix.
+        const availableRight = match.pendingClose === undefined ? rect.right : Math.min(blockBounds.right, innerWidth);
         if (!Number.isFinite(ascent) || !Number.isFinite(descent) ||
-            metrics.width > rect.right - line.contentLeft + 0.1 ||
+            metrics.width > availableRight - line.contentLeft + 0.1 ||
             ascent + descent > rect.height + 2) { valid = false; break; }
+        if (match.pendingClose !== undefined &&
+            !geometryAllowed({ ...rect, right: Math.max(rect.right, line.contentLeft + metrics.width) })) {
+          valid = false; break;
+        }
         const width = Math.ceil(metrics.width + 2);
         const height = Math.ceil(rect.height + 2);
         const scale = devicePixelRatio;

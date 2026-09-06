@@ -29,6 +29,27 @@ async (page) => {
   await page.evaluate(() => { document.getElementById('live').textContent = '앞 문장 **아직 열림'; });
   await page.waitForTimeout(50);
   checks.incompletePairRevealsSource = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-emphasis'));
+  await page.evaluate(() => { document.getElementById('live').textContent = "앞 문장 **'가시성검증 05"; });
+  await page.waitForTimeout(50);
+  checks.pendingQuotedPairPaintsWithoutMutation = await page.evaluate(() =>
+    __preview.stats().visible && document.getElementById('live').textContent === "앞 문장 **'가시성검증 05");
+  await page.evaluate(() => { document.getElementById('live').firstChild.nodeValue += "'*"; });
+  await page.waitForTimeout(50);
+  checks.partialQuotedClosePaints = await page.evaluate(() => __preview.stats().visible);
+  await page.evaluate(() => { document.getElementById('live').firstChild.nodeValue += '*'; });
+  await page.waitForTimeout(50);
+  checks.closedQuotedTailPaints = await page.evaluate(() =>
+    __preview.stats().visible && document.getElementById('live').textContent === "앞 문장 **'가시성검증 05'**");
+  await page.evaluate(() => { document.getElementById('live').innerHTML = '<code>**\'문자 그대로</code>'; });
+  await page.waitForTimeout(50);
+  checks.pendingQuotedCodePreserved = await page.evaluate(() =>
+    !__preview.stats().visible && document.querySelector('#live code').textContent === "**'문자 그대로");
+  await page.evaluate(() => { document.getElementById('live').textContent = "앞 문장 **'임시 강조"; });
+  await page.waitForTimeout(50);
+  await page.evaluate(() => { document.getElementById('live').textContent = '앞 문장 일반 글자로 변경'; });
+  await page.waitForTimeout(50);
+  checks.pendingRewriteRestoresNative = await page.evaluate(() =>
+    !__preview.stats().visible && document.getElementById('live').textContent === '앞 문장 일반 글자로 변경');
   await page.evaluate(() => { document.getElementById('live').textContent = '앞 문장 **완료된 강조** 다음'; });
   await page.waitForTimeout(80);
   checks.closedPairRepaintsBeforeCompletion = await page.evaluate(() => __preview.stats().visible && __preview.stats().lastLatency <= 100);
