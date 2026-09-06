@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.12.2
+// @version      1.13.0
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.12.2';
-  const STYLE_ID = 'aistudio-mobile-safe-1122-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1122';
+  const VERSION = '1.13.0';
+  const STYLE_ID = 'aistudio-mobile-safe-1130-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1130';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -49,6 +49,7 @@
    * 두되, KaTeX의 stretchy SVG 내부 clipping 규칙은 반드시 유지한다.
    */
   const ENABLE_SAFE_OUTPUT_REPAIR = true;
+  const ENABLE_LIVE_EMPHASIS = true;
   const ENABLE_HEURISTIC_PROSE_CODE_REPAIR = false;
   const ENABLE_LEGACY_MARKER_RECOVERY = false;
 
@@ -474,6 +475,7 @@
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:where(${PROTECTED_CSS_SELECTOR}) *):not(:has(${PROTECTED_CSS_SELECTOR}))`;
 
   const LEGACY_STYLE_IDS = [
+    'aistudio-mobile-safe-1122-style',
     'aistudio-mobile-safe-1121-style',
     'aistudio-mobile-safe-1120-style',
     'codex-aistudio-katex-display-fix',
@@ -1264,6 +1266,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let scanQueued = false;
   let pendingIdleId = null;
   let pendingUrgent = false;
+  let liveEmphasisController = null;
   let observer = null;
   let repairedTotal = 0;
   let lastPromptActivity = -Infinity;
@@ -6478,10 +6481,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (pageGenerating) {
       /*
        * AI Studio owns the document while a request is being submitted or a
-       * response is streaming. Do not measure, mark, or repair any response
-       * DOM in this state, including completed historical turns. Apart from
-       * avoiding app-state races, this removes all rendering work from the
-       * latency-sensitive generation path.
+       * response is streaming. This completion pipeline must not measure,
+       * mark, or repair response DOM, including historical turns. The separate
+       * live emphasis controller may read eligible visible prose and paint in
+       * its own layer; it never invokes repairRoot or changes native text.
        */
       if (html) {
         html.setAttribute('data-aistudio-mobile-fix-last-repairs', '0');
@@ -6815,6 +6818,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     for (const mutation of mutations) {
       const element = elementOf(mutation.target);
       if (!element || promptEditorFor(element)) continue;
+      if (closest(element, '.aistudio-live-preview-layer')) continue;
+      const changedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
+      if (changedNodes.length && changedNodes.every(node =>
+          node.nodeType === 1 && node.matches('.aistudio-live-preview-layer'))) continue;
       if (mutation.attributeName === 'class' &&
           !element.matches(MODEL_TURN_SELECTOR + ',' + USER_SELECTOR) &&
           !/(?:^|\s)(?:model|user|model-prompt-container|user-prompt-container|user-message|human-message)(?:\s|$)/.test(mutation.oldValue || '')) continue;
@@ -6927,6 +6934,362 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     observer.observe(target, OBSERVER_OPTIONS);
   }
 
+  function createLiveEmphasisProjection(block, parse, shared = null) {
+    const key = 'aistudio-live-emphasis';
+    let layer = null;
+    let frame = 0;
+    let stopped = false;
+    let paints = 0;
+    let lastLatency = null;
+    let dirtyAt = performance.now();
+    let ownedRanges = [];
+    const style = shared ? null : document.createElement('style');
+    if (style) {
+      style.textContent = `::highlight(${key}) { color: transparent; text-shadow: none; }`;
+      document.head.append(style);
+    }
+    const supported = !!(globalThis.Highlight && CSS.highlights &&
+      CSS.supports('selector(::highlight(aistudio-live-emphasis))'));
+    function clear() {
+      if (shared) ownedRanges.forEach(range => shared.highlight.delete(range));
+      else CSS.highlights?.delete(key);
+      ownedRanges = [];
+      layer?.remove();
+      layer = null;
+    }
+    function rangeAt(records, start, end) {
+      const first = records.find(r => start >= r.start && start < r.end);
+      const last = records.find(r => end > r.start && end <= r.end);
+      if (!first || !last) return null;
+      const range = document.createRange();
+      range.setStart(first.node, start - first.start);
+      range.setEnd(last.node, end - last.start);
+      return range;
+    }
+    function geometryAllowed(rect) {
+      if (window.visualViewport && window.visualViewport.scale !== 1) return false;
+      for (let element = block; element; element = element.parentElement) {
+        const style = getComputedStyle(element);
+        if (style.visibility !== 'visible' || Number(style.opacity) !== 1 ||
+            style.transform !== 'none' || style.filter !== 'none' ||
+            style.writingMode !== 'horizontal-tb' || !['normal', '1'].includes(style.zoom)) return false;
+        const bounds = element.getBoundingClientRect();
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowX) &&
+            (rect.left < bounds.left + element.clientLeft ||
+             rect.right > bounds.left + element.clientLeft + element.clientWidth)) return false;
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowY) &&
+            (rect.top < bounds.top + element.clientTop ||
+             rect.bottom > bounds.top + element.clientTop + element.clientHeight)) return false;
+      }
+      // A body-level layer must never float above a dialog covering the source.
+      const y = (rect.top + rect.bottom) / 2;
+      return [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]
+        .every(x => block.contains(document.elementFromPoint(x, y)));
+    }
+    function lineRuns(records, match) {
+      const lines = [];
+      let offset = match.start;
+      for (const char of match.raw) {
+        const glyph = rangeAt(records, offset, offset + char.length);
+        if (!glyph) return [];
+        const rect = glyph.getBoundingClientRect();
+        let line = lines[lines.length - 1];
+        if (!line || Math.abs(line.top - rect.top) > 1) {
+          line = { top: rect.top, bottom: rect.bottom, left: rect.left,
+            right: rect.right, text: '', contentLeft: null };
+          lines.push(line);
+        }
+        if (Math.abs(line.bottom - rect.bottom) > 1) return [];
+        line.right = Math.max(line.right, rect.right);
+        if (offset >= match.start + 2 && offset < match.end - 2 && rect.width > 0) {
+          if (line.contentLeft === null) line.contentLeft = rect.left;
+          line.text += char;
+        }
+        offset += char.length;
+      }
+      return lines;
+    }
+    function render() {
+      frame = 0;
+      clear();
+      if (stopped || !supported || !block.isConnected || document.hidden) return;
+      const blockBounds = block.getBoundingClientRect();
+      if (blockBounds.bottom <= 0 || blockBounds.top >= innerHeight ||
+          blockBounds.right <= 0 || blockBounds.left >= innerWidth) return;
+      if (!getSelection().isCollapsed || block.querySelector(':not(span, ms-cmark-node, strong, b)') ||
+          block.closest('[contenteditable], [role="textbox"], [data-turn-role="user"], pre, code') ||
+          block.querySelector('[contenteditable], [role], [tabindex], [hidden], .inline-code, [aria-hidden="true"]')) return;
+      const text = block.textContent;
+      if (text.length > 512 || /[`$\\\n\uFFFC]/.test(text)) return;
+      const records = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      let offset = 0;
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (records.length >= 32) return;
+        records.push({ node, start: offset, end: offset + node.length });
+        offset += node.length;
+      }
+      const signature = s => [s.fontFamily, s.fontSize, s.fontWeight, s.fontStyle,
+        s.color, s.letterSpacing, s.wordSpacing, s.textTransform, s.direction].join('|');
+      const mask = [];
+      const candidate = document.createElement('div');
+      candidate.className = shared ? 'aistudio-live-preview-block' : 'aistudio-live-preview-layer';
+      candidate.setAttribute('aria-hidden', 'true');
+      candidate.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:1;';
+      for (const match of parse(text).slice(0, 12)) {
+        if (match.marker !== '**' || match.children.length || match.openingTrim ||
+            match.end === text.length || /[*_]/.test(match.inner)) continue;
+        const matchedRecords = records.filter(r => r.start < match.end && r.end > match.start);
+        const base = getComputedStyle(matchedRecords[0].node.parentElement);
+        // AI Studio's paragraph font can differ from its inline renderer font.
+        // Existing native emphasis outside this interval is not a reason to skip.
+        if (base.direction !== 'ltr' || base.textTransform !== 'none' ||
+            Number(base.fontWeight) >= 600 || base.fontStyle !== 'normal' ||
+            !['normal', '0px'].includes(base.letterSpacing) ||
+            !['normal', '0px'].includes(base.wordSpacing) ||
+            matchedRecords.some(r => signature(getComputedStyle(r.node.parentElement)) !== signature(base))) continue;
+        const range = rangeAt(records, match.start, match.end);
+        const inner = rangeAt(records, match.start + 2, match.end - 2);
+        if (!range || !inner || range.toString() !== match.raw) continue;
+        // Complex shaping needs a richer source map; never split its clusters.
+        if (/[\p{Mark}\u200c-\u200f\u202a-\u202e\u2066-\u2069]/u.test(match.inner)) continue;
+        const lines = lineRuns(records, match);
+        if (!lines.length || lines.length > 20) continue;
+        const canvases = [];
+        let valid = true;
+        for (const line of lines) {
+        const rect = { ...line, height: line.bottom - line.top };
+        if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth ||
+            !geometryAllowed(rect)) { valid = false; break; }
+        if (!line.text.trim()) continue;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const font = `600 ${base.fontSize} ${base.fontFamily}`;
+        ctx.font = font;
+        const metrics = ctx.measureText(line.text);
+        const ascent = metrics.fontBoundingBoxAscent;
+        const descent = metrics.fontBoundingBoxDescent;
+        // Do not squeeze true bold or cover the adjacent native suffix.
+        if (!Number.isFinite(ascent) || !Number.isFinite(descent) ||
+            metrics.width > rect.right - line.contentLeft + 0.1 ||
+            ascent + descent > rect.height + 2) { valid = false; break; }
+        const width = Math.ceil(metrics.width + 2);
+        const height = Math.ceil(rect.height + 2);
+        const scale = devicePixelRatio;
+        canvas.width = Math.ceil(width * scale);
+        canvas.height = Math.ceil(height * scale);
+        canvas.style.cssText = `position:absolute;left:${line.contentLeft}px;top:${rect.top}px;width:${width}px;height:${height}px;`;
+        ctx.scale(scale, scale);
+        ctx.font = font;
+        ctx.fillStyle = base.color;
+        ctx.fillText(line.text, 0, (rect.height - ascent - descent) / 2 + ascent);
+        canvases.push(canvas);
+        }
+        if (!valid || !canvases.length) continue;
+        candidate.append(...canvases);
+        mask.push(range);
+      }
+      if (!mask.length) return;
+      // Source and geometry are read and committed in the same JS task.
+      (shared?.host || document.body).append(candidate);
+      if (shared) mask.forEach(range => shared.highlight.add(range));
+      else CSS.highlights.set(key, new Highlight(...mask));
+      ownedRanges = mask;
+      layer = candidate;
+      paints++;
+      lastLatency = performance.now() - dirtyAt;
+    }
+    function invalidate() {
+      clear();
+      dirtyAt = performance.now();
+      if (!shared && !stopped && !frame) frame = requestAnimationFrame(render);
+    }
+    const observer = shared ? null : new MutationObserver(invalidate);
+    observer?.observe(block, { subtree: true, childList: true, characterData: true, attributes: true });
+    const attachmentObserver = shared ? null : new MutationObserver(records => {
+      if (!block.isConnected) { clear(); return; }
+      const owned = node => node.nodeType === 1 && node.matches('.aistudio-live-preview-layer');
+      if (records.some(record => {
+        if (record.target.nodeType === 1 && record.target.closest('.aistudio-live-preview-layer')) return false;
+        if (record.type === 'attributes') return !block.contains(record.target);
+        const nodes = [...record.addedNodes, ...record.removedNodes];
+        return nodes.some(node => !owned(node));
+      })) invalidate();
+    });
+    attachmentObserver?.observe(document.body, { subtree: true, childList: true,
+      attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    const events = shared ? [] : [[document, 'scroll'], [window, 'resize'], [document, 'selectionchange'],
+      [document, 'visibilitychange'], [document.fonts, 'loadingdone'],
+      [window.visualViewport, 'scroll'], [window.visualViewport, 'resize']];
+    for (const [target, type] of events) target?.addEventListener(type, invalidate, true);
+    invalidate();
+    return {
+      refresh: render,
+      invalidate,
+      stats: () => ({ supported, paints, lastLatency, visible: !!layer, ranges: ownedRanges.length }),
+      stop() {
+        stopped = true;
+        cancelAnimationFrame(frame);
+        observer?.disconnect();
+        attachmentObserver?.disconnect();
+        for (const [target, type] of events) target?.removeEventListener(type, invalidate, true);
+        clear();
+        style?.remove();
+      }
+    };
+  }
+
+  function createLiveEmphasisController({ getRoot, parse, active, typing }) {
+    if (typeof Highlight !== 'function' || !window.CSS?.highlights ||
+        !CSS.supports?.('selector(::highlight(aistudio-live-emphasis))')) {
+      return { invalidate() {}, stop() {}, stats: () => ({ supported: false }) };
+    }
+    const key = 'aistudio-live-emphasis';
+    const highlight = new Highlight();
+    const host = document.createElement('div');
+    host.className = 'aistudio-live-preview-layer';
+    host.setAttribute('aria-hidden', 'true');
+    host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:1';
+    const style = document.createElement('style');
+    style.textContent = `::highlight(${key}) { color:transparent;text-shadow:none }`;
+    document.head.append(style);
+    const projectors = new Map();
+    const dirty = new Set();
+    let frame = 0;
+    let stopped = false;
+    let currentRoot = null;
+    let renderedBlocks = 0;
+    let discoveryWalker = null;
+    let wasActive = false;
+    let draining = false;
+    let drainTimer = null;
+    function finishDrain() {
+      draining = false;
+      clearTimeout(drainTimer);
+      drainTimer = null;
+      clear();
+    }
+    function phaseAllowed() {
+      const running = active();
+      if (running) {
+        draining = false;
+        clearTimeout(drainTimer);
+        drainTimer = null;
+      } else if (wasActive && projectors.size) {
+        draining = true;
+        // A bounded bridge, not permanent replacement of completed native output.
+        drainTimer = setTimeout(finishDrain, 5000);
+      }
+      wasActive = running;
+      return running || draining;
+    }
+    function clear() {
+      for (const projector of projectors.values()) projector.stop();
+      projectors.clear();
+      dirty.clear();
+      discoveryWalker = null;
+      highlight.clear();
+      CSS.highlights.delete(key);
+      host.remove();
+      currentRoot = null;
+    }
+    function queue(block) {
+      projectors.get(block)?.invalidate();
+      dirty.add(block);
+    }
+    function synchronize(discover = false) {
+      if (stopped) return;
+      if (typing() || document.hidden || !phaseAllowed()) { finishDrain(); return; }
+      const root = getRoot();
+      if (!root?.isConnected) { clear(); return; }
+      if (root !== currentRoot) { clear(); currentRoot = root; discover = true; }
+      if (!host.isConnected) document.body.append(host);
+      CSS.highlights.set(key, highlight);
+      for (const [block, projector] of projectors) {
+        if (!root.contains(block)) { projector.stop(); projectors.delete(block); dirty.delete(block); }
+      }
+      if (discover) {
+        if (!discoveryWalker) discoveryWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+          acceptNode(node) {
+            return node.matches('pre, code, math, .katex, ms-katex, [contenteditable], [data-turn-role="user"]')
+              ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+          }
+        });
+      }
+      if ((dirty.size || discoveryWalker) && !frame) frame = requestAnimationFrame(flush);
+    }
+    function flush() {
+      frame = 0;
+      if (typing() || document.hidden || !phaseAllowed()) { finishDrain(); return; }
+      const start = performance.now();
+      let count = 0;
+      for (const block of dirty) {
+        dirty.delete(block);
+        if (!currentRoot?.contains(block)) continue;
+        let projector = projectors.get(block);
+        if (!projector) {
+          projector = createLiveEmphasisProjection(block, parse, { host, highlight });
+          projectors.set(block, projector);
+        }
+        projector.refresh();
+        renderedBlocks++;
+        if (++count >= 4 || performance.now() - start >= 6) break;
+      }
+      // Every visited element counts toward the slice, including neutral wrappers.
+      // FILTER_SKIP would hide an arbitrarily large traversal inside nextNode().
+      let visited = 0;
+      while (discoveryWalker && visited++ < 128 && performance.now() - start < 6) {
+        const node = discoveryWalker.nextNode();
+        if (!node) discoveryWalker = null;
+        else if (node.tagName === 'P') queue(node);
+      }
+      if (dirty.size || discoveryWalker) frame = requestAnimationFrame(flush);
+      else if (draining && highlight.size === 0) finishDrain();
+    }
+    const observer = new MutationObserver(records => {
+      let discover = false;
+      let relevant = false;
+      for (const record of records) {
+        const element = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+        if (element?.closest('.aistudio-live-preview-layer')) continue;
+        const nodes = [...record.addedNodes, ...record.removedNodes];
+        if (nodes.length && nodes.every(n => n === host)) continue;
+        relevant = true;
+        const block = element?.closest('p');
+        if (block && currentRoot?.contains(block)) queue(block);
+        else if (!element?.closest('button')) discover = true;
+      }
+      if (relevant) synchronize(discover);
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true,
+      attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-busy'] });
+    const invalidateAll = () => {
+      for (const block of projectors.keys()) queue(block);
+      synchronize(true);
+    };
+    const events = [[document, 'scroll'], [document, 'selectionchange'], [document, 'input'],
+      [document, 'compositionstart'], [document, 'compositionend'], [document, 'visibilitychange'],
+      [window, 'resize'], [document.fonts, 'loadingdone'], [window.visualViewport, 'scroll'],
+      [window.visualViewport, 'resize']];
+    for (const [target, type] of events) target?.addEventListener(type, invalidateAll, true);
+    synchronize(true);
+    return {
+      invalidate: invalidateAll,
+      stats: () => ({ blocks: projectors.size, queued: dirty.size, renderedBlocks,
+        ranges: highlight.size, layerConnected: host.isConnected, draining, discovering: !!discoveryWalker }),
+      stop() {
+        stopped = true;
+        clearTimeout(drainTimer);
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+        for (const [target, type] of events) target?.removeEventListener(type, invalidateAll, true);
+        clear();
+        style.remove();
+      }
+    };
+  }
+
   function boot() {
     const html = document.documentElement;
 
@@ -6949,6 +7312,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       document.addEventListener(type, notePromptActivity, { passive: true, capture: true });
     }
     if (promptEditorFor(document.activeElement)) lastPromptActivity = Date.now();
+    if (ENABLE_SAFE_OUTPUT_REPAIR && ENABLE_LIVE_EMPHASIS && !liveEmphasisController) {
+      liveEmphasisController = createLiveEmphasisController({
+        getRoot: () => Array.from(document.querySelectorAll(MODEL_TURN_SELECTOR)).reverse()
+          .find(root => !closest(root, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',.thought-activity-host')) || null,
+        parse: findMatches,
+        active: generating,
+        typing: promptEditorActive
+      });
+    }
     if (typeof ResizeObserver === 'function' && !mathResizeObserver) {
       mathResizeObserver = new ResizeObserver((entries) => {
         let changed = false;

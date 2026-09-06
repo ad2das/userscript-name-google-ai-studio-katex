@@ -1,11 +1,11 @@
 async (page) => {
   const fs = require('node:fs');
-  const source = fs.readFileSync('aaa.user.js', 'utf8').replace(/\n  if \(document\.readyState === 'loading'\)/,
-    '\n  globalThis.__liveParse = findMatches;\n  if (document.readyState === \'loading\')');
+  const source = fs.readFileSync('aaa.user.js', 'utf8')
+    .replace('const ENABLE_LIVE_EMPHASIS = true;', 'const ENABLE_LIVE_EMPHASIS = false;')
+    .replace(/\n  if \(document\.readyState === 'loading'\)/,
+    '\n  globalThis.__liveParse = findMatches; globalThis.createLiveEmphasisController = createLiveEmphasisController;\n  if (document.readyState === \'loading\')');
   await page.setContent('<!doctype html><html><body><main><ms-prompt-input><textarea></textarea><button class="run-button">Stop</button></ms-prompt-input><article data-turn-role="user">**사용자 원문**</article><article id="model" data-turn-role="model"><p>**첫 문단** 끝</p><p>**둘째 문단** 끝</p><p>**셋째 문단** 끝</p></article></main></body></html>');
   await page.addScriptTag({ content: source });
-  await page.addScriptTag({ path: 'tests/fixtures/live-emphasis-prototype.js' });
-  await page.addScriptTag({ path: 'tests/fixtures/live-emphasis-controller.js' });
   await page.evaluate(() => {
     globalThis.__typing = false;
     globalThis.__sourceNodes = Array.from(document.querySelectorAll('#model p')).map(p=>p.firstChild);
@@ -75,7 +75,7 @@ async (page) => {
     __controller.stats().blocks === 130 && document.querySelectorAll('#model p').length === 130 &&
     document.querySelector('#model p').textContent === '**문단 0** 끝');
   await page.evaluate(() => __controller.stop());
-  checks.teardown = await page.evaluate(() => !document.querySelector('.aistudio-live-preview-layer') && !CSS.highlights.has('aistudio-live-prototype'));
+  checks.teardown = await page.evaluate(() => !document.querySelector('.aistudio-live-preview-layer') && !CSS.highlights.has('aistudio-live-emphasis'));
   if (Object.values(checks).some(x=>!x)) throw new Error(JSON.stringify(checks));
   return { checks, transition };
 }

@@ -1,10 +1,11 @@
 async (page) => {
   const fs = require('node:fs');
-  const source = fs.readFileSync('aaa.user.js', 'utf8').replace(/\n  if \(document\.readyState === 'loading'\)/,
-    '\n  globalThis.__liveParse = findMatches;\n  if (document.readyState === \'loading\')');
+  const source = fs.readFileSync('aaa.user.js', 'utf8')
+    .replace('const ENABLE_LIVE_EMPHASIS = true;', 'const ENABLE_LIVE_EMPHASIS = false;')
+    .replace(/\n  if \(document\.readyState === 'loading'\)/,
+    '\n  globalThis.__liveParse = findMatches; globalThis.createLiveEmphasisPrototype = createLiveEmphasisProjection;\n  if (document.readyState === \'loading\')');
   await page.setContent('<!doctype html><html><head><style>body{background:#202124;color:#eee;font:18px Arial;padding:24px}p{line-height:1.6}</style></head><body><main><ms-prompt-input><button class="run-button">Stop</button></ms-prompt-input><article data-turn-role="model"><p id="live">앞 문장 <span>**강조</span><!--anchor--><span> 문장**</span> 뒤 문장</p></article></main></body></html>');
   await page.addScriptTag({ content: source });
-  await page.addScriptTag({ path: 'tests/fixtures/live-emphasis-prototype.js' });
   await page.evaluate(() => {
     const block = document.getElementById('live');
     globalThis.__before = { html: block.innerHTML, nodes: Array.from(block.childNodes), child: block.querySelector('span').firstChild };
@@ -27,7 +28,7 @@ async (page) => {
   await page.screenshot({ path: 'output/playwright/live-preview-prototype.png' });
   await page.evaluate(() => { document.getElementById('live').textContent = '앞 문장 **아직 열림'; });
   await page.waitForTimeout(50);
-  checks.incompletePairRevealsSource = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-prototype'));
+  checks.incompletePairRevealsSource = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-emphasis'));
   await page.evaluate(() => { document.getElementById('live').textContent = '앞 문장 **완료된 강조** 다음'; });
   await page.waitForTimeout(80);
   checks.closedPairRepaintsBeforeCompletion = await page.evaluate(() => __preview.stats().visible && __preview.stats().lastLatency <= 100);
@@ -104,7 +105,7 @@ async (page) => {
     document.body.append(cover);
   });
   await page.waitForTimeout(50);
-  checks.occludedSourceRevealed = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-prototype'));
+  checks.occludedSourceRevealed = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-emphasis'));
   await page.evaluate(() => document.getElementById('cover').remove());
   await page.waitForTimeout(50);
   checks.uncoveredRepaints = await page.evaluate(() => __preview.stats().visible);
@@ -126,9 +127,9 @@ async (page) => {
   checks.transformedSourceFallback = await page.evaluate(() => !__preview.stats().visible);
   await page.evaluate(() => { document.getElementById('live').remove(); });
   await page.waitForTimeout(25);
-  checks.disconnectedSourceClears = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-prototype'));
+  checks.disconnectedSourceClears = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-emphasis'));
   await page.evaluate(() => { __preview.stop(); });
-  checks.cleanup = await page.evaluate(() => !document.querySelector('.aistudio-live-preview-layer') && !CSS.highlights.has('aistudio-live-prototype'));
+  checks.cleanup = await page.evaluate(() => !document.querySelector('.aistudio-live-preview-layer') && !CSS.highlights.has('aistudio-live-emphasis'));
   if (Object.values(checks).some(x => !x)) throw new Error(JSON.stringify(checks));
   return { checks, initial, timerSamples: streamed.length, timerP95Ms: streamed[18] };
 }

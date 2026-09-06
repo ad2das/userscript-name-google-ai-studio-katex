@@ -13,9 +13,9 @@ const run = async () => {
   const browser = await firefox.launch({ headless: true });
   const results = {};
   try {
-    const suites = process.argv.includes('--live-controller') ? ['live-controller-browser.test.js'] : process.argv.includes('--live-preview') ? ['live-preview-browser.test.js'] : process.argv.includes('--scheduler') ? ['scheduler-browser.test.js'] : process.argv.includes('--contract') ? ['rendering-contract.test.js'] : process.argv.includes('--photo') ? ['photo-regression.test.js'] : process.argv.includes('--audit')
+    const suites = process.argv.includes('--live-integration') ? ['live-integration-browser.test.js'] : process.argv.includes('--live-controller') ? ['live-controller-browser.test.js'] : process.argv.includes('--live-preview') ? ['live-preview-browser.test.js'] : process.argv.includes('--scheduler') ? ['scheduler-browser.test.js'] : process.argv.includes('--contract') ? ['rendering-contract.test.js'] : process.argv.includes('--photo') ? ['photo-regression.test.js'] : process.argv.includes('--audit')
       ? ['audit-browser.test.js']
-      : ['firefox-browser.test.js', 'audit-browser.test.js', 'photo-regression.test.js', 'rendering-contract.test.js', 'scheduler-browser.test.js'];
+      : ['firefox-browser.test.js', 'audit-browser.test.js', 'photo-regression.test.js', 'rendering-contract.test.js', 'scheduler-browser.test.js', 'live-preview-browser.test.js', 'live-controller-browser.test.js', 'live-integration-browser.test.js'];
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915
@@ -52,7 +52,7 @@ const run = async () => {
     }
     fs.mkdirSync('output/playwright', { recursive: true });
     const mode = (process.argv.includes('--mobile') ? 'mobile' : 'desktop') +
-      (process.argv.includes('--live-controller') ? '-live-controller' : process.argv.includes('--live-preview') ? '-live-preview' : '');
+      (process.argv.includes('--live-integration') ? '-live-integration' : process.argv.includes('--live-controller') ? '-live-controller' : process.argv.includes('--live-preview') ? '-live-preview' : '');
     fs.writeFileSync(`output/playwright/results-${mode}.json`, JSON.stringify(results, null, 2));
     console.log(JSON.stringify(Object.fromEntries(Object.entries(results).map(([suite, result]) => [
       suite, suite !== 'firefox-browser.test.js' ? result : {

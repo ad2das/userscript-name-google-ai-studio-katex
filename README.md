@@ -61,8 +61,12 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   renderer tag inside a positively identified model turn, while excluding user,
   editor, code, navigation, and dialog surfaces
 - Page-wide generation guarding: a recognized composer `Stop` or explicit model/
-  composer busy state suspends response repair and measurement. A recognized
+  composer busy state suspends completion-time response repair and measurement. A recognized
   composer `Run` can override stale progress widgets, but unrelated buttons cannot.
+- A separate live emphasis layer can display eligible closed `**bold**` prose
+  during generation without changing native response text nodes. It excludes
+  user messages, thought turns, editing surfaces, code, and math crossings, and
+  falls back to the original Markdown when typography or geometry is unsupported.
 - Attribute-only role/busy/visibility lifecycle changes reset the local repair
   state, while known-turn mutations avoid the full-page fallback TreeWalker
 - Display-math width measurements are cached and invalidated after formula changes,
@@ -100,14 +104,19 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.12.2 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.0 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
 does not access Google auth state, issue session requests, intercept prompt events,
-or retry a failed generation. It defers response-DOM measurement and repair while
-generation is detected from visible DOM signals, then resumes after those signals
-clear. This detection is necessarily dependent on AI Studio's changing UI; it is
+or retry a failed generation. It defers the completion-time DOM repair pipeline
+while generation is detected, while a separate foreground controller may read
+eligible prose and paint a pointer-transparent, accessibility-hidden canvas layer.
+Native selection and copy remain authoritative; selecting text reveals Markdown,
+and delimiter layout space is retained. The live layer is not a replacement for
+native semantic emphasis or canonical Markdown reflow. See
+[live rendering validation and limits](tests/LIVE-PREVIEW-EXPERIMENT.md).
+Generation detection is necessarily dependent on AI Studio's changing UI; it is
 not an authentication or permission-error fix.
 
 Raw math repair replaces text candidates or complete line-bounded TeX blocks inside
@@ -168,8 +177,7 @@ completion-work continuations can preempt a waiting idle callback; latest-turn
 selection follows document order, and both retry checks use the same backoff.
 Generation and prompt-activity guards remain in force. This release does **not**
 implement live streaming emphasis or fix Google generation permission errors.
-The separate [live-preview experiment](tests/LIVE-PREVIEW-EXPERIMENT.md) is
-fixture-only and is not loaded by the installed userscript.
+Live emphasis was introduced separately in 1.13.0, with the limits documented above.
 
 1.12.1 repairs paired book/PDF page ranges through AI Studio's native nested
 `ms-cmark-node`/`span` wrappers and Angular comment anchors. This structure was

@@ -1,11 +1,14 @@
-# Live emphasis experiment (not shipped)
+# Live emphasis validation and limits (1.13.0)
 
 Run `node tests/run-browser.cjs --live-preview` and repeat with `--mobile`.
-The userscript does not load `fixtures/live-emphasis-prototype.js`.
+The projection and controller now live inside `aaa.user.js`. The former standalone
+fixture copies were removed so tests exercise the same implementation as installs.
 The additional `--live-controller` suite exercises a shared multi-paragraph layer
 and highlight registry, dirty-paragraph scheduling, typing release, generation
 phase transitions, legacy completion repair, and teardown. Repeat with `--mobile`.
-Neither experimental file is loaded by the userscript.
+The `--live-integration` suite exercises the unmodified userscript through its
+real boot adapter, native-style model ownership, Run/Stop controls and prompt input.
+All three live suites are included in the default browser test run.
 
 This experiment uses an accessibility-hidden, pointer-transparent canvas layer
 outside the native answer. CSS Custom Highlights suppress only the replaced
@@ -20,7 +23,7 @@ wrappers with separately emphasized prefixes, source disconnection,
 covering overlays, ancestor clipping/transforms, and teardown. The 20-sample timing check is a fixture acceptance gate, not a claim
 about real AI Studio performance. Results have a `-live-preview` filename suffix.
 
-Not yet a production implementation:
+Known implementation and validation limits:
 
 - The projection engine handles short, visible prose blocks. Each emphasis interval must
   have homogeneous inline typography; unrelated native bold prefixes can remain.
@@ -34,8 +37,10 @@ Not yet a production implementation:
   indivisible). Unchanged paragraphs retain their paint. Discovery now uses a
   persistent element walker, visiting at most 128 elements within the frame's
   budget, excluding protected subtrees. A 130-paragraph fixture verifies that
-  discovery is not limited to the last 64 paragraphs. Real response-ownership
-  integration remains necessary.
+  discovery is not limited to the last 64 paragraphs. The boot adapter selects
+  the latest positively identified model container, excluding user/editor and
+  thought scopes; real AI Studio verification is still required after installing
+  this version. New renderer variants can remain unsupported.
 - On generation completion, existing paint bridges up to five seconds while
   legacy repair proceeds. The fixture samples animation frames and observes no
   uncovered raw-text frame in that transition. This is not a guarantee for
@@ -49,5 +54,8 @@ Not yet a production implementation:
   for assistive technology. No clipboard/download/auth/network interception is
   used or proposed.
 
-Do not enable this fixture as a live userscript feature based only on its passing
-tests. Integration must retain these safety gates and broaden actual coverage.
+Passing fixtures do not establish universal live-page correctness. Unsupported
+cases still show source Markdown during streaming; no claim of complete marker
+elimination, canonical reflow, universal occlusion handling, or generation-error
+causality follows from these tests. A real installation and generation audit is
+required for each release.
