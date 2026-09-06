@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.4
+// @version      1.13.5
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.4';
-  const STYLE_ID = 'aistudio-mobile-safe-1134-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1134';
+  const VERSION = '1.13.5';
+  const STYLE_ID = 'aistudio-mobile-safe-1135-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1135';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -998,6 +998,18 @@ ${SCOPE} .aistudio-ascii-delimited-rule::before {
   display: block !important;
   width: 100% !important;
   border-top: 1px solid currentColor !important;
+}
+
+${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-leader-grid {
+  grid-template-columns: max-content minmax(2ch, 1fr) max-content max-content !important;
+  column-gap: 0.7ch !important;
+  row-gap: 0.12em !important;
+}
+
+${SCOPE} .aistudio-ascii-leader-dots {
+  align-self: center !important;
+  border-bottom: 1px dotted currentColor !important;
+  min-width: 2ch !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
@@ -4562,6 +4574,27 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     };
   }
 
+  function analyzeAsciiLeaderTable(text) {
+    if (!text || text.length > MAX_ASCII_TREE_LENGTH || !/[가-힣]/.test(text)) return null;
+    const source = text.replace(/\r/g, '');
+    const lines = source.split('\n');
+    if (lines.length > MAX_ASCII_TREE_LINES) return null;
+    const rows = [];
+    let entries = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || /^\[[^\]\n]+\]$/.test(trimmed) || /^─{6,}$/.test(trimmed)) {
+        rows.push({ spanning: true, text: trimmed });
+        continue;
+      }
+      const match = trimmed.match(/^([^\n.]+?)\s+\.{4,}\s*(\(?[+-]?[₩$]?(?:\d[\d,]*(?:\.\d+)?|[Xx]+(?:,[Xx]+)*|-)\)?)(?:\s+(\([^\n]+\)))?$/);
+      if (!match) return null;
+      rows.push({ label: match[1].trim(), amount: match[2], note: match[3] || '' });
+      entries += 1;
+    }
+    return entries >= 3 ? { kind: 'leader-grid', rows, source } : null;
+  }
+
   function analyzeAsciiDiagram(text) {
     if (!text || text.length > MAX_ASCII_TREE_LENGTH ||
       /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|SELECT|INSERT|UPDATE)\b/m.test(text) ||
@@ -4573,7 +4606,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       analyzeAsciiTimelineDiagram(text) ||
       analyzeAsciiArrowDiagram(text) ||
       analyzeMultiPanelAsciiTable(text) ||
-      analyzeDelimitedAsciiTable(text)
+      analyzeDelimitedAsciiTable(text) ||
+      analyzeAsciiLeaderTable(text)
     );
   }
 
@@ -4643,6 +4677,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           /[가-힣]/.test(text) &&
           /(?:^|\s)[|│](?:\s|$)/m.test(text) &&
           (/\s{2,}/.test(text) || /\d{1,3}(?:,\d{3})+/.test(text))
+        ) ||
+        (
+          /[가-힣]/.test(text) && /\s\.{4,}\s*\(?[₩$+\-\dXx]/.test(text)
         )
       )
     );
@@ -4697,6 +4734,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         );
       } else if (analysis.kind === 'arrow-grid') {
         visual.classList.add('aistudio-ascii-arrow-grid');
+      } else if (analysis.kind === 'leader-grid') {
+        visual.classList.add('aistudio-ascii-leader-grid');
       } else if (analysis.kind === 'delimited-grid') {
         const columns = [];
         visual.classList.add('aistudio-ascii-delimited-grid');
@@ -4716,7 +4755,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         );
       }
 
-      if (analysis.kind === 'delimited-grid') {
+      if (analysis.kind === 'delimited-grid' || analysis.kind === 'leader-grid') {
         analysis.rows.forEach((line, lineIndex) => {
           const row = document.createElement('span');
           row.className = 'aistudio-ascii-tree-row';
@@ -4731,6 +4770,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
               cell.classList.add('aistudio-ascii-delimited-rule');
             }
             row.appendChild(cell);
+          } else if (analysis.kind === 'leader-grid') {
+            for (const [kind, value] of [['label', line.label], ['dots', ''], ['amount', line.amount], ['note', line.note]]) {
+              const cell = document.createElement('span');
+              cell.className = kind === 'dots' ? 'aistudio-ascii-leader-dots' :
+                `aistudio-ascii-delimited-cell aistudio-ascii-delimited-${kind}`;
+              cell.setAttribute('data-aistudio-ascii-cell', value);
+              row.appendChild(cell);
+            }
           } else {
             line.segments.forEach((segment, segmentIndex) => {
               const label = document.createElement('span');

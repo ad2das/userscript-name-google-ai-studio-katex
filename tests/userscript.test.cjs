@@ -586,6 +586,13 @@ const tightAccountSource = [
   '차변합계       355,000 │ 대변합계      355,000'
 ].join('\n');
 const tightAccount = api.analyzeAsciiDiagram(tightAccountSource);
+const leaderSource = '[계산 예시]\n수익 ........ X,XXX (①번)\n기타수익 .... XXX\n재료비 ........ (XXX) (②번)\n─────────────────\n총비용 .... (X,XXX)';
+const leaderTable = api.analyzeAsciiDiagram(leaderSource);
+assert.equal(leaderTable?.kind, 'leader-grid');
+assert.equal(leaderTable.source, leaderSource);
+assert.deepEqual(JSON.parse(JSON.stringify(leaderTable.rows[1])), { label: '수익', amount: 'X,XXX', note: '(①번)' });
+assert.equal(api.analyzeAsciiDiagram('안녕 .... 잠깐\n다음 .... 계속\n끝 .... 마침'), null);
+assert.equal(api.analyzeAsciiDiagram('파일 .... index.js\n파일 .... main.js\n파일 .... test.js'), null);
 assert.ok(tightAccount, 'A ruled account may have a tight Unicode divider');
 assert.equal(tightAccount.kind, 'delimited-grid');
 assert.equal(tightAccount.source, tightAccountSource);
