@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.0
+// @version      1.13.1
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.0';
-  const STYLE_ID = 'aistudio-mobile-safe-1130-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1130';
+  const VERSION = '1.13.1';
+  const STYLE_ID = 'aistudio-mobile-safe-1131-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1131';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -475,6 +475,7 @@
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:where(${PROTECTED_CSS_SELECTOR}) *):not(:has(${PROTECTED_CSS_SELECTOR}))`;
 
   const LEGACY_STYLE_IDS = [
+    'aistudio-mobile-safe-1130-style',
     'aistudio-mobile-safe-1122-style',
     'aistudio-mobile-safe-1121-style',
     'aistudio-mobile-safe-1120-style',
@@ -7185,6 +7186,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return running || draining;
     }
     function clear() {
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
       for (const projector of projectors.values()) projector.stop();
       projectors.clear();
       dirty.clear();
@@ -7248,6 +7250,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       else if (draining && highlight.size === 0) finishDrain();
     }
     const observer = new MutationObserver(records => {
+      // Prompt activity must gate the whole batch, not just the later scan.
+      // Native editor updates can enqueue thousands of mutation records.
+      if (typing() || document.hidden) { finishDrain(); return; }
       let discover = false;
       let relevant = false;
       for (const record of records) {
@@ -7265,6 +7270,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     observer.observe(document.body, { subtree: true, childList: true, characterData: true,
       attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-busy'] });
     const invalidateAll = () => {
+      if (typing() || document.hidden) { finishDrain(); return; }
       for (const block of projectors.keys()) queue(block);
       synchronize(true);
     };
