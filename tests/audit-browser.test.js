@@ -1,8 +1,8 @@
 async (page) => {
   const fs = require('node:fs');
   const source = fs.readFileSync('aaa.user.js', 'utf8');
-  const instrumented = source.replace('function collectInlineText(container) {',
-    'function collectInlineText(container) { globalThis.__projectionCount = (globalThis.__projectionCount || 0) + 1;')
+  const instrumented = source.replace('function collectInlineText(container, nested = false) {',
+    'function collectInlineText(container, nested = false) { globalThis.__projectionCount = (globalThis.__projectionCount || 0) + 1;')
     .replace('function fitDisplayMath(display, force = false) {',
     'function fitDisplayMath(display, force = false) { globalThis.__fitCount = (globalThis.__fitCount || 0) + 1;')
     .replace(/\n  if \(document\.readyState === 'loading'\)/,
@@ -165,6 +165,7 @@ async (page) => {
     document.getElementById('responses').append(many);
     const before = window.__projectionCount;
     __audit.repairRoot(many);
+    __audit.repairRoot(many); // At most 100 emphasis groups per container/pass.
     checks.manyMatches = many.querySelectorAll('strong').length === 200;
     checks.boundedProjection = window.__projectionCount - before <= 10;
     const manyUnderlines = document.createElement('p');

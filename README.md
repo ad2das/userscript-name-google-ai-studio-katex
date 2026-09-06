@@ -28,8 +28,8 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 - Raw display/inline delimiters and bold math commands such as `\mathbf`,
   `\boldsymbol`, `\bm`, `\bold`, `\pmb`, `\textbf`, `\bf`, and nested
   `\text{...}`
-- Bare percentage signs in raw TeX are preserved as visible `\%` instead of
-  commenting out the rest of an aligned row and joining it to the next row
+- Narrow recovery of numeric percentages before explicit math operators, such as
+  `10% \times ...`; comments and verbatim TeX regions are preserved
 - Bold inheritance through nested text, including
   `\mathbf{10,000\text{원}}`, in both raw and already-rendered KaTeX
 - Complete raw TeX blocks embedded after headings or explanatory paragraphs,
@@ -48,7 +48,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   inside virtualized historical responses outside known renderer tags
 - Leaked quoted emphasis such as `*"quoted Korean prose"*`, rendered as
   italics without mistaking multiplication, wildcards, or list markers
-- Bold single- or multi-paragraph Korean prose that AI Studio misclassifies as
+- Optional bold single- or multi-paragraph Korean prose that AI Studio misclassifies as
   an indented code block, preserving paragraph breaks and adjacent Korean text,
   while preserving actual code and literal Markdown syntax examples
 - Literal `<u>underlined text</u>` in completed model responses, including tags
@@ -67,9 +67,9 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
   state, while known-turn mutations avoid the full-page fallback TreeWalker
 - Display-math width measurements are cached and invalidated after formula changes,
   font loading, viewport resizes, and page visibility/navigation changes
-- Prompt editors—including Firefox `contenteditable="plaintext-only"`—are excluded
-  from mutation, scroll, resize, and periodic fallback scans while focused, so
-  typing does not walk the full long-chat DOM
+- Prompt editors—including Firefox `contenteditable="plaintext-only"`—are always
+  excluded from repair. Output scans pause during typing/IME composition and resume
+  after 1.6 seconds of inactivity, even if the composer keeps keyboard focus.
 - Mobile readable Google/Samsung-like font stack
 - Code/pre blocks with horizontal scrolling
 - Simple `┌ ┤ ┼ │ └ ─` trees and Korean multi-panel ASCII tables aligned through
@@ -100,7 +100,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.11.1 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.12.0 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -110,26 +110,29 @@ generation is detected from visible DOM signals, then resumes after those signal
 clear. This detection is necessarily dependent on AI Studio's changing UI; it is
 not an authentication or permission-error fix.
 
-Raw math repair is fail-closed: it replaces either an entire completed model-output
-container or complete line-bounded TeX blocks inside plain response text, and only
-after KaTeX renders each candidate without an error. Surrounding prose and line breaks
-are preserved. Existing rendered math is left untouched except when its TeX source
+Raw math repair replaces text candidates or complete line-bounded TeX blocks inside
+completed model output after validation. Supported array/aligned HTML fallbacks
+remain available when KaTeX cannot render them. Mixed content with existing native
+math is not flattened into a replacement formula. Surrounding protected content is
+preserved. Existing rendered math is left untouched except when its TeX source
 contains the known nested-bold inheritance defect. Fenced/code text, links,
 editable/user content, and malformed or unsupported environments are preserved. Only
 conservatively detected box-drawing trees or Korean multi-panel ASCII tables receive
 a visual grid wrapper; their original text content is unchanged.
-Native rendered-math repairs preserve the outer host and real TeX comments. Raw
-TeX repair still interprets bare percentages as visible percentages: that is an
-intentional recovery heuristic, not a general-purpose TeX parser. Korean prose
-misclassified as code is also a heuristic: eligible blocks are converted to prose,
-so their code-block semantics are not preserved. Language-labelled code is excluded.
+Native rendered-math repairs preserve the outer host and real TeX comments.
+Numeric-percentage recovery is a narrow heuristic, not a general-purpose TeX parser.
+`ENABLE_HEURISTIC_PROSE_CODE_REPAIR` and `ENABLE_LEGACY_MARKER_RECOVERY` default to
+`false`: unlabeled code and unmatched inner delimiters are preserved. Enabling these
+legacy options can change source text and is not recommended for literal examples.
 KaTeX rendering uses `trust: false` with bounded input size, expansion count, and
 rendered size.
 
 Discovery uses a scoped, resumable queue (up to 400 nodes per slice) and a 6 ms
-cooperative budget. Clean response roots and math widths are cached. Work already
-queued before editor focus also yields to typing. The budget is checked between
-roots; a single synchronous DOM repair or KaTeX render can exceed 6 ms.
+cooperative budget. Clean response roots and math widths are cached. Inline work
+also resumes through a per-root cursor, processing at most 32 containers and 100
+emphasis groups per container per pass. Work already queued yields to active typing.
+This is not a hard deadline: a single DOM operation, projection, or KaTeX render can
+still exceed 6 ms. A shared resize observer invalidates changed formula widths.
 
 ## Tests
 
@@ -154,7 +157,14 @@ Reports and screenshots are written under `output/playwright/`.
 
 Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one native
 Run click. They do not validate a signed-in AI Studio session or prove that a real
-Google permission error is fixed. See [the audit and follow-up](AUDIT.md) for evidence and limits.
+Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
+[historical audits](AUDIT.md) for evidence and limits.
+
+1.12.0 adds nested emphasis, emphasis across a hard line break, shared code-literal
+protection, native-boundary-preserving edits, queued cleanup after generation,
+detached/reinserted-root and table-wrapper recovery, and narrower CSS protection.
+It also recognizes one specific accidental strikethrough pattern in paired book/PDF
+page ranges with equal spans; this is an explicitly documented heuristic.
 
 1.11.1 also repairs leaked emphasis around existing native bold elements, such as
 `**<strong>'체계적인 방법'</strong>**`, without treating the bold element as a code/editor

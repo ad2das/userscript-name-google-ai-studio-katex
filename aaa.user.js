@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.11.1
+// @version      1.12.0
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.11.1';
-  const STYLE_ID = 'aistudio-mobile-safe-1111-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1111';
+  const VERSION = '1.12.0';
+  const STYLE_ID = 'aistudio-mobile-safe-1120-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1120';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -49,8 +49,11 @@
    * 두되, KaTeX의 stretchy SVG 내부 clipping 규칙은 반드시 유지한다.
    */
   const ENABLE_SAFE_OUTPUT_REPAIR = true;
+  const ENABLE_HEURISTIC_PROSE_CODE_REPAIR = false;
+  const ENABLE_LEGACY_MARKER_RECOVERY = false;
 
   const SCAN_MS = 10000;
+  const PROMPT_IDLE_MS = 1600;
   const MUTATION_SCAN_DELAY_MS = 450;
   const GENERATION_RECHECK_MS = 750;
   const OLD_TURN_WAIT_MS = 500;
@@ -60,6 +63,8 @@
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
   const MAX_INLINE_REPAIR_NODES = 4000;
+  const MAX_INLINE_MATCHES_PER_PASS = 100;
+  const MAX_INLINE_CONTAINERS_PER_PASS = 32;
   const MAX_FALLBACK_NODES_PER_SLICE = 400;
   const SCAN_BUDGET_MS = 6;
   // Math is an opaque DOM atom in the Markdown projection, never empty text.
@@ -272,6 +277,7 @@
     'script',
     'style',
     'noscript',
+    'img', 'picture', 'video', 'audio', 'canvas', 'iframe', 'object', 'embed',
 
     'svg',
     'math',
@@ -295,6 +301,8 @@
   // Repaired wrappers remain opaque to keep repeated scans idempotent.
   const INLINE_TEXT_SKIP_SELECTOR = SKIP_SELECTORS
     .filter((selector) => selector !== 'strong' && selector !== 'b').join(',');
+  const INLINE_NESTED_SKIP_SELECTOR = SKIP_SELECTORS
+    .filter((selector) => !['strong', 'b', '.aistudio-md-repaired'].includes(selector)).join(',');
 
   const FALLBACK_EXCLUDE_SELECTOR = [
     'nav',
@@ -356,6 +364,7 @@
     'th',
     'td',
     'div',
+    'section', 'article', 'main', 'aside', 'header', 'footer', 'figure', 'details', 'dl',
     'section',
     'article',
     'h1',
@@ -370,6 +379,7 @@
 
   const RAW_MATH_RANGE_BARRIER_SELECTOR = [
     SKIP_SELECTOR,
+    USER_SELECTOR,
     'table',
     '.aistudio-rendered-math-bold-repaired'
   ].join(',');
@@ -403,6 +413,7 @@
     '.MathJax',
     'mjx-container',
     '.aistudio-underline-repaired',
+    'section', 'article', 'main', 'aside', 'header', 'footer', 'figure', 'details', 'dl',
     'ms-cmark-node',
     'p',
     'div',
@@ -430,6 +441,8 @@
   ];
   const INLINE_REPAIR_BOUNDARY_SELECTOR = INLINE_REPAIR_BOUNDARY_SELECTORS.join(',');
   const INLINE_EMPHASIS_BOUNDARY_SELECTOR = INLINE_REPAIR_BOUNDARY_SELECTORS
+    .filter((selector) => !['br', 'strong', 'b', 'u', 'ins', '.aistudio-underline-repaired'].includes(selector)).join(',');
+  const INLINE_UNDERLINE_BOUNDARY_SELECTOR = INLINE_REPAIR_BOUNDARY_SELECTORS
     .filter((selector) => selector !== 'strong' && selector !== 'b').join(',');
 
   const INLINE_EMBEDDED_MATH_SELECTOR = [
@@ -453,7 +466,10 @@
   const EMBEDDED_MATH_CLASS_TOKEN =
     /^(?:katex|mathjax|mathjax-container|math|math-inline|inline-math|math-container|math-renderer|rendered-math|latex|latex-inline|tex-math|formula|formula-inline|equation|equation-inline)$/i;
 
-  const SCOPE = `:where(${STYLE_ROOT_SELECTOR})`;
+  const PROTECTED_CSS_SELECTOR = USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR;
+  // A scope containing an editor/user island must not impose inherited styles
+  // on that island. Smaller pure output scopes can still receive the styles.
+  const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:where(${PROTECTED_CSS_SELECTOR}) *):not(:has(${PROTECTED_CSS_SELECTOR}))`;
 
   const LEGACY_STYLE_IDS = [
     'codex-aistudio-katex-display-fix',
@@ -509,7 +525,8 @@
     'aistudio-mobile-safe-1109-style',
     'aistudio-mobile-safe-11010-style',
     'aistudio-mobile-safe-11011-style',
-    'aistudio-mobile-safe-1110-style'
+    'aistudio-mobile-safe-1110-style',
+    'aistudio-mobile-safe-1111-style'
   ];
 
   const CSS_TEXT = `
@@ -1167,6 +1184,23 @@ ${SCOPE} :where(.katex-display > .katex) {
   max-width: 100% !important;
 }
 
+${SCOPE} :where(s, del).aistudio-page-range-repaired {
+  text-decoration: none !important;
+}
+
+${SCOPE} .aistudio-fallback-math-scroll {
+  display: block !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding-block: 0.5em !important;
+}
+
+${SCOPE} .aistudio-fallback-math-scroll > :where(.aistudio-array-repaired, .aistudio-aligned-repaired) {
+  width: max-content !important;
+  max-width: none !important;
+}
+
 /* Retain readable type for extreme formulas. Padding protects tall glyphs while
  * only this outer viewport scrolls horizontally; inner stretchy clipping stays. */
 ${SCOPE} .aistudio-math-scroll {
@@ -1210,12 +1244,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   const states = new WeakMap();
   const rootEligibility = new WeakMap();
+  const inlineCursors = new WeakMap();
   const fallbackRoots = new WeakSet();
   const rawMathScopeRoots = new WeakSet();
   const mathFitOriginalStyles = new WeakMap();
   const asciiVisuals = new WeakMap();
   const asciiPreViews = new WeakMap();
   const asciiCopyListeners = new WeakSet();
+  const pendingCleanup = new Set();
+  const pendingMathInvalidation = new Set();
 
   let cleanedLegacy = false;
   let pendingTimerId = null;
@@ -1223,9 +1260,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let scanQueued = false;
   let observer = null;
   let repairedTotal = 0;
+  let lastPromptActivity = -Infinity;
+  let promptComposing = false;
   let mathFitResizeDirty = true;
   let fallbackDirty = true;
   const mathFitCache = new WeakMap();
+  const observedMathDisplays = new Set();
+  const observedMathWidths = new WeakMap();
+  let mathResizeObserver = null;
   let mathFitDirty = true;
   let explicitRootsDirty = true;
   let explicitRootCache = [];
@@ -1501,27 +1543,48 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function normalizeKatexCommands(source, preserveComments = false) {
     let visibleSource = '';
-
-    /*
-     * AI Studio occasionally emits a human-readable percentage as bare `%`.
-     * TeX treats that as a comment, swallowing the remainder of the row,
-     * including its `\\`; the next aligned row then appears as `106개월간`.
-     * Raw-math candidates are visible output, so preserve every unescaped
-     * percent sign as a literal glyph before KaTeX parses the block.
-     */
+    const literals = [];
+    let prefix = '\uE000';
+    while (source.includes(prefix)) prefix += '\uE000';
+    const protect = (text) => {
+      const token = prefix + literals.length + '\uE001';
+      literals.push({ token, text });
+      return token;
+    };
     for (let index = 0; index < source.length; index += 1) {
-      if (!preserveComments && source[index] === '%' && !isEscaped(source, index)) {
-        visibleSource += '\\%';
-      } else {
-        visibleSource += source[index];
+      if (source.startsWith('\\verb', index) && !isEscaped(source, index)) {
+        const at = index + (source[index + 5] === '*' ? 6 : 5);
+        const delimiter = source[at];
+        const end = delimiter && !/[A-Za-z\s]/.test(delimiter) ? source.indexOf(delimiter, at + 1) : -1;
+        if (end >= 0 && !source.slice(at, end).includes('\n')) {
+          visibleSource += protect(source.slice(index, end + 1));
+          index = end;
+          continue;
+        }
       }
+      if (source[index] === '%' && !isEscaped(source, index)) {
+        const after = source.slice(index + 1);
+        const numericRecovery = !preserveComments && /\d/.test(source[index - 1] || '') &&
+          (!after.trim() || /^[ \t]*(?:\\times\b|\\cdot\b|\\\\|[+\-=,&}])/.test(after));
+        if (numericRecovery) visibleSource += '\\%';
+        else {
+          const newline = source.indexOf('\n', index);
+          const end = newline < 0 ? source.length : newline;
+          visibleSource += protect(source.slice(index, end));
+          index = end - 1;
+        }
+        continue;
+      }
+      visibleSource += source[index];
     }
 
     const aliasesNormalized = visibleSource
       .replace(/\\bm(?=\s*\{)/g, '\\boldsymbol')
       .replace(/\\bfseries\b/g, '\\bf');
 
-    return propagateBoldIntoText(aliasesNormalized);
+    let normalized = propagateBoldIntoText(aliasesNormalized);
+    for (const literal of literals) normalized = normalized.replace(literal.token, () => literal.text);
+    return normalized;
   }
 
   function stripOuterMarkdownBold(source) {
@@ -1877,7 +1940,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return [];
     }
 
-    const protectedRanges = markdownFencedCodeRanges(source);
+    const protectedRanges = markdownLiteralRanges(source);
     const blocks = [
       ...findEnvironmentMathBlocks(source, protectedRanges),
       ...findDelimitedMathBlocks(source, protectedRanges, '$$', '$$'),
@@ -2132,6 +2195,32 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       .join('')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  function markdownLiteralRanges(source) {
+    if (source.length > MAX_FALLBACK_ROOT_LENGTH) return [{ start: 0, end: source.length }];
+    const ranges = markdownFencedCodeRanges(source);
+    const tokens = Array.from(source.matchAll(/`+/g));
+    const next = new Map();
+    const matching = [];
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      matching[i] = next.get(tokens[i][0]);
+      next.set(tokens[i][0], i);
+    }
+    let fenceIndex = 0;
+    const spans = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      while (fenceIndex < ranges.length && ranges[fenceIndex].end <= token.index) fenceIndex++;
+      if (ranges[fenceIndex]?.start <= token.index || isEscaped(source, token.index)) continue;
+      const endIndex = matching[i];
+      if (endIndex === undefined) continue;
+      const end = tokens[endIndex].index + tokens[endIndex][0].length;
+      if (ranges[fenceIndex] && end > ranges[fenceIndex].start) continue;
+      spans.push({ start: token.index, end });
+      i = endIndex;
+    }
+    return ranges.concat(spans).sort((a, b) => a.start - b.start);
   }
 
   function stripLeadingArrayRules(source) {
@@ -2484,7 +2573,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       aligned.appendChild(row);
     }
 
-    return aligned;
+    return wrapFallbackMath(aligned);
   }
 
   function parseRawArray(text) {
@@ -2614,7 +2703,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       array.appendChild(row);
     });
 
-    return array;
+    return wrapFallbackMath(array);
+  }
+
+  function wrapFallbackMath(content) {
+    const scroller = document.createElement('span');
+    scroller.className = 'aistudio-fallback-math-scroll';
+    scroller.setAttribute('role', 'region');
+    scroller.setAttribute('aria-label', '수식 가로 스크롤');
+    scroller.setAttribute('tabindex', '0');
+    scroller.append(content);
+    return scroller;
   }
 
   function availableKatex() {
@@ -2916,6 +3015,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (
         !host.isConnected ||
         closest(host, USER_SELECTOR) ||
+        host.querySelector(USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', a, button, select') ||
         closest(host, 'pre, code, a, [contenteditable], [role="textbox"]') ||
         closest(host, '.aistudio-raw-math-repaired') ||
         closest(host, '.aistudio-rendered-math-bold-repaired') ||
@@ -3228,18 +3328,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       container.querySelector(RENDERED_MATH_SELECTOR)
     );
 
-    if (
-      containsRenderedMath &&
-      !hasTextOutsideRenderedMath(container)
-    ) {
-      return 0;
+    if (containsRenderedMath) {
+      const outsideMath = mappedRawMathSource(container).source;
+      if (!hasRawMathFallbackHint(outsideMath) && !outsideMath.includes('\\text')) return 0;
     }
 
-    const canReplaceWhole = !container.querySelector(
+    const canReplaceWhole = !containsRenderedMath && !container.querySelector(
       RAW_MATH_RANGE_BLOCK_SELECTOR + ', button, input, textarea, select, ' +
       USER_SELECTOR + ', [contenteditable], [role="textbox"], a, code, pre, table, .aistudio-array-repaired, ' +
       '.aistudio-aligned-repaired, .aistudio-raw-math-repaired, ' +
-      '.aistudio-rendered-math-bold-repaired'
+      '.aistudio-rendered-math-bold-repaired, img, picture, video, audio, canvas, iframe, object, embed, svg, math'
     );
 
     if (canReplaceWhole) {
@@ -3385,7 +3483,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function isWordChar(character) {
     return Boolean(
       character &&
-      /[0-9A-Za-z_\u00C0-\uFFFF]/.test(character)
+      /[\p{L}\p{N}\p{M}_]/u.test(character)
     );
   }
 
@@ -3400,20 +3498,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function findMatches(text) {
+    if (!text || text.length > MAX_INLINE_REPAIR_LENGTH) return [];
     const result = [];
     const openers = new Map();
-    const literals = markdownFencedCodeRanges(text);
-    const backticks = new Map();
-    for (const token of text.matchAll(/`+/g)) {
-      if (isEscaped(text, token.index) || rangeOverlaps(literals, token.index, token.index + token[0].length)) continue;
-      const start = backticks.get(token[0]);
-      if (start === undefined) backticks.set(token[0], token.index);
-      else {
-        literals.push({ start, end: token.index + token[0].length });
-        backticks.delete(token[0]);
-      }
-    }
-    literals.sort((a, b) => a.start - b.start);
+    const literals = markdownLiteralRanges(text);
     let literalIndex = 0;
     // Tokenize runs once. An unmatched single * cannot consume the first half
     // of the next ** pair. Only examine bounded candidate contents.
@@ -3435,7 +3523,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const sourceInner = start === undefined || index - start > MAX_MATCH_INNER_LENGTH + 5
         ? '' : text.slice(start + marker.length, index);
       const openingTrim = (
-        marker[0] === '*' &&
+        ENABLE_LEGACY_MARKER_RECOVERY && marker[0] === '*' &&
         marker.length > 1 &&
         sourceInner.startsWith('__') &&
         /^[가-힣]/.test(sourceInner.slice(2)) &&
@@ -3450,8 +3538,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         !(marker[0] === '_' && isWordChar(after) && /^[0-9A-Za-z_]+$/.test(inner));
       if (valid) {
         const end = index + marker.length;
-        result.push({ start, end, openingTrim, marker, raw: text.slice(start, end), inner });
-        openers.clear();
+        const children = [];
+        while (result.length && result[result.length - 1].start >= start) children.unshift(result.pop());
+        result.push({ start, end, openingTrim, marker, raw: text.slice(start, end), inner, children });
+        for (const [key, value] of openers) if (value >= start) openers.delete(key);
       } else if (after && /\S/.test(after) &&
         !(marker[0] === '_' && isWordChar(before))) {
         openers.set(marker, index);
@@ -3545,6 +3635,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function findUnderlineMatches(text) {
     const result = [];
+    const literals = markdownLiteralRanges(text);
     const regex = /<u\s*>([\s\S]*?)<\/u\s*>/gi;
     let match;
 
@@ -3561,6 +3652,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (
         !opening ||
         !closing ||
+        rangeOverlaps(literals, start, end) ||
         isEscaped(text, start) ||
         isEscaped(text, innerEnd)
       ) {
@@ -3689,8 +3781,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return underline;
   }
 
-  function appendBoldRepairedText(fragment, text) {
-    const matches = findMatches(text);
+  function appendBoldRepairedText(fragment, text, depth = 0) {
+    const matches = depth < 12 ? findMatches(text) : [];
 
     if (!matches.length) {
       fragment.appendChild(document.createTextNode(text));
@@ -3708,9 +3800,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         );
       }
 
-      fragment.appendChild(
-        createRepairedEmphasis(match.inner, match.marker)
-      );
+      const emphasis = createRepairedEmphasis('', match.marker);
+      if (match.children?.length) appendBoldRepairedText(emphasis, match.inner, depth + 1);
+      else emphasis.textContent = match.inner;
+      fragment.appendChild(emphasis);
       cursor = match.end;
     }
 
@@ -4459,6 +4552,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       pre &&
       pre.matches('pre') &&
       !closest(code, USER_SELECTOR) &&
+      !closest(code, PROMPT_EDITOR_SELECTOR) &&
       !code.matches(
         '.aistudio-ascii-tree-repaired, .aistudio-prose-code-repaired, ' +
         '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
@@ -4468,7 +4562,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
       ) &&
       !code.querySelector(
-        'a, button, input, textarea, select, svg, math, script, style'
+        USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', a, button, input, textarea, select, svg, math, script, style'
       )
     );
   }
@@ -4539,6 +4633,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     return Boolean(
       hasRepairableText(rootText) ||
+      (/p\.\s*\d{2,10}\s*\/\s*PDF\s*\d{2,10}/i.test(rootText) && root?.querySelector('s, del')) ||
       hasUnrepairedAsciiBoxTree(root, rootText) ||
       hasUnwrappedMobileTable(root)
     );
@@ -4706,7 +4801,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function repairProseCodeBold(root) {
-    if (!root || !root.querySelectorAll) {
+    if (!ENABLE_HEURISTIC_PROSE_CODE_REPAIR || !root || !root.querySelectorAll) {
       return 0;
     }
 
@@ -4725,6 +4820,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         !pre ||
         !pre.matches('pre') ||
         closest(code, USER_SELECTOR) ||
+        closest(code, PROMPT_EDITOR_SELECTOR) ||
         code.matches(
           '.aistudio-ascii-tree-repaired, ' +
           '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
@@ -4733,7 +4829,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           '[class*="language-"], [class*="lang-"], [data-language], [data-lang]'
         ) ||
         code.querySelector(
-          'a, button, input, textarea, select, svg, math, script, style'
+          USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', a, button, input, textarea, select, svg, math, script, style'
         )
       ) {
         continue;
@@ -4879,7 +4975,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const groups = [];
     const walker = document.createTreeWalker(
       cell,
-      NodeFilter.SHOW_TEXT
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      { acceptNode(node) {
+        if (node.nodeType === 1) {
+          if (node.matches(INLINE_TEXT_SKIP_SELECTOR + ',' + USER_SELECTOR + ',br')) {
+            currentGroup = null;
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      } }
     );
     let currentGroup = null;
 
@@ -4937,7 +5043,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         });
       }
 
-      const matches = Array.from(text.matchAll(/<br\s*\/?\s*>/gi));
+      const literals = markdownLiteralRanges(text);
+      const matches = Array.from(text.matchAll(/<br\s*\/?\s*>/gi)).filter((match) =>
+        !isEscaped(text, match.index) && !rangeOverlaps(literals, match.index, match.index + match[0].length));
 
       for (let index = matches.length - 1; index >= 0; index -= 1) {
         const match = matches[index];
@@ -4961,9 +5069,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         if (
           selected.querySelector &&
           selected.querySelector(
-            'br, a, strong, b, code, pre, kbd, samp, script, style, noscript, svg, math, ' +
-            'textarea, input, select, [contenteditable="true"], [role="textbox"], ' +
-            '.katex, ms-katex, .MathJax, mjx-container'
+            SKIP_SELECTOR + ',' + USER_SELECTOR + ',br'
           )
         ) {
           if (typeof range.detach === 'function') {
@@ -5011,11 +5117,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       table.isConnected &&
       table.matches &&
       table.matches('table') &&
-      !table.hasAttribute(MOBILE_TABLE_ATTR) &&
+      (!table.hasAttribute(MOBILE_TABLE_ATTR) || !table.parentElement?.matches('.aistudio-table-scroll')) &&
       !closest(table, USER_SELECTOR) &&
       !closest(
         table,
-        'code, pre, [contenteditable="true"], [role="textbox"]'
+        'code, pre,' + PROMPT_EDITOR_SELECTOR
       )
     );
   }
@@ -5026,12 +5132,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const tables = Array.from(root.querySelectorAll(
-      `table:not([${MOBILE_TABLE_ATTR}])`
+      'table'
     ));
 
     if (
       root.matches &&
-      root.matches(`table:not([${MOBILE_TABLE_ATTR}])`)
+      root.matches('table')
     ) {
       tables.unshift(root);
     }
@@ -5144,6 +5250,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     embeddedMathRoots(clone).forEach((element) => (
       element.replaceWith(document.createTextNode(INLINE_MATH_ATOM))
     ));
+    clone.querySelectorAll?.('br').forEach((element) => element.replaceWith(document.createTextNode('\n')));
 
     return clone.textContent || '';
   }
@@ -5160,7 +5267,29 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     ).some((element) => !insideEmbeddedMath(element));
   }
 
-  function repairInlineMatchContainingMath(range, match, containsMath = true) {
+  function repairInlineMatchContainingMath(range, match, containsMath = true, depth = 0, pieces = null) {
+    if (pieces) {
+      // Text-only ranges and whole opaque atoms never clone native ancestors.
+      for (let i = pieces.length - 1; i >= 0; i--) {
+        const piece = pieces[i];
+        if (!piece.styles.length) piece.range.deleteContents();
+        else {
+          let content = piece.range.extractContents();
+          for (let j = piece.styles.length - 1; j >= 0; j--) {
+            const wrapper = createRepairedEmphasis('', piece.styles[j].marker);
+            if (piece.math) {
+              wrapper.classList.add('aistudio-md-contains-math');
+              markEmbeddedMathRoots(content);
+            }
+            wrapper.append(content);
+            content = wrapper;
+          }
+          piece.range.insertNode(content);
+        }
+        piece.range.detach();
+      }
+      return true;
+    }
     const contents = range.extractContents();
     const preview = contents.cloneNode(true);
 
@@ -5188,6 +5317,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (containsMath) strong.classList.add('aistudio-md-contains-math');
     strong.replaceChildren(contents);
     range.insertNode(strong);
+    if (match.children?.length && depth < 12) repairInlineEmphasisInContainer(strong, depth + 1, true);
     return true;
   }
 
@@ -5203,9 +5333,27 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     range.setStart(start.node, start.offset);
     range.setEnd(end.node, end.offset);
 
+    // Include a fully selected formatting host rather than cloning it. If a
+    // boundary is genuinely partial, use a text-piece plan instead of extract.
+    const common = range.commonAncestorContainer;
+    if (common.nodeType !== 3 && range.startContainer.nodeType === 3 && range.startOffset === 0) {
+      let edge = range.startContainer;
+      while (edge.parentNode !== common && edge === edge.parentNode?.firstChild) {
+        edge = edge.parentNode;
+        range.setStartBefore(edge);
+      }
+    }
+    if (common.nodeType !== 3 && range.endContainer.nodeType === 3 && range.endOffset === range.endContainer.length) {
+      let edge = range.endContainer;
+      while (edge.parentNode !== common && edge === edge.parentNode?.lastChild) {
+        edge = edge.parentNode;
+        range.setEndAfter(edge);
+      }
+    }
+
     const selected = range.cloneContents();
     const containsEmbeddedMath = embeddedMathRoots(selected).length > 0;
-    const selectedText = containsEmbeddedMath
+    const selectedText = containsEmbeddedMath || selected.querySelector?.('br')
       ? fragmentTextWithoutEmbeddedMath(selected)
       : selected.textContent || '';
     const crossesBoundary = Boolean(
@@ -5223,13 +5371,55 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return false;
     }
 
-    return { range, match, containsEmbeddedMath };
+    const boundaryParent = (node) => node.nodeType === 3 ? node.parentNode : node;
+    const partial = range.commonAncestorContainer.nodeType !== 3 &&
+      (boundaryParent(range.startContainer) !== range.commonAncestorContainer ||
+       boundaryParent(range.endContainer) !== range.commonAncestorContainer);
+    const pieces = partial ? prepareEmphasisPieces(records, match) : null;
+    return { range, match, containsEmbeddedMath, pieces };
   }
 
-  function collectInlineText(container) {
+  function prepareEmphasisPieces(records, match) {
+    const styles = [];
+    const markers = [];
+    const collect = (item, depth = 0) => {
+      const start = item.start + item.marker.length + (item.openingTrim || 0);
+      const end = item.end - item.marker.length;
+      styles.push({ start, end, marker: item.marker });
+      markers.push({ start: item.start, end: start }, { start: end, end: item.end });
+      if (depth < 12) for (const child of item.children || []) collect(child, depth + 1);
+    };
+    collect(match);
+    const boundaries = [...new Set([match.start, match.end,
+      ...markers.flatMap((marker) => [marker.start, marker.end])])].sort((a, b) => a - b);
+    const pieces = [];
+    for (const record of records) {
+      if (record.end <= match.start || record.start >= match.end) continue;
+      const cuts = [Math.max(record.start, match.start),
+        ...boundaries.filter((point) => point > record.start && point < record.end),
+        Math.min(record.end, match.end)];
+      for (let i = 1; i < cuts.length; i++) {
+        const start = cuts[i - 1];
+        const end = cuts[i];
+        if (start >= end) continue;
+        const range = document.createRange();
+        if (record.node.nodeType === 3) {
+          range.setStart(record.node, start - record.start);
+          range.setEnd(record.node, end - record.start);
+        } else range.selectNode(record.node);
+        const delimiter = markers.some((marker) => start >= marker.start && end <= marker.end);
+        pieces.push({ range, math: looksLikeEmbeddedMathElement(record.node), styles: delimiter ? [] :
+          styles.filter((style) => start >= style.start && end <= style.end) });
+      }
+    }
+    return pieces;
+  }
+
+  function collectInlineText(container, nested = false) {
     const records = [];
     let text = '';
-    if (closest(container, USER_SELECTOR) || closest(container, INLINE_TEXT_SKIP_SELECTOR)) {
+    const skipSelector = nested ? INLINE_NESTED_SKIP_SELECTOR : INLINE_TEXT_SKIP_SELECTOR;
+    if (closest(container, USER_SELECTOR) || closest(container, skipSelector)) {
       return { records, text };
     }
     const barrier = () => { if (!text.endsWith('\n\n')) text += '\n\n'; };
@@ -5245,13 +5435,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         text += node.nodeValue || '';
         records.push({ node, start, end: text.length });
       } else if (node.nodeType === 1) {
-        if (looksLikeEmbeddedMathElement(node) && !closest(node, USER_SELECTOR)) {
+        if (node.matches('br')) {
+          const start = text.length;
+          text += '\n';
+          records.push({ node, start, end: text.length });
+        } else if (looksLikeEmbeddedMathElement(node) && !closest(node, USER_SELECTOR)) {
           // A placeholder keeps **<math>amount</math>** nonempty. Never read
           // hidden MathML/TeX or descend into a native math renderer.
           const start = text.length;
           text += INLINE_MATH_ATOM;
           records.push({ node, start, end: text.length });
-        } else if (node.matches(INLINE_TEXT_SKIP_SELECTOR + ',' + USER_SELECTOR)) {
+        } else if (node.matches(skipSelector + ',' + USER_SELECTOR)) {
           barrier();
         } else {
           if (node.matches(INLINE_EMPHASIS_BOUNDARY_SELECTOR)) barrier();
@@ -5286,7 +5480,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const selectedText = selected.textContent || '';
     const crossesBoundary = Boolean(
       selected.querySelector &&
-      selected.querySelector(INLINE_REPAIR_BOUNDARY_SELECTOR)
+      selected.querySelector(INLINE_UNDERLINE_BOUNDARY_SELECTOR)
     );
     const previewTrimmed = trimFragmentText(
       selected,
@@ -5397,7 +5591,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return repaired;
   }
 
-  function repairInlineEmphasisInContainer(container) {
+  function repairInlineEmphasisInContainer(container, depth = 0, nested = false) {
     if (
       !container ||
       !container.isConnected ||
@@ -5406,7 +5600,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const collect = () => collectInlineText(container);
+    const collect = () => collectInlineText(container, nested);
 
     const snapshot = collect();
 
@@ -5417,7 +5611,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const operations = findMatches(snapshot.text).map((match) => (
+    const operations = findMatches(snapshot.text).slice(0, MAX_INLINE_MATCHES_PER_PASS).map((match) => (
       prepareInlineMatch(snapshot.records, match)
     )).filter(Boolean);
     let repaired = 0;
@@ -5425,9 +5619,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     // Live ranges track shared text-node offsets as later matches are removed.
     // Project the container once rather than once for each marker pair.
     for (let index = operations.length - 1; index >= 0; index--) {
-      const { range, match, containsEmbeddedMath } = operations[index];
+      const { range, match, containsEmbeddedMath, pieces } = operations[index];
       try {
-        if (repairInlineMatchContainingMath(range, match, containsEmbeddedMath)) repaired++;
+        if (repairInlineMatchContainingMath(range, match, containsEmbeddedMath, depth, pieces)) repaired++;
       } finally { range.detach(); }
     }
 
@@ -5475,8 +5669,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     let repaired = 0;
     const visited = new Set();
-
-    for (const container of containers) {
+    const started = schedulerNow();
+    const start = Math.min(inlineCursors.get(root) || 0, containers.length);
+    inlineCursors.delete(root);
+    for (let index = start; index < containers.length; index++) {
+      if (index > start && (index - start >= MAX_INLINE_CONTAINERS_PER_PASS || schedulerNow() - started >= SCAN_BUDGET_MS)) {
+        inlineCursors.set(root, index);
+        schedule(50);
+        break;
+      }
+      const container = containers[index];
       if (visited.has(container)) {
         continue;
       }
@@ -5504,57 +5706,42 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    let repaired = repairRawMath(root, rootText);
+    let repaired = hasRawMathFallbackHint(rootText) || rootText.includes('\\text') ? repairRawMath(root, rootText) : 0;
+    repaired += repairPageRanges(root);
     repaired += repairRenderedMathBold(root);
-    repaired += repairSplitTableBreaks(root);
+    if (hasLiteralTableBreak(rootText)) repaired += repairSplitTableBreaks(root);
     repaired += repairMobileTables(root);
-    repaired += repairLiteralUnderlines(root);
-    repaired += repairAsciiBoxTrees(root);
+    if (hasLiteralUnderline(rootText)) repaired += repairLiteralUnderlines(root);
+    if (hasAsciiBoxTreeHint(rootText)) repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
     repaired += repairInlineEmphasis(root);
-    const walker = document.createTreeWalker(
-      root,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(textNode) {
-          const value = textNode.nodeValue || '';
+    // Do not retry individual text nodes after context-aware repair: a code
+    // span/fence can start in a sibling node, so per-node fallback loses safety.
+    return repaired;
+  }
 
-          if (!hasRepairableText(value)) {
-            return NodeFilter.FILTER_SKIP;
-          }
-
-          if (skipped(textNode)) {
-            return NodeFilter.FILTER_REJECT;
-          }
-
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      }
-    );
-
-    const textNodes = [];
-
-    while (walker.nextNode()) {
-      textNodes.push(walker.currentNode);
+  function repairPageRanges(root) {
+    let repaired = 0;
+    for (const strike of root.querySelectorAll('s:not(.aistudio-page-range-repaired), del:not(.aistudio-page-range-repaired)')) {
+      if (closest(strike, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', code, pre, a')) continue;
+      const before = strike.previousSibling;
+      const after = strike.nextSibling;
+      if (before?.nodeType !== 3 || after?.nodeType !== 3 || strike.children.length) continue;
+      const left = before.nodeValue.match(/\bp\.\s*(\d{1,5})$/i);
+      const middle = strike.textContent.match(/^(\d{1,5})\s*\/\s*PDF\s*(\d{1,5})$/i);
+      const right = after.nodeValue.match(/^(\d{1,5})(?=\s*(?:페이지|쪽|\)))/);
+      if (!left || !middle || !right) continue;
+      const bookSpan = Number(middle[1]) - Number(left[1]);
+      const pdfSpan = Number(right[1]) - Number(middle[2]);
+      // A narrowly recognized pair of equal-length page ranges, not arbitrary
+      // deleted prose/numbers. Single ~ Markdown can strike the text between them.
+      if (bookSpan < 0 || bookSpan > 100 || bookSpan !== pdfSpan) continue;
+      before.nodeValue += '~';
+      after.nodeValue = '~' + after.nodeValue;
+      strike.classList.add('aistudio-page-range-repaired');
+      strike.style.setProperty('text-decoration', 'none', 'important');
+      repaired++;
     }
-
-    /*
-     * 뒤에서부터 바꿔 앞쪽 노드 참조 영향을 줄인다.
-     */
-    for (
-      let index = textNodes.length - 1;
-      index >= 0;
-      index -= 1
-    ) {
-      const tableBreaks = repairTableBreakTextNode(textNodes[index]);
-
-      repaired += tableBreaks;
-
-      if (!tableBreaks) {
-        repaired += repairTextNode(textNodes[index]);
-      }
-    }
-
     return repaired;
   }
 
@@ -5627,6 +5814,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return false;
     }
 
+    if (mathResizeObserver && !observedMathDisplays.has(display)) {
+      observedMathDisplays.add(display);
+      mathResizeObserver.observe(display);
+    }
+
     display.setAttribute(MATH_FIT_CHECKED_ATTR, '1');
 
     if (naturalWidth <= availableWidth + 1) {
@@ -5667,6 +5859,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function fitWideDisplayMath(force = false) {
+    for (const display of observedMathDisplays) {
+      if (!display.isConnected) {
+        mathResizeObserver?.unobserve(display);
+        observedMathDisplays.delete(display);
+        observedMathWidths.delete(display);
+      }
+    }
     const uncheckedSelector = `[${MATH_FIT_CHECKED_ATTR}="1"]`;
     const selector = force
       ? '.katex-display, ms-katex.display'
@@ -5896,6 +6095,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const node = fallbackWalker.nextNode();
       if (!node) { fallbackWalker = null; continue; }
       visited++;
+      if (node.nodeType === 1) {
+        rootEligibility.delete(node);
+        states.delete(node);
+      }
       if (node.isConnected && node.nodeType === 3 && hasFallbackRepairHint(node.nodeValue || '')) {
         const root = fallbackRootForTextNode(node);
         if (root) roots.add(root);
@@ -5954,7 +6157,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const roots = candidates.filter((root) => {
       if (rawMathScopeRoots.has(root)) return rootIsEligible(root);
       for (let parent = root.parentElement; parent; parent = parent.parentElement) {
-        if (candidateSet.has(parent)) return false;
+        if (candidateSet.has(parent) && rootIsEligible(parent)) return false;
       }
       return rootIsEligible(root);
     });
@@ -6102,6 +6305,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return (
         visible(button) &&
         isPromptRunButton(button) &&
+        !button.disabled && button.getAttribute?.('aria-disabled') !== 'true' &&
         isRunActionLabel(label) &&
         !isStopActionLabel(label)
       );
@@ -6173,7 +6377,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function scan() {
     // Requests queued before focus changed must yield too, not just new events.
-    if (document.hidden || promptEditorActive()) return;
+    if (document.hidden) return;
+    if (promptEditorActive()) {
+      schedule(promptComposing ? PROMPT_IDLE_MS : Math.max(50, PROMPT_IDLE_MS - (Date.now() - lastPromptActivity) + 50));
+      return;
+    }
     if (observer) {
       handleMutations(observer.takeRecords());
       observer.disconnect();
@@ -6221,6 +6429,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return;
     }
 
+    flushPendingCleanup();
     const now = Date.now();
     const fittedMathCount = (mathFitDirty || mathFitResizeDirty)
       ? fitWideDisplayMath(mathFitResizeDirty) : 0;
@@ -6265,7 +6474,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
       scanCursor = (index + 1) % roots.length;
       const previous = states.get(root);
-      if (previous?.attempted === previous?.text && previous?.lastAttemptAt &&
+      if (!inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
           now - previous.lastAttemptAt < RETRY_MAX_MS) continue;
       const text = root.textContent || '';
 
@@ -6325,7 +6534,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
 
       if (
-        state.attempted === text &&
+        !inlineCursors.has(root) && state.attempted === text &&
         now - (state.lastAttemptAt || 0) < retryWait
       ) {
         continue;
@@ -6350,7 +6559,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         repairedTotal += repaired;
         states.set(root, {
           text: after,
-          since: now,
+          since: state.since,
           attempted: null,
           attempts: 0,
           lastAttemptAt: null
@@ -6489,7 +6698,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function promptEditorActive() {
     return Boolean(
       document.activeElement &&
-      promptEditorFor(document.activeElement)
+      promptEditorFor(document.activeElement) &&
+      (promptComposing || Date.now() - lastPromptActivity < PROMPT_IDLE_MS)
     );
   }
 
@@ -6534,36 +6744,25 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (mutation.attributeName === 'class' &&
           !element.matches(MODEL_TURN_SELECTOR + ',' + USER_SELECTOR) &&
           !/(?:^|\s)(?:model|user|model-prompt-container|user-prompt-container|user-message|human-message)(?:\s|$)/.test(mutation.oldValue || '')) continue;
-      if (mutation.type === 'attributes') clearFallbackRootsInsideUser(element);
+      if (mutation.type === 'attributes') {
+        pendingCleanup.add(element);
+        changed = true;
+      }
       if (closest(element, USER_SELECTOR)) continue;
       // Cheap bookkeeping only. Never scan entire descendants in this callback.
       const knownRoot = knownRepairRootForMutation(element);
-      const nativeMath = closest(element, '.aistudio-rendered-math-bold-repaired');
-      if (nativeMath && mutation.type !== 'attributes') {
-        nativeMath.classList.remove('aistudio-rendered-math-bold-repaired');
-        nativeMath.removeAttribute('data-aistudio-rendered-math-bold-repaired');
-      }
-      const pre = closest(element, 'pre');
-      const view = pre && asciiPreViews.get(pre);
-      if (view && mutation.type !== 'attributes' &&
-          (!pre.contains(view.code) || view.code.contains(element))) {
-        const { code, visual } = view;
-        visual.remove();
-        asciiVisuals.delete(code);
-        asciiPreViews.delete(pre);
-        code.classList.remove('aistudio-ascii-tree-repaired');
-        code.removeAttribute('data-aistudio-ascii-tree-repaired');
-        pre.classList.remove('aistudio-ascii-tree-block-repaired');
-        pre.removeAttribute('data-aistudio-ascii-tree-block-repaired');
+      if (knownRoot && mutation.type !== 'attributes') {
+        pendingCleanup.add(element);
       }
       const display = closest(element, '.katex-display, ms-katex.display');
       if (display) {
         mathFitCache.delete(display);
-        display.removeAttribute(MATH_FIT_CHECKED_ATTR);
+        pendingMathInvalidation.add(display);
       }
       if (knownRoot) {
         for (let parent = element; parent; parent = parent.parentElement) {
           if (rootEligibility.has(parent)) rootEligibility.delete(parent);
+          inlineCursors.delete(parent);
           if (states.has(parent) && !invalidated.has(parent)) {
             states.delete(parent);
             invalidated.add(parent);
@@ -6581,6 +6780,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       for (const scope of scopes) {
         if (scope && scope.isConnected && !fallbackBlocked(scope) &&
             !promptEditorFor(scope)) {
+          rootEligibility.delete(scope);
+          states.delete(scope);
           fallbackScanScopes.add(scope.nodeType === 1 ? scope : element);
           changed = true;
         }
@@ -6591,6 +6792,42 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       mathFitDirty = true;
       schedule(MUTATION_SCAN_DELAY_MS);
     }
+  }
+
+  function flushPendingCleanup() {
+    for (const element of pendingCleanup) {
+      if (!element.isConnected || promptEditorFor(element)) continue;
+      clearFallbackRootsInsideUser(element);
+      if (closest(element, USER_SELECTOR)) continue;
+      let emphasis = closest(element, '.aistudio-md-repaired');
+      while (emphasis) {
+        const parent = emphasis.parentElement;
+        emphasis.classList.remove('aistudio-md-repaired');
+        emphasis.removeAttribute('data-aistudio-md-repaired');
+        emphasis = closest(parent, '.aistudio-md-repaired');
+      }
+      const nativeMath = closest(element, '.aistudio-rendered-math-bold-repaired');
+      nativeMath?.classList.remove('aistudio-rendered-math-bold-repaired');
+      nativeMath?.removeAttribute('data-aistudio-rendered-math-bold-repaired');
+      const pre = closest(element, 'pre');
+      const view = pre && asciiPreViews.get(pre);
+      if (view && (!pre.contains(view.code) || view.code.contains(element))) {
+        view.visual.remove();
+        asciiVisuals.delete(view.code);
+        asciiPreViews.delete(pre);
+        view.code.classList.remove('aistudio-ascii-tree-repaired');
+        view.code.removeAttribute('data-aistudio-ascii-tree-repaired');
+        pre.classList.remove('aistudio-ascii-tree-block-repaired');
+        pre.removeAttribute('data-aistudio-ascii-tree-block-repaired');
+      }
+    }
+    pendingCleanup.clear();
+    for (const display of pendingMathInvalidation) {
+      if (display.isConnected && !closest(display, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR)) {
+        display.removeAttribute(MATH_FIT_CHECKED_ATTR);
+      }
+    }
+    pendingMathInvalidation.clear();
   }
 
   function installObserver() {
@@ -6623,6 +6860,45 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     installStyle();
     installObserver();
+    const notePromptActivity = (event) => {
+      if (!promptEditorFor(event.target)) return;
+      lastPromptActivity = Date.now();
+      if (event.type === 'compositionstart') promptComposing = true;
+      if (event.type === 'compositionend') promptComposing = false;
+      schedule(PROMPT_IDLE_MS + 50);
+    };
+    // Passive activity observation only: never read prompt values, cancel input,
+    // intercept keyboard shortcuts, or keep output frozen for idle focus.
+    for (const type of ['focusin', 'input', 'compositionstart', 'compositionend']) {
+      document.addEventListener(type, notePromptActivity, { passive: true, capture: true });
+    }
+    if (promptEditorFor(document.activeElement)) lastPromptActivity = Date.now();
+    if (typeof ResizeObserver === 'function' && !mathResizeObserver) {
+      mathResizeObserver = new ResizeObserver((entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          const display = entry.target;
+          if (!display.isConnected) {
+            mathResizeObserver.unobserve(display);
+            observedMathDisplays.delete(display);
+            observedMathWidths.delete(display);
+            continue;
+          }
+          const width = Math.round(entry.contentRect.width);
+          const previous = observedMathWidths.get(display);
+          observedMathWidths.set(display, width);
+          // Height changes caused by fitting must not create resize loops.
+          if (previous === undefined || previous === width) continue;
+          mathFitCache.delete(display);
+          pendingMathInvalidation.add(display);
+          changed = true;
+        }
+        if (changed) {
+          mathFitDirty = true;
+          if (!promptEditorActive()) schedule(150);
+        }
+      });
+    }
     schedule(250);
 
     document.fonts?.addEventListener('loadingdone', () => {
@@ -6708,6 +6984,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       'focusout',
       (event) => {
         if (promptEditorFor(event.target)) {
+          promptComposing = false;
           schedule(250);
         }
       },

@@ -9,7 +9,7 @@ async (page) => {
     document.createTreeWalker = (root, whatToShow, ...rest) => {
       if (
         root === document.body &&
-        whatToShow === NodeFilter.SHOW_TEXT
+        (whatToShow & NodeFilter.SHOW_TEXT)
       ) {
         window.__bodyTextWalkerCount += 1;
       }
@@ -96,6 +96,7 @@ async (page) => {
       document.getElementById('partial-katex-slot'),
       { ...options, displayMode: false }
     );
+    window.__mixedNativeHost = document.getElementById('partial-katex-slot');
     window.katex.render(
       String.raw`\mathbf{사용자\text{원문}}`,
       document.getElementById('user-native-bold-math'),
@@ -126,7 +127,12 @@ async (page) => {
       return originalKatexRender(source, element, renderOptions);
     };
   });
-  await page.addScriptTag({ path: 'aaa.user.js' });
+  // This legacy feature suite explicitly opts in; the default contract suite
+  // verifies that unlabeled code remains untouched without that opt-in.
+  const legacySource = require('node:fs').readFileSync('aaa.user.js', 'utf8').replace(
+    'const ENABLE_HEURISTIC_PROSE_CODE_REPAIR = false;', 'const ENABLE_HEURISTIC_PROSE_CODE_REPAIR = true;').replace(
+    'const ENABLE_LEGACY_MARKER_RECOVERY = false;', 'const ENABLE_LEGACY_MARKER_RECOVERY = true;');
+  await page.addScriptTag({ content: legacySource });
   await page.waitForTimeout(4000);
 
   const rendering = await page.evaluate(() => {
@@ -631,6 +637,8 @@ async (page) => {
       matrixSource: sourceOf('raw-matrix'),
       standaloneSource: sourceOf('raw-standalone-bold'),
       mixedSource: sourceOf('mixed-partial-math'),
+      mixedNativePreserved: window.__mixedNativeHost.isConnected &&
+        document.getElementById('partial-katex-slot') === window.__mixedNativeHost,
       modernSource: sourceOf('modern-raw-math'),
       embeddedSource: sourceOf('embedded-acquisition-math'),
       embeddedHeadingPreserved: document
@@ -1230,7 +1238,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-1111'
+        'data-aistudio-mobile-safe-1120'
       )
     };
   });
@@ -1280,9 +1288,10 @@ async (page) => {
     !rendering.underlineAttributePreserved ||
     !rendering.nativeUnderlinePreserved ||
     !rendering.userUnderlinePreserved ||
-    rendering.rawMathCount !== 11 ||
-    rendering.rawMathKatexCount !== 11 ||
-    rendering.rawMathMathmlCount !== 11 ||
+    rendering.rawMathCount !== 10 ||
+    rendering.rawMathKatexCount !== 10 ||
+    rendering.rawMathMathmlCount !== 10 ||
+    !rendering.mixedNativePreserved ||
     rendering.rawMathErrorCount !== 0 ||
     !rendering.arraySource?.startsWith('\\begin{array}{ll|ll}') ||
     !rendering.arraySource?.includes('\\\\') ||
@@ -1546,7 +1555,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.11.1'
+    rendering.version !== '1.12.0'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

@@ -7,12 +7,15 @@ const root = path.resolve(__dirname, '..');
 process.chdir(root);
 const origin = 'https://aistudio.google.com';
 const run = async () => {
+  if (process.env.AISTUDIO_AUDIT_BASELINE && !process.argv.includes('--baseline')) {
+    throw new Error('Baseline mode disables assertions; pass --baseline explicitly for diagnostic runs only.');
+  }
   const browser = await firefox.launch({ headless: true });
   const results = {};
   try {
-    const suites = process.argv.includes('--photo') ? ['photo-regression.test.js'] : process.argv.includes('--audit')
+    const suites = process.argv.includes('--contract') ? ['rendering-contract.test.js'] : process.argv.includes('--photo') ? ['photo-regression.test.js'] : process.argv.includes('--audit')
       ? ['audit-browser.test.js']
-      : ['firefox-browser.test.js', 'audit-browser.test.js', 'photo-regression.test.js'];
+      : ['firefox-browser.test.js', 'audit-browser.test.js', 'photo-regression.test.js', 'rendering-contract.test.js'];
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915

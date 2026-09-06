@@ -77,8 +77,9 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   source,
-  /document\.addEventListener\(\s*['"](?:click|keydown|keypress|input|beforeinput)['"]/
+  /document\.addEventListener\(\s*['"](?:click|keydown|keypress|beforeinput)['"]/
 );
+assert.match(source, /document\.addEventListener\(type, notePromptActivity, \{ passive: true, capture: true \}\)/);
 
 const tail = /\n  if \(document\.readyState === 'loading'\) \{[\s\S]*?\n\}\(\)\);\s*$/;
 assert.match(source, tail);
@@ -245,8 +246,8 @@ const mixedNativeBoldMatch = api.findMatches(
   '⚡ 1초 공식: **__주주에게 지급한 총 현금**을 고르면 정답입니다.'
 )[0];
 assert.ok(mixedNativeBoldMatch);
-assert.equal(mixedNativeBoldMatch.inner, '주주에게 지급한 총 현금');
-assert.equal(mixedNativeBoldMatch.openingTrim, 2);
+assert.equal(mixedNativeBoldMatch.inner, '__주주에게 지급한 총 현금');
+assert.equal(mixedNativeBoldMatch.openingTrim, 0);
 assert.equal(api.findMatches('foo__bar__baz').length, 0);
 assert.equal(api.findMatches('**a** **b**').map((m) => m.inner).join(','), 'a,b');
 assert.equal(api.findMatches('**__init**')[0]?.inner, '__init');
@@ -254,6 +255,11 @@ assert.equal(api.findMatches('`**literal**` **outside**').map((m) => m.inner).jo
 assert.equal(api.findMatches('```\n**literal**\n```\n**outside**').map((m) => m.inner).join(','), 'outside');
 assert.equal(api.parseRawMathCandidate('$x$ and $y$'), null);
 assert.equal(api.parseRawMathCandidate(String.raw`$x\$`), null);
+assert.equal(api.normalizeKatexCommands('x% comment\n+y'), 'x% comment\n+y');
+assert.equal(api.normalizeKatexCommands(String.raw`\verb|\bm{x}|`), String.raw`\verb|\bm{x}|`);
+assert.equal(api.findMatches('（__강조__）')[0]?.inner, '강조');
+assert.equal(api.findMatches('😀__bold__')[0]?.inner, 'bold');
+assert.equal(api.findMatches('—__bold__')[0]?.inner, 'bold');
 assert.equal(api.analyzeAsciiDiagram('const value = "┌─ 자본금";\n자본 ┤ 자본잉여금\n  └─ 자본조정'), null);
 assert.equal(api.findMatches('__dunder__name').length, 0);
 assert.equal(api.findMatches('목록에서는 __필수 조건__입니다.').length, 1);
