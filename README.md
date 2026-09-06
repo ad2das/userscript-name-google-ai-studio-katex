@@ -104,7 +104,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.1 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.2 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -168,6 +168,12 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.13.2 recognizes square-bracket headings in multi-panel T-account diagrams and
+aligns each panel's vertical dividers without changing the original code block.
+Live prose emphasis can coexist with native inline code: literal code is masked
+only in the parser's offset-preserving view, and no live emphasis crosses into it.
+The input-activity fast path from 1.13.1 remains enabled.
 
 1.13.1 gates live-controller mutation batches before iterating their records when
 the prompt is active, and cancels queued live frames on teardown. A focused

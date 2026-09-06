@@ -93,6 +93,22 @@ async (page) => {
     document.querySelectorAll('.aistudio-live-preview-layer canvas').length === 1);
   await page.evaluate(() => {
     const block = document.getElementById('live');
+    block.innerHTML = '<span class="inline-code">**코드 안의 기호</span> 그리고 **바깥 강조** 끝';
+    globalThis.__literalInlineCode = block.firstChild;
+  });
+  await page.waitForTimeout(50);
+  checks.inlineCodeDoesNotBlockUnrelatedEmphasis = await page.evaluate(() =>
+    __preview.stats().visible && __preview.stats().ranges === 1 &&
+    document.getElementById('live').firstChild === __literalInlineCode &&
+    __literalInlineCode.textContent === '**코드 안의 기호');
+  await page.evaluate(() => {
+    document.getElementById('live').innerHTML = '**바깥 <code>코드</code> 경계** 끝';
+  });
+  await page.waitForTimeout(50);
+  checks.liveEmphasisNeverCrossesCode = await page.evaluate(() => !__preview.stats().visible &&
+    document.querySelector('#live code').textContent === '코드');
+  await page.evaluate(() => {
+    const block = document.getElementById('live');
     block.style.width = '';
     block.textContent = '**다시 강조** 다음';
   });

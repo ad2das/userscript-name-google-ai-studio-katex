@@ -28,8 +28,10 @@ Known implementation and validation limits:
 - The projection engine handles short, visible prose blocks. Each emphasis interval must
   have homogeneous inline typography; unrelated native bold prefixes can remain.
   Wrapped lines are painted only if true bold fits every native line's glyph space.
-  Math, code, nested formatting within an interval, controls, and complex shaping
-  are rejected. These fallbacks still display the original Markdown.
+  Math, code crossings, nested formatting within an interval, controls, and complex
+  shaping are rejected. Native inline code outside an emphasis interval is an
+  opaque parser region and remains unchanged. Other fallbacks still display the
+  original Markdown.
 - Delimiter layout space remains. This cannot reproduce canonical Markdown
   reflow, even when the visible glyphs fit. Selection temporarily reveals source.
 - The experimental controller shares one layer and registry across paragraphs,

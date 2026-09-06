@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.1
+// @version      1.13.2
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.1';
-  const STYLE_ID = 'aistudio-mobile-safe-1131-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1131';
+  const VERSION = '1.13.2';
+  const STYLE_ID = 'aistudio-mobile-safe-1132-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1132';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -475,6 +475,7 @@
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:where(${PROTECTED_CSS_SELECTOR}) *):not(:has(${PROTECTED_CSS_SELECTOR}))`;
 
   const LEGACY_STYLE_IDS = [
+    'aistudio-mobile-safe-1131-style',
     'aistudio-mobile-safe-1130-style',
     'aistudio-mobile-safe-1122-style',
     'aistudio-mobile-safe-1121-style',
@@ -4248,9 +4249,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const source = text.replace(/\r\n?/g, '\n');
     const rawLines = source.split('\n');
-    const headings = source.match(/<[^>\n]{2,}>/g) || [];
+    const headingPattern = /<[^>\n]{2,}>|\[[^\]\n]{2,}\]/g;
+    const headings = source.match(headingPattern) || [];
     const headingLine = rawLines.find((line) => (
-      (line.match(/<[^>\n]{2,}>/g) || []).length >= 2
+      (line.match(headingPattern) || []).length >= 2
     ));
     const dividerCount = rawLines.filter((line) => (
       /_{6,}|─{6,}/.test(line)
@@ -4270,7 +4272,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const headingMatches = Array.from(
-      headingLine.matchAll(/<[^>\n]{2,}>/g)
+      headingLine.matchAll(headingPattern)
     );
     const panelStarts = headingMatches.map((match) => (
       asciiCharacterGridLine(headingLine.slice(0, match.index)).columns
@@ -7017,20 +7019,26 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const blockBounds = block.getBoundingClientRect();
       if (blockBounds.bottom <= 0 || blockBounds.top >= innerHeight ||
           blockBounds.right <= 0 || blockBounds.left >= innerWidth) return;
-      if (!getSelection().isCollapsed || block.querySelector(':not(span, ms-cmark-node, strong, b)') ||
-          block.closest('[contenteditable], [role="textbox"], [data-turn-role="user"], pre, code') ||
-          block.querySelector('[contenteditable], [role], [tabindex], [hidden], .inline-code, [aria-hidden="true"]')) return;
+      if (!getSelection().isCollapsed || block.querySelector(':not(span, ms-cmark-node, strong, b, code)') ||
+          block.closest('[contenteditable], [role="textbox"], [data-turn-role="user"], pre, code, .inline-code') ||
+          block.querySelector('[contenteditable], [role], [tabindex], [hidden], [aria-hidden="true"]')) return;
       const text = block.textContent;
-      if (text.length > 512 || /[`$\\\n\uFFFC]/.test(text)) return;
+      if (text.length > 512) return;
       const records = [];
       const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
       let offset = 0;
+      let parseText = '';
       while (walker.nextNode()) {
         const node = walker.currentNode;
         if (records.length >= 32) return;
-        records.push({ node, start: offset, end: offset + node.length });
+        const protectedCode = !!node.parentElement.closest('code, .inline-code');
+        records.push({ node, start: offset, end: offset + node.length, protectedCode });
+        // Preserve UTF-16 offsets without letting literal code delimiters
+        // consume or create emphasis pairs in neighbouring prose.
+        parseText += protectedCode ? '\uFFFC'.repeat(node.length) : node.nodeValue;
         offset += node.length;
       }
+      if (/[`$\\\n]/.test(parseText)) return;
       const signature = s => [s.fontFamily, s.fontSize, s.fontWeight, s.fontStyle,
         s.color, s.letterSpacing, s.wordSpacing, s.textTransform, s.direction].join('|');
       const mask = [];
@@ -7038,10 +7046,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       candidate.className = shared ? 'aistudio-live-preview-block' : 'aistudio-live-preview-layer';
       candidate.setAttribute('aria-hidden', 'true');
       candidate.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:1;';
-      for (const match of parse(text).slice(0, 12)) {
+      for (const match of parse(parseText).slice(0, 12)) {
         if (match.marker !== '**' || match.children.length || match.openingTrim ||
             match.end === text.length || /[*_]/.test(match.inner)) continue;
         const matchedRecords = records.filter(r => r.start < match.end && r.end > match.start);
+        if (matchedRecords.some(r => r.protectedCode)) continue;
         const base = getComputedStyle(matchedRecords[0].node.parentElement);
         // AI Studio's paragraph font can differ from its inline renderer font.
         // Existing native emphasis outside this interval is not a reason to skip.

@@ -568,6 +568,30 @@ const reportedAsciiComparison = [
   '순자산(자본총계) XXX 증가!                    순자산(자본총계) 변동 없음!'
 ].join('\n');
 const asciiComparison = api.analyzeAsciiDiagram(reportedAsciiComparison);
+const squareAccountPanels = [
+  '[매출채권] (자산: 차변 계정)                    [매입채무] (부채: 대변 계정)',
+  '─────────────────────────────────────         ─────────────────────────────────────',
+  '★기초잔액★ (왼쪽!) │ 당기 회수액 (감소)           당기 지급액 (감소) │ ★기초잔액★ (오른쪽!)',
+  '당기 외상매출 (증가) │ ★기말잔액★ (오른쪽!)        ★기말잔액★ (왼쪽!) │ 당기 외상매입 (증가)',
+  '─────────────────────────────────────         ─────────────────────────────────────',
+  '차변합계           │ 대변합계                    차변합계           │ 대변합계'
+].join('\n');
+const squareAccounts = api.analyzeMultiPanelAsciiTable(squareAccountPanels);
+assert.ok(squareAccounts, 'Square-bracket T-account headings must select panel-aware alignment');
+assert.equal(squareAccounts.source, squareAccountPanels);
+assert.equal(squareAccounts.panelAnchors.length, 2);
+assert.equal(api.analyzeAsciiDiagram(squareAccountPanels).panelAnchors.length, 2);
+for (let panelIndex = 0; panelIndex < 2; panelIndex++) {
+  const axes = new Set(squareAccounts.lines.flatMap(line => Array.from(line.runs))
+    .filter(run => run.structural && run.panelIndex === panelIndex).map(run => run.start));
+  assert.equal(axes.size, 1, 'Each T-account must retain one consistent vertical axis');
+}
+for (const line of squareAccounts.lines) {
+  for (const axis of line.runs.filter(run => run.structural && /[|│]/.test(run.text))) {
+    assert.ok(line.runs.filter(run => run !== axis && run.start < axis.start && !/^[_─]+$/.test(run.text))
+      .every(run => run.start + run.columns <= axis.start), 'Aligned axis must not overlap a preceding label');
+  }
+}
 
 assert.ok(asciiComparison);
 assert.equal(asciiComparison.kind, 'character-grid');
