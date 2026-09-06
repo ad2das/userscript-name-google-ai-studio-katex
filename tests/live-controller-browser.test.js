@@ -34,11 +34,23 @@ async (page) => {
   await page.evaluate(() => { __typing = false; __controller.invalidate(); });
   await page.waitForFunction(() => __controller.stats().ranges === 3);
   await page.evaluate(() => { document.querySelector('button').textContent = 'Run'; });
-  await page.waitForFunction(() => !__controller.stats().layerConnected);
-  checks.completionReleasesSource = await page.evaluate(() =>
-    __controller.stats().ranges === 0 && !CSS.highlights.has('aistudio-live-prototype') &&
+  await page.waitForFunction(() => __controller.stats().draining);
+  checks.completionKeepsPaintUntilNativeRepair = await page.evaluate(() =>
+    __controller.stats().ranges === 3 && __controller.stats().layerConnected &&
     document.querySelector('#model p').textContent === '**바뀐 문단** 끝');
-  await page.waitForTimeout(2800);
+  const transition = await page.evaluate(async () => {
+    const start = performance.now();
+    let uncoveredFrames = 0;
+    let frames = 0;
+    while (document.getElementById('model').textContent.includes('**') && performance.now() - start < 4000) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      frames++;
+      if (document.getElementById('model').textContent.includes('**') && __controller.stats().ranges === 0) uncoveredFrames++;
+    }
+    return { frames, uncoveredFrames };
+  });
+  checks.noObservedGapDuringCompletion = transition.frames > 0 && transition.uncoveredFrames === 0;
+  await page.waitForFunction(() => !__controller.stats().layerConnected);
   checks.legacyCompletionRepairResumes = await page.evaluate(() =>
     document.querySelectorAll('#model strong').length === 3 &&
     !document.getElementById('model').textContent.includes('**'));
@@ -49,8 +61,21 @@ async (page) => {
   await page.waitForFunction(() => __controller.stats().ranges === 1);
   checks.nextGenerationStartsClean = await page.evaluate(() =>
     __controller.stats().blocks === 1 && document.querySelectorAll('.aistudio-live-preview-layer').length === 1);
+  await page.evaluate(() => {
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < 130; i++) {
+      const p = document.createElement('p');
+      p.textContent = `**문단 ${i}** 끝`;
+      fragment.append(p);
+    }
+    document.getElementById('model').replaceChildren(fragment);
+  });
+  await page.waitForFunction(() => __controller.stats().blocks === 130 && !__controller.stats().discovering && __controller.stats().queued === 0);
+  checks.discoveryContinuesBeyond64Paragraphs = await page.evaluate(() =>
+    __controller.stats().blocks === 130 && document.querySelectorAll('#model p').length === 130 &&
+    document.querySelector('#model p').textContent === '**문단 0** 끝');
   await page.evaluate(() => __controller.stop());
   checks.teardown = await page.evaluate(() => !document.querySelector('.aistudio-live-preview-layer') && !CSS.highlights.has('aistudio-live-prototype'));
   if (Object.values(checks).some(x=>!x)) throw new Error(JSON.stringify(checks));
-  return { checks };
+  return { checks, transition };
 }

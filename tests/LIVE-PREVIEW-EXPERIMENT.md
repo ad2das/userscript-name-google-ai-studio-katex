@@ -31,11 +31,16 @@ Not yet a production implementation:
   reflow, even when the visible glyphs fit. Selection temporarily reveals source.
 - The experimental controller shares one layer and registry across paragraphs,
   with up to four blocks or six milliseconds per callback (one block remains
-  indivisible). Unchanged paragraphs retain their paint. Discovery currently
-  queries all paragraphs and caps selection to the last 64; it still needs a
-  bounded persistent traversal and real response-ownership integration.
-- Completion currently releases the layer before legacy stabilization completes;
-  the fixture proves eventual repair, **not** a gap-free transition. Nested
+  indivisible). Unchanged paragraphs retain their paint. Discovery now uses a
+  persistent element walker, visiting at most 128 elements within the frame's
+  budget, excluding protected subtrees. A 130-paragraph fixture verifies that
+  discovery is not limited to the last 64 paragraphs. Real response-ownership
+  integration remains necessary.
+- On generation completion, existing paint bridges up to five seconds while
+  legacy repair proceeds. The fixture samples animation frames and observes no
+  uncovered raw-text frame in that transition. This is not a guarantee for
+  arbitrary native-renderer timing: expiry restores the source even if legacy
+  repair has not succeeded. Typing and hidden-page guards clear the layer. Nested
   scrollers, browser zoom and variable-font equivalence still require validation.
   The clipping gate rejects partially clipped ranges; occlusion uses three sampled
   hit-test points and is not proof against arbitrary partially overlapping surfaces.

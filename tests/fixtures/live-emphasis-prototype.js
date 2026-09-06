@@ -78,8 +78,11 @@ globalThis.createLiveEmphasisPrototype = function (block, parse, shared = null) 
   function render() {
     frame = 0;
     clear();
-    if (stopped || !supported || !block.isConnected || document.hidden ||
-        !getSelection().isCollapsed || block.querySelector(':not(span, ms-cmark-node, strong, b)') ||
+    if (stopped || !supported || !block.isConnected || document.hidden) return;
+    const blockBounds = block.getBoundingClientRect();
+    if (blockBounds.bottom <= 0 || blockBounds.top >= innerHeight ||
+        blockBounds.right <= 0 || blockBounds.left >= innerWidth) return;
+    if (!getSelection().isCollapsed || block.querySelector(':not(span, ms-cmark-node, strong, b)') ||
         block.closest('[contenteditable], [role="textbox"], [data-turn-role="user"], pre, code') ||
         block.querySelector('[contenteditable], [role], [tabindex], [hidden], .inline-code, [aria-hidden="true"]')) return;
     const text = block.textContent;

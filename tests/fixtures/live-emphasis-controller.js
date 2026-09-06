@@ -15,10 +15,35 @@ globalThis.createLiveEmphasisController = function ({ getRoot, parse, active, ty
   let stopped = false;
   let currentRoot = null;
   let renderedBlocks = 0;
+  let discoveryWalker = null;
+  let wasActive = false;
+  let draining = false;
+  let drainTimer = null;
+  function finishDrain() {
+    draining = false;
+    clearTimeout(drainTimer);
+    drainTimer = null;
+    clear();
+  }
+  function phaseAllowed() {
+    const running = active();
+    if (running) {
+      draining = false;
+      clearTimeout(drainTimer);
+      drainTimer = null;
+    } else if (wasActive && projectors.size) {
+      draining = true;
+      // A bounded bridge, not permanent replacement of completed native output.
+      drainTimer = setTimeout(finishDrain, 5000);
+    }
+    wasActive = running;
+    return running || draining;
+  }
   function clear() {
     for (const projector of projectors.values()) projector.stop();
     projectors.clear();
     dirty.clear();
+    discoveryWalker = null;
     highlight.clear();
     CSS.highlights.delete(key);
     host.remove();
@@ -30,7 +55,7 @@ globalThis.createLiveEmphasisController = function ({ getRoot, parse, active, ty
   }
   function synchronize(discover = false) {
     if (stopped) return;
-    if (!active() || typing() || document.hidden) { clear(); return; }
+    if (!phaseAllowed() || typing() || document.hidden) { finishDrain(); return; }
     const root = getRoot();
     if (!root?.isConnected) { clear(); return; }
     if (root !== currentRoot) { clear(); currentRoot = root; discover = true; }
@@ -40,14 +65,18 @@ globalThis.createLiveEmphasisController = function ({ getRoot, parse, active, ty
       if (!root.contains(block)) { projector.stop(); projectors.delete(block); dirty.delete(block); }
     }
     if (discover) {
-      // This discovery cap is provisional; production needs persistent traversal.
-      for (const block of Array.from(root.querySelectorAll('p')).slice(-64)) queue(block);
+      if (!discoveryWalker) discoveryWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+        acceptNode(node) {
+          return node.matches('pre, code, math, .katex, ms-katex, [contenteditable], [data-turn-role="user"]')
+            ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+        }
+      });
     }
-    if (dirty.size && !frame) frame = requestAnimationFrame(flush);
+    if ((dirty.size || discoveryWalker) && !frame) frame = requestAnimationFrame(flush);
   }
   function flush() {
     frame = 0;
-    if (!active() || typing() || document.hidden) { clear(); return; }
+    if (!phaseAllowed() || typing() || document.hidden) { finishDrain(); return; }
     const start = performance.now();
     let count = 0;
     for (const block of dirty) {
@@ -62,7 +91,16 @@ globalThis.createLiveEmphasisController = function ({ getRoot, parse, active, ty
       renderedBlocks++;
       if (++count >= 4 || performance.now() - start >= 6) break;
     }
-    if (dirty.size) frame = requestAnimationFrame(flush);
+    // Every visited element counts toward the slice, including neutral wrappers.
+    // FILTER_SKIP would hide an arbitrarily large traversal inside nextNode().
+    let visited = 0;
+    while (discoveryWalker && visited++ < 128 && performance.now() - start < 6) {
+      const node = discoveryWalker.nextNode();
+      if (!node) discoveryWalker = null;
+      else if (node.tagName === 'P') queue(node);
+    }
+    if (dirty.size || discoveryWalker) frame = requestAnimationFrame(flush);
+    else if (draining && highlight.size === 0) finishDrain();
   }
   const observer = new MutationObserver(records => {
     let discover = false;
@@ -75,7 +113,7 @@ globalThis.createLiveEmphasisController = function ({ getRoot, parse, active, ty
       relevant = true;
       const block = element?.closest('p');
       if (block && currentRoot?.contains(block)) queue(block);
-      else discover = true;
+      else if (!element?.closest('button')) discover = true;
     }
     if (relevant) synchronize(discover);
   });
@@ -94,9 +132,10 @@ globalThis.createLiveEmphasisController = function ({ getRoot, parse, active, ty
   return {
     invalidate: invalidateAll,
     stats: () => ({ blocks: projectors.size, queued: dirty.size, renderedBlocks,
-      ranges: highlight.size, layerConnected: host.isConnected }),
+      ranges: highlight.size, layerConnected: host.isConnected, draining, discovering: !!discoveryWalker }),
     stop() {
       stopped = true;
+      clearTimeout(drainTimer);
       cancelAnimationFrame(frame);
       observer.disconnect();
       for (const [target, type] of events) target?.removeEventListener(type, invalidateAll, true);
