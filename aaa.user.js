@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.12.0
+// @version      1.12.1
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.12.0';
-  const STYLE_ID = 'aistudio-mobile-safe-1120-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1120';
+  const VERSION = '1.12.1';
+  const STYLE_ID = 'aistudio-mobile-safe-1121-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1121';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -472,6 +472,7 @@
   const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:where(${PROTECTED_CSS_SELECTOR}) *):not(:has(${PROTECTED_CSS_SELECTOR}))`;
 
   const LEGACY_STYLE_IDS = [
+    'aistudio-mobile-safe-1120-style',
     'codex-aistudio-katex-display-fix',
     'tm-aistudio-katex-display-fix',
     'aistudio-mobile-readable-font-css',
@@ -5721,23 +5722,54 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function repairPageRanges(root) {
+    // AI Studio wraps inline text in span/ms-cmark-node elements and inserts
+    // Angular comment anchors. Read only transparent inline wrappers; never
+    // flatten, replace, or clone their native nodes/listeners.
+    const inlineText = (node, budget = { remaining: 160 }, depth = 0) => {
+      if (!node || --budget.remaining < 0 || depth > 16) return null;
+      if (node.nodeType === 8) return '';
+      if (node.nodeType === 3) return node.nodeValue;
+      if (node.nodeType !== 1 ||
+          !/^(SPAN|MS-CMARK-NODE|STRONG|EM|B|I)$/.test(node.tagName) ||
+          node.matches('[contenteditable], [role], [tabindex]') ||
+          closest(node, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR)) return null;
+      let text = '';
+      for (const child of node.childNodes) {
+        const part = inlineText(child, budget, depth + 1);
+        if (part === null) return null;
+        text += part;
+      }
+      return text;
+    };
+    const adjacentText = (strike, direction) => {
+      let text = '';
+      let node = strike[direction];
+      for (let count = 0; node && count < 160; count++, node = node[direction]) {
+        const part = inlineText(node);
+        if (part === null) return null;
+        text = direction === 'previousSibling' ? part + text : text + part;
+        if (part.trim()) return text;
+      }
+      return null;
+    };
     let repaired = 0;
     for (const strike of root.querySelectorAll('s:not(.aistudio-page-range-repaired), del:not(.aistudio-page-range-repaired)')) {
       if (closest(strike, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', code, pre, a')) continue;
-      const before = strike.previousSibling;
-      const after = strike.nextSibling;
-      if (before?.nodeType !== 3 || after?.nodeType !== 3 || strike.children.length) continue;
-      const left = before.nodeValue.match(/\bp\.\s*(\d{1,5})$/i);
-      const middle = strike.textContent.match(/^(\d{1,5})\s*\/\s*PDF\s*(\d{1,5})$/i);
-      const right = after.nodeValue.match(/^(\d{1,5})(?=\s*(?:페이지|쪽|\)))/);
+      const before = adjacentText(strike, 'previousSibling');
+      const after = adjacentText(strike, 'nextSibling');
+      const parts = Array.from(strike.childNodes, child => inlineText(child));
+      if (before === null || after === null || parts.some(part => part === null)) continue;
+      const left = before.match(/\bp\.\s*(\d{1,5})\s*$/i);
+      const middle = parts.join('').match(/^\s*(\d{1,5})\s*\/\s*PDF\s*(\d{1,5})\s*$/i);
+      const right = after.match(/^\s*(\d{1,5})(?=\s*(?:페이지|쪽|\)))/);
       if (!left || !middle || !right) continue;
       const bookSpan = Number(middle[1]) - Number(left[1]);
       const pdfSpan = Number(right[1]) - Number(middle[2]);
       // A narrowly recognized pair of equal-length page ranges, not arbitrary
       // deleted prose/numbers. Single ~ Markdown can strike the text between them.
       if (bookSpan < 0 || bookSpan > 100 || bookSpan !== pdfSpan) continue;
-      before.nodeValue += '~';
-      after.nodeValue = '~' + after.nodeValue;
+      strike.before(document.createTextNode('~'));
+      strike.after(document.createTextNode('~'));
       strike.classList.add('aistudio-page-range-repaired');
       strike.style.setProperty('text-decoration', 'none', 'important');
       repaired++;

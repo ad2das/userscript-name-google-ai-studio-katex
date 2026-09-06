@@ -142,6 +142,26 @@ async (page) => {
     const deliberateBefore = deliberate.innerHTML;
     __contract.repairRoot(deliberate);
     checks.intentionalStrikePreserved = deliberate.innerHTML === deliberateBefore;
+    const wrappedRange = document.createElement('h3');
+    wrappedRange.innerHTML = '<ms-cmark-node><!--anchor--><span id="page-left">교재 p.381</span><!--anchor--><s id="page-strike"><ms-cmark-node><!--anchor--><span id="page-middle">385 / PDF 45</span><!--anchor--></ms-cmark-node></s><!--anchor--><span id="page-right">49페이지)</span><!--anchor--></ms-cmark-node>';
+    response.append(wrappedRange);
+    const rangeNodes = Array.from(wrappedRange.querySelectorAll('*'));
+    let rangeClicks = 0;
+    wrappedRange.querySelector('#page-middle').addEventListener('click', () => rangeClicks++);
+    __contract.repairRoot(wrappedRange);
+    wrappedRange.querySelector('#page-middle').click();
+    checks.nativeWrappedPageRange = wrappedRange.textContent === '교재 p.381~385 / PDF 45~49페이지)' &&
+      getComputedStyle(wrappedRange.querySelector('s')).textDecorationLine === 'none';
+    checks.nativeRangeNodesPreserved = rangeNodes.every(node => node.isConnected) && rangeClicks === 1;
+    const rangeOnce = wrappedRange.innerHTML;
+    __contract.repairRoot(wrappedRange);
+    checks.nativeRangeIdempotent = wrappedRange.innerHTML === rangeOnce;
+    const blockedRange = document.createElement('h3');
+    blockedRange.innerHTML = '<span>교재 p.381</span><!--anchor--><s><a href="#">385 / PDF 45</a></s><span>49페이지)</span>';
+    response.append(blockedRange);
+    const blockedRangeBefore = blockedRange.innerHTML;
+    __contract.repairRoot(blockedRange);
+    checks.nativeRangeLinkPreserved = blockedRange.innerHTML === blockedRangeBefore;
     const updated = document.createElement('p');
     updated.id = 'reuse-emphasis';
     updated.textContent = '**첫 강조**';

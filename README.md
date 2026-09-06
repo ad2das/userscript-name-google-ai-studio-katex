@@ -100,7 +100,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.12.0 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.12.1 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -159,6 +159,16 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.12.1 repairs paired book/PDF page ranges through AI Studio's native nested
+`ms-cmark-node`/`span` wrappers and Angular comment anchors. This structure was
+observed in a live Chrome conversation with 1.12.0 actually enabled; the older
+text-node-only rule missed it. Native elements and listeners are preserved.
+
+Chrome/Tampermonkey installation has two stages: install the userscript, then
+enable Tampermonkey's **Allow User Scripts** permission and reload AI Studio.
+Installation alone does not establish execution. See the
+[official permission instructions](https://www.tampermonkey.net/faq.php?q=Q209).
 
 1.12.0 adds nested emphasis, emphasis across a hard line break, shared code-literal
 protection, native-boundary-preserving edits, queued cleanup after generation,
