@@ -27,6 +27,26 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
     range.setEnd(last.node, end - last.start);
     return range;
   }
+  function geometryAllowed(rect) {
+    if (window.visualViewport && window.visualViewport.scale !== 1) return false;
+    for (let element = block; element; element = element.parentElement) {
+      const style = getComputedStyle(element);
+      if (style.visibility !== 'visible' || Number(style.opacity) !== 1 ||
+          style.transform !== 'none' || style.filter !== 'none' ||
+          style.writingMode !== 'horizontal-tb' || !['normal', '1'].includes(style.zoom)) return false;
+      const bounds = element.getBoundingClientRect();
+      if (/(hidden|clip|scroll|auto)/.test(style.overflowX) &&
+          (rect.left < bounds.left + element.clientLeft ||
+           rect.right > bounds.left + element.clientLeft + element.clientWidth)) return false;
+      if (/(hidden|clip|scroll|auto)/.test(style.overflowY) &&
+          (rect.top < bounds.top + element.clientTop ||
+           rect.bottom > bounds.top + element.clientTop + element.clientHeight)) return false;
+    }
+    // A body-level layer must never float above a dialog covering the source.
+    const y = (rect.top + rect.bottom) / 2;
+    return [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]
+      .every(x => block.contains(document.elementFromPoint(x, y)));
+  }
   function render() {
     frame = 0;
     clear();
@@ -69,6 +89,7 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
       const rect = range.getBoundingClientRect();
       const contentRect = inner.getBoundingClientRect();
       if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth) continue;
+      if (!geometryAllowed(rect)) continue;
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const font = `600 ${base.fontSize} ${base.fontFamily}`;
@@ -108,12 +129,21 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
   }
   const observer = new MutationObserver(invalidate);
   observer.observe(block, { subtree: true, childList: true, characterData: true, attributes: true });
-  const attachmentObserver = new MutationObserver(() => {
-    if (!block.isConnected) clear();
+  const attachmentObserver = new MutationObserver(records => {
+    if (!block.isConnected) { clear(); return; }
+    const owned = node => node.nodeType === 1 && node.matches('.aistudio-live-preview-layer');
+    if (records.some(record => {
+      if (record.target.nodeType === 1 && record.target.closest('.aistudio-live-preview-layer')) return false;
+      if (record.type === 'attributes') return !block.contains(record.target);
+      const nodes = [...record.addedNodes, ...record.removedNodes];
+      return nodes.some(node => !owned(node));
+    })) invalidate();
   });
-  attachmentObserver.observe(document.body, { subtree: true, childList: true });
+  attachmentObserver.observe(document.body, { subtree: true, childList: true,
+    attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
   const events = [[document, 'scroll'], [window, 'resize'], [document, 'selectionchange'],
-    [document, 'visibilitychange'], [document.fonts, 'loadingdone']];
+    [document, 'visibilitychange'], [document.fonts, 'loadingdone'],
+    [window.visualViewport, 'scroll'], [window.visualViewport, 'resize']];
   for (const [target, type] of events) target?.addEventListener(type, invalidate, true);
   invalidate();
   return {

@@ -81,6 +81,33 @@ async (page) => {
   });
   await page.waitForTimeout(50);
   checks.rewriteRepaints = await page.evaluate(() => __preview.stats().visible);
+  await page.evaluate(() => {
+    const cover = document.createElement('div');
+    cover.id = 'cover';
+    cover.style.cssText = 'position:fixed;inset:0;background:black;z-index:100;';
+    document.body.append(cover);
+  });
+  await page.waitForTimeout(50);
+  checks.occludedSourceRevealed = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-prototype'));
+  await page.evaluate(() => document.getElementById('cover').remove());
+  await page.waitForTimeout(50);
+  checks.uncoveredRepaints = await page.evaluate(() => __preview.stats().visible);
+  await page.evaluate(() => {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'clipper';
+    wrapper.style.cssText = 'height:10px;overflow:hidden;';
+    const block = document.getElementById('live');
+    block.before(wrapper);
+    wrapper.append(block);
+  });
+  await page.waitForTimeout(50);
+  checks.clippedSourceFallback = await page.evaluate(() => !__preview.stats().visible);
+  await page.evaluate(() => { document.getElementById('clipper').style.height = '120px'; });
+  await page.waitForTimeout(50);
+  checks.unclippedRepaints = await page.evaluate(() => __preview.stats().visible);
+  await page.evaluate(() => { document.getElementById('clipper').style.transform = 'scale(1.2)'; });
+  await page.waitForTimeout(50);
+  checks.transformedSourceFallback = await page.evaluate(() => !__preview.stats().visible);
   await page.evaluate(() => { document.getElementById('live').remove(); });
   await page.waitForTimeout(25);
   checks.disconnectedSourceClears = await page.evaluate(() => !__preview.stats().visible && !CSS.highlights.has('aistudio-live-prototype'));
