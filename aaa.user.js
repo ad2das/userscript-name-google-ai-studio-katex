@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.5
+// @version      1.13.6
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.5';
-  const STYLE_ID = 'aistudio-mobile-safe-1135-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1135';
+  const VERSION = '1.13.6';
+  const STYLE_ID = 'aistudio-mobile-safe-1136-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1136';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -4702,7 +4702,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     return Boolean(
       hasRepairableText(rootText) ||
-      (/p\.\s*\d{2,10}\s*\/\s*PDF\s*\d{2,10}/i.test(rootText) && root?.querySelector('s, del')) ||
+      (/p\.\s*\d{2,10}(?:\s*\/\s*PDF\s*(?:p\.\s*)?\d{2,10}|:[^\n]{1,240}(?:\bp\.|\bLevel)\s*\d{1,10})/i.test(rootText) && root?.querySelector('s, del')) ||
       hasUnrepairedAsciiBoxTree(root, rootText) ||
       hasUnwrappedMobileTable(root)
     );
@@ -5864,14 +5864,22 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const parts = Array.from(strike.childNodes, child => inlineText(child));
       if (before === null || after === null || parts.some(part => part === null)) continue;
       const left = before.match(/\bp\.\s*(\d{1,5})\s*$/i);
-      const middle = parts.join('').match(/^\s*(\d{1,5})\s*\/\s*PDF\s*(\d{1,5})\s*$/i);
-      const right = after.match(/^\s*(\d{1,5})(?=\s*(?:페이지|쪽|\)))/);
+      const middleText = parts.join('');
+      const pdf = middleText.match(/^\s*(\d{1,5})\s*\/\s*PDF\s*(?:p\.\s*)?(\d{1,5})\s*$/i);
+      // Verified outline form: p.A~B: description + p.C~D (or Level C~D).
+      // Require an explicit range label, bounded descriptive text and endpoints.
+      const outline = !pdf && middleText.match(/^\s*(\d{1,5}):[^\n]{1,240}?(\bp\.|\bLevel)\s*(\d{1,5})\s*$/i);
+      const middle = pdf || (outline && [outline[0], outline[1], outline[3]]);
+      const right = after.match(/^\s*(\d{1,5})(?=\s*(?:페이지|쪽|\)|:))/);
       if (!left || !middle || !right) continue;
       const bookSpan = Number(middle[1]) - Number(left[1]);
       const pdfSpan = Number(right[1]) - Number(middle[2]);
-      // A narrowly recognized pair of equal-length page ranges, not arbitrary
-      // deleted prose/numbers. Single ~ Markdown can strike the text between them.
-      if (bookSpan < 0 || bookSpan > 100 || bookSpan !== pdfSpan) continue;
+      // Parallel book/PDF ranges must have equal lengths. Separate outlined
+      // ranges need not, but must still be ordered and bounded.
+      if (bookSpan < 0 || bookSpan > 100 || pdfSpan < 0 || pdfSpan > 100 ||
+          (pdf && bookSpan !== pdfSpan) ||
+          (outline && /Level/i.test(outline[2]) &&
+            (Number(middle[2]) < 1 || Number(right[1]) > 3))) continue;
       strike.before(document.createTextNode('~'));
       strike.after(document.createTextNode('~'));
       strike.classList.add('aistudio-page-range-repaired');

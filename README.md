@@ -104,7 +104,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.5 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.6 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -168,6 +168,12 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.13.6 restores range tildes mistakenly parsed as strike-through in `PDF p.`
+references and bounded page/Level outline ranges. Native wrapper nodes stay
+intact; descending, ambiguous, protected, and unequal parallel PDF ranges remain
+untouched. The added forms were checked against the current conversation's
+original Markdown without editing its content.
 
 1.13.5 aligns Korean dotted-leader statements using separate label, leader,
 amount and note columns. It requires at least three recognized amount rows,

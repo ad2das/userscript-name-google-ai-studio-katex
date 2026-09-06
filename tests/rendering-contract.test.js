@@ -176,6 +176,31 @@ async (page) => {
     const rangeOnce = wrappedRange.innerHTML;
     __contract.repairRoot(wrappedRange);
     checks.nativeRangeIdempotent = wrappedRange.innerHTML === rangeOnce;
+    const pdfPrefixRange = document.createElement('p');
+    pdfPrefixRange.innerHTML = '<span>교재 p.372</span><s><span>375 / PDF p.36</span></s><span>39)</span>';
+    response.append(pdfPrefixRange);
+    const pdfPrefixNodes = Array.from(pdfPrefixRange.querySelectorAll('*'));
+    __contract.repairRoot(pdfPrefixRange);
+    checks.pdfPagePrefixRange = pdfPrefixRange.textContent === '교재 p.372~375 / PDF p.36~39)' &&
+      getComputedStyle(pdfPrefixRange.querySelector('s')).textDecorationLine === 'none' &&
+      pdfPrefixNodes.every(node => node.isConnected);
+    for (const [key, markup, expected] of [
+      ['separatePageRanges', '문제 (p.390<s>395: OX 풀이 + p.396</s>402: 객관식 1~10번)', '문제 (p.390~395: OX 풀이 + p.396~402: 객관식 1~10번)'],
+      ['pageAndLevelRange', '측정 (p.386<s>389: 개념, 서열체계 Level 1</s>3)', '측정 (p.386~389: 개념, 서열체계 Level 1~3)']
+    ]) {
+      const outline = document.createElement('p');
+      outline.innerHTML = markup;
+      response.append(outline);
+      const native = outline.querySelector('s');
+      __contract.repairRoot(outline);
+      checks[key] = outline.textContent === expected && native.isConnected && getComputedStyle(native).textDecorationLine === 'none';
+    }
+    const rejectedOutlines = document.createElement('div');
+    rejectedOutlines.innerHTML = '<p>p.390<s>389: 설명 + p.396</s>402)</p><p>p.386<s>389: Level 1</s>9)</p><p>p.386<s>389: 삭제한 문장</s>3)</p>';
+    response.append(rejectedOutlines);
+    const rejectedBefore = rejectedOutlines.innerHTML;
+    __contract.repairRoot(rejectedOutlines);
+    checks.invalidOutlineRangesPreserved = rejectedOutlines.innerHTML === rejectedBefore;
     const blockedRange = document.createElement('h3');
     blockedRange.innerHTML = '<span>교재 p.381</span><!--anchor--><s><a href="#">385 / PDF 45</a></s><span>49페이지)</span>';
     response.append(blockedRange);
