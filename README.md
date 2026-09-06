@@ -104,7 +104,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.9 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.10 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -168,6 +168,11 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.13.10 keeps the live-to-native transition available while late response text
+is still arriving after the backend reports completion. It ends after two quiet
+seconds, never exceeds ten seconds, and exits immediately during prompt input.
+The bridge no longer disappears merely because one frame has no emphasis.
 
 1.13.9 previews short pending quoted-bold spans while their closing markers
 are still arriving. Only the separate live visual layer changes; the native

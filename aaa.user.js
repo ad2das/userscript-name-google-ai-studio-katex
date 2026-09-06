@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.9
+// @version      1.13.10
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.9';
-  const STYLE_ID = 'aistudio-mobile-safe-1139-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1139';
+  const VERSION = '1.13.10';
+  const STYLE_ID = 'aistudio-mobile-safe-11310-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-11310';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -7328,8 +7328,15 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let wasActive = false;
     let draining = false;
     let drainTimer = null;
+    let drainDeadline = 0;
+    function extendDrain() {
+      if (!draining) return;
+      clearTimeout(drainTimer);
+      drainTimer = setTimeout(finishDrain, Math.max(0, Math.min(2000, drainDeadline - Date.now())));
+    }
     function finishDrain() {
       draining = false;
+      drainDeadline = 0;
       clearTimeout(drainTimer);
       drainTimer = null;
       clear();
@@ -7340,10 +7347,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         draining = false;
         clearTimeout(drainTimer);
         drainTimer = null;
-      } else if (wasActive && projectors.size) {
+      } else if (wasActive) {
         draining = true;
-        // A bounded bridge, not permanent replacement of completed native output.
-        drainTimer = setTimeout(finishDrain, 5000);
+        // Backend completion can precede native text rendering. Keep a quiet
+        // window for late paragraphs, with a hard bound and immediate typing exit.
+        drainDeadline = Date.now() + 10000;
+        extendDrain();
       }
       wasActive = running;
       return running || draining;
@@ -7410,7 +7419,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         else if (node.tagName === 'P') queue(node);
       }
       if (dirty.size || discoveryWalker) frame = requestAnimationFrame(flush);
-      else if (draining && highlight.size === 0) finishDrain();
     }
     const observer = new MutationObserver(records => {
       // Prompt activity must gate the whole batch, not just the later scan.
@@ -7418,16 +7426,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (typing() || document.hidden) { finishDrain(); return; }
       let discover = false;
       let relevant = false;
+      let responseChanged = false;
       for (const record of records) {
         const element = record.target.nodeType === 1 ? record.target : record.target.parentElement;
         if (element?.closest('.aistudio-live-preview-layer')) continue;
         const nodes = [...record.addedNodes, ...record.removedNodes];
         if (nodes.length && nodes.every(n => n === host)) continue;
+        if (record.type !== 'attributes' && currentRoot?.contains(element)) responseChanged = true;
         relevant = true;
         const block = element?.closest('p');
         if (block && currentRoot?.contains(block)) queue(block);
         else if (!element?.closest('button')) discover = true;
       }
+      if (responseChanged) extendDrain();
       if (relevant) synchronize(discover);
     });
     observer.observe(document.body, { subtree: true, childList: true, characterData: true,

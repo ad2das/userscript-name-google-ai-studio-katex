@@ -56,6 +56,30 @@ async (page) => {
     !document.getElementById('model').textContent.includes('**'));
   await page.evaluate(() => {
     document.querySelector('button').textContent = 'Stop';
+    document.getElementById('model').innerHTML = '<p>일반 본문만 먼저 도착했습니다.</p>';
+  });
+  await page.waitForFunction(() => __controller.stats().layerConnected);
+  await page.evaluate(() => { document.querySelector('button').textContent = 'Run'; });
+  await page.waitForTimeout(350);
+  await page.evaluate(() => {
+    const p = document.createElement('p');
+    p.id = 'late-render';
+    p.textContent = "뒤늦게 **'도착한 강조";
+    document.getElementById('model').append(p);
+  });
+  await page.waitForTimeout(100);
+  checks.postRunPendingTextPaints = await page.evaluate(() =>
+    __controller.stats().ranges === 1 && document.getElementById('late-render').textContent === "뒤늦게 **'도착한 강조");
+  await page.evaluate(() => { document.getElementById('late-render').firstChild.nodeValue += "'** 끝"; });
+  await page.waitForTimeout(100);
+  checks.postRunSourceRetained = await page.evaluate(() =>
+    __controller.stats().ranges === 1 && document.getElementById('late-render').textContent === "뒤늦게 **'도착한 강조'** 끝");
+  await page.evaluate(() => { __typing = true; __controller.invalidate(); });
+  checks.typingEndsPostRunBridge = await page.evaluate(() => !__controller.stats().layerConnected && __controller.stats().ranges === 0);
+  await page.evaluate(() => { __typing = false; });
+  await page.waitForFunction(() => !__controller.stats().layerConnected);
+  await page.evaluate(() => {
+    document.querySelector('button').textContent = 'Stop';
     document.getElementById('model').innerHTML = '<p>**다음 생성** 끝</p>';
   });
   await page.waitForFunction(() => __controller.stats().ranges === 1);
