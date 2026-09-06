@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.11.0
+// @version      1.11.1
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.11.0';
-  const STYLE_ID = 'aistudio-mobile-safe-1110-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-1110';
+  const VERSION = '1.11.1';
+  const STYLE_ID = 'aistudio-mobile-safe-1111-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1111';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -259,7 +259,7 @@
     '.ProseMirror'
   ].join(',');
 
-  const SKIP_SELECTOR = [
+  const SKIP_SELECTORS = [
     PROMPT_EDITOR_SELECTOR,
     'select',
     'button',
@@ -289,7 +289,12 @@
     '.aistudio-array-repaired',
     '.aistudio-aligned-repaired',
     '.aistudio-raw-math-repaired'
-  ].join(',');
+  ];
+  const SKIP_SELECTOR = SKIP_SELECTORS.join(',');
+  // Native emphasis is formatting, not a protected editor/code boundary.
+  // Repaired wrappers remain opaque to keep repeated scans idempotent.
+  const INLINE_TEXT_SKIP_SELECTOR = SKIP_SELECTORS
+    .filter((selector) => selector !== 'strong' && selector !== 'b').join(',');
 
   const FALLBACK_EXCLUDE_SELECTOR = [
     'nav',
@@ -370,7 +375,7 @@
   ].join(',');
   const RAW_MATH_RANGE_BARRIER_TEXT = '\n{aistudio-dom-barrier\n';
 
-  const INLINE_REPAIR_BOUNDARY_SELECTOR = [
+  const INLINE_REPAIR_BOUNDARY_SELECTORS = [
     'br',
     'hr',
     'a',
@@ -422,7 +427,10 @@
     'td',
     'ul',
     'ol'
-  ].join(',');
+  ];
+  const INLINE_REPAIR_BOUNDARY_SELECTOR = INLINE_REPAIR_BOUNDARY_SELECTORS.join(',');
+  const INLINE_EMPHASIS_BOUNDARY_SELECTOR = INLINE_REPAIR_BOUNDARY_SELECTORS
+    .filter((selector) => selector !== 'strong' && selector !== 'b').join(',');
 
   const INLINE_EMBEDDED_MATH_SELECTOR = [
     '.katex',
@@ -500,7 +508,8 @@
     'aistudio-mobile-safe-1108-style',
     'aistudio-mobile-safe-1109-style',
     'aistudio-mobile-safe-11010-style',
-    'aistudio-mobile-safe-11011-style'
+    'aistudio-mobile-safe-11011-style',
+    'aistudio-mobile-safe-1110-style'
   ];
 
   const CSS_TEXT = `
@@ -5147,7 +5156,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function fragmentCrossesUnsafeInlineBoundary(fragment) {
     return Array.from(
-      fragment.querySelectorAll(INLINE_REPAIR_BOUNDARY_SELECTOR)
+      fragment.querySelectorAll(INLINE_EMPHASIS_BOUNDARY_SELECTOR)
     ).some((element) => !insideEmbeddedMath(element));
   }
 
@@ -5220,16 +5229,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function collectInlineText(container) {
     const records = [];
     let text = '';
-    const allowedSkipRoot = (
-      container.matches &&
-      container.matches(
-        'strong:not(.aistudio-md-repaired), ' +
-        'b:not(.aistudio-md-repaired)'
-      )
-    ) ? container : null;
-
-    const skipRoot = closest(container, SKIP_SELECTOR);
-    if (closest(container, USER_SELECTOR) || (skipRoot && skipRoot !== allowedSkipRoot)) {
+    if (closest(container, USER_SELECTOR) || closest(container, INLINE_TEXT_SKIP_SELECTOR)) {
       return { records, text };
     }
     const barrier = () => { if (!text.endsWith('\n\n')) text += '\n\n'; };
@@ -5251,10 +5251,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           const start = text.length;
           text += INLINE_MATH_ATOM;
           records.push({ node, start, end: text.length });
-        } else if (node.matches(SKIP_SELECTOR + ',' + USER_SELECTOR)) {
+        } else if (node.matches(INLINE_TEXT_SKIP_SELECTOR + ',' + USER_SELECTOR)) {
           barrier();
         } else {
-          if (node.matches(INLINE_REPAIR_BOUNDARY_SELECTOR)) barrier();
+          if (node.matches(INLINE_EMPHASIS_BOUNDARY_SELECTOR)) barrier();
           descend = true;
         }
       }
@@ -5265,7 +5265,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       while (node && node !== container && !node.nextSibling) {
         node = node.parentNode;
         if (node && node !== container && node.nodeType === 1 &&
-            node.matches(INLINE_REPAIR_BOUNDARY_SELECTOR)) barrier();
+            node.matches(INLINE_EMPHASIS_BOUNDARY_SELECTOR)) barrier();
       }
       node = node && node !== container ? node.nextSibling : null;
     }

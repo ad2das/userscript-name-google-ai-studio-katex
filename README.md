@@ -100,7 +100,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.11.0 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.11.1 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -154,4 +154,10 @@ Reports and screenshots are written under `output/playwright/`.
 
 Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one native
 Run click. They do not validate a signed-in AI Studio session or prove that a real
-Google permission error is fixed. See [the 1.11.0 audit](AUDIT.md) for evidence and limits.
+Google permission error is fixed. See [the audit and follow-up](AUDIT.md) for evidence and limits.
+
+1.11.1 also repairs leaked emphasis around existing native bold elements, such as
+`**<strong>'체계적인 방법'</strong>**`, without treating the bold element as a code/editor
+boundary. The screenshot follow-up suite covers 13 markup variants, native node
+identity, protected content, and repeat-run idempotence. A screenshot alone cannot
+prove which underlying DOM variant the live page uses.

@@ -1,5 +1,20 @@
 # 1.11.0 strict audit
 
+## 1.11.1 screenshot follow-up
+
+The user reported literal `**` around the quoted phrase `체계적인 방법` after the
+1.11.0 release. Local Firefox reproduced the symptom in three native-emphasis
+layouts: markers surrounding a `strong`, markers surrounding partially bold text,
+and nested `strong`/`b` text. Plain text and text fully inside one native `strong`
+already worked. The screenshot does not reveal the live DOM or installed version,
+so these reproductions are not proof of the exact cause on the user's device.
+
+The fix makes native `strong`/`b` transparent to inline-emphasis projection and
+range validation, while retaining code, links, editors, user content, block
+boundaries, and already-repaired wrappers as barriers. The new photo regression
+suite exercises 13 layouts plus native-node identity and repeat-run idempotence.
+No scheduler, generation detection, network behavior, or dependency changes.
+
 Reviewed 2026-09-06. This is a tested hardening release, not a claim of perfection.
 
 ## Corrections
