@@ -69,11 +69,27 @@ async (page) => {
   checks.editorFallback = await page.evaluate(() => !__preview.stats().visible);
   await page.evaluate(() => {
     const block = document.getElementById('live');
-    block.textContent = '**한 줄에 들어갈 수 없는 길고 긴 강조 문장입니다** 다음';
-    block.style.width = '70px';
+    block.textContent = '**가나다라마바사아자차카타파하가나다라마바사** 다음';
+    block.style.width = '90px';
   });
   await page.waitForTimeout(50);
-  checks.multilineFallback = await page.evaluate(() => !__preview.stats().visible);
+  checks.multilineKoreanPaints = await page.evaluate(() => __preview.stats().visible &&
+    document.querySelectorAll('.aistudio-live-preview-layer canvas').length >= 3 &&
+    document.getElementById('live').textContent === '**가나다라마바사아자차카타파하가나다라마바사** 다음');
+  await page.screenshot({ path: 'output/playwright/live-preview-multiline.png' });
+  await page.evaluate(() => {
+    const block = document.getElementById('live');
+    block.style.width = '';
+    block.innerHTML = '<ms-cmark-node><strong>기존 강조</strong><span> 본문 **새 </span><!--anchor--><span>강조** 뒤</span></ms-cmark-node>';
+    block.firstElementChild.style.cssText = 'display:contents;font-family:monospace';
+    globalThis.__nativePrefix = block.querySelector('strong');
+    globalThis.__nativeAnchor = block.firstElementChild.childNodes[2];
+  });
+  await page.waitForTimeout(50);
+  checks.nativeRendererAndSeparatePrefix = await page.evaluate(() => __preview.stats().visible &&
+    document.querySelector('#live strong') === __nativePrefix && __nativePrefix.textContent === '기존 강조' &&
+    document.querySelector('#live ms-cmark-node').childNodes[2] === __nativeAnchor &&
+    document.querySelectorAll('.aistudio-live-preview-layer canvas').length === 1);
   await page.evaluate(() => {
     const block = document.getElementById('live');
     block.style.width = '';

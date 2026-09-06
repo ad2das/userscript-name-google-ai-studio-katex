@@ -1,5 +1,5 @@
 // Experimental, fixture-only. Not loaded by the userscript or published UI.
-// Deliberately declines multiline, heterogeneous, protected, and oversized text.
+// Deliberately declines heterogeneous, protected, and oversized text.
 globalThis.createLiveEmphasisPrototype = function (block, parse) {
   const key = 'aistudio-live-prototype';
   let layer = null;
@@ -47,11 +47,34 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
     return [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]
       .every(x => block.contains(document.elementFromPoint(x, y)));
   }
+  function lineRuns(records, match) {
+    const lines = [];
+    let offset = match.start;
+    for (const char of match.raw) {
+      const glyph = rangeAt(records, offset, offset + char.length);
+      if (!glyph) return [];
+      const rect = glyph.getBoundingClientRect();
+      let line = lines[lines.length - 1];
+      if (!line || Math.abs(line.top - rect.top) > 1) {
+        line = { top: rect.top, bottom: rect.bottom, left: rect.left,
+          right: rect.right, text: '', contentLeft: null };
+        lines.push(line);
+      }
+      if (Math.abs(line.bottom - rect.bottom) > 1) return [];
+      line.right = Math.max(line.right, rect.right);
+      if (offset >= match.start + 2 && offset < match.end - 2 && rect.width > 0) {
+        if (line.contentLeft === null) line.contentLeft = rect.left;
+        line.text += char;
+      }
+      offset += char.length;
+    }
+    return lines;
+  }
   function render() {
     frame = 0;
     clear();
     if (stopped || !supported || !block.isConnected || document.hidden ||
-        !getSelection().isCollapsed || block.querySelector(':not(span)') ||
+        !getSelection().isCollapsed || block.querySelector(':not(span, ms-cmark-node, strong, b)') ||
         block.closest('[contenteditable], [role="textbox"], [data-turn-role="user"], pre, code') ||
         block.querySelector('[contenteditable], [role], [tabindex], [hidden], .inline-code, [aria-hidden="true"]')) return;
     const text = block.textContent;
@@ -65,13 +88,8 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
       records.push({ node, start: offset, end: offset + node.length });
       offset += node.length;
     }
-    const base = getComputedStyle(block);
     const signature = s => [s.fontFamily, s.fontSize, s.fontWeight, s.fontStyle,
       s.color, s.letterSpacing, s.wordSpacing, s.textTransform, s.direction].join('|');
-    if (base.direction !== 'ltr' || base.textTransform !== 'none' ||
-        !['normal', '0px'].includes(base.letterSpacing) ||
-        !['normal', '0px'].includes(base.wordSpacing) ||
-        records.some(r => signature(getComputedStyle(r.node.parentElement)) !== signature(base))) return;
     const mask = [];
     const candidate = document.createElement('div');
     candidate.className = 'aistudio-live-preview-layer';
@@ -80,38 +98,54 @@ globalThis.createLiveEmphasisPrototype = function (block, parse) {
     for (const match of parse(text).slice(0, 12)) {
       if (match.marker !== '**' || match.children.length || match.openingTrim ||
           match.end === text.length || /[*_]/.test(match.inner)) continue;
+      const matchedRecords = records.filter(r => r.start < match.end && r.end > match.start);
+      const base = getComputedStyle(matchedRecords[0].node.parentElement);
+      // AI Studio's paragraph font can differ from its inline renderer font.
+      // Existing native emphasis outside this interval is not a reason to skip.
+      if (base.direction !== 'ltr' || base.textTransform !== 'none' ||
+          Number(base.fontWeight) >= 600 || base.fontStyle !== 'normal' ||
+          !['normal', '0px'].includes(base.letterSpacing) ||
+          !['normal', '0px'].includes(base.wordSpacing) ||
+          matchedRecords.some(r => signature(getComputedStyle(r.node.parentElement)) !== signature(base))) continue;
       const range = rangeAt(records, match.start, match.end);
       const inner = rangeAt(records, match.start + 2, match.end - 2);
       if (!range || !inner || range.toString() !== match.raw) continue;
-      const rects = Array.from(range.getClientRects()).filter(r => r.width > 0);
-      if (!rects.length || rects.some(r => Math.abs(r.top - rects[0].top) > 1 ||
-          Math.abs(r.bottom - rects[0].bottom) > 1)) continue;
-      const rect = range.getBoundingClientRect();
-      const contentRect = inner.getBoundingClientRect();
-      if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth) continue;
-      if (!geometryAllowed(rect)) continue;
+      // Complex shaping needs a richer source map; never split its clusters.
+      if (/[\p{Mark}\u200c-\u200f\u202a-\u202e\u2066-\u2069]/u.test(match.inner)) continue;
+      const lines = lineRuns(records, match);
+      if (!lines.length || lines.length > 20) continue;
+      const canvases = [];
+      let valid = true;
+      for (const line of lines) {
+      const rect = { ...line, height: line.bottom - line.top };
+      if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth ||
+          !geometryAllowed(rect)) { valid = false; break; }
+      if (!line.text.trim()) continue;
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const font = `600 ${base.fontSize} ${base.fontFamily}`;
       ctx.font = font;
-      const metrics = ctx.measureText(match.inner);
+      const metrics = ctx.measureText(line.text);
       const ascent = metrics.fontBoundingBoxAscent;
       const descent = metrics.fontBoundingBoxDescent;
       // Do not squeeze true bold or cover the adjacent native suffix.
       if (!Number.isFinite(ascent) || !Number.isFinite(descent) ||
-          metrics.width > rect.right - contentRect.left ||
-          ascent + descent > rect.height + 2) continue;
+          metrics.width > rect.right - line.contentLeft + 0.1 ||
+          ascent + descent > rect.height + 2) { valid = false; break; }
       const width = Math.ceil(metrics.width + 2);
       const height = Math.ceil(rect.height + 2);
       const scale = devicePixelRatio;
       canvas.width = Math.ceil(width * scale);
       canvas.height = Math.ceil(height * scale);
-      canvas.style.cssText = `position:absolute;left:${contentRect.left}px;top:${rect.top}px;width:${width}px;height:${height}px;`;
+      canvas.style.cssText = `position:absolute;left:${line.contentLeft}px;top:${rect.top}px;width:${width}px;height:${height}px;`;
       ctx.scale(scale, scale);
       ctx.font = font;
       ctx.fillStyle = base.color;
-      ctx.fillText(match.inner, 0, (rect.height - ascent - descent) / 2 + ascent);
-      candidate.append(canvas);
+      ctx.fillText(line.text, 0, (rect.height - ascent - descent) / 2 + ascent);
+      canvases.push(canvas);
+      }
+      if (!valid || !canvases.length) continue;
+      candidate.append(...canvases);
       mask.push(range);
     }
     if (!mask.length) return;

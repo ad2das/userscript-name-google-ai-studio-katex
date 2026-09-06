@@ -11,14 +11,17 @@ repair while the fixture's Stop control remains active.
 
 Current gates cover split spans, unchanged source/node identity, timer-driven
 streaming, ambiguous closing runs at the streaming tail, rewrite invalidation,
-selection fallback, editing surfaces, multiline fallback, source disconnection,
+selection fallback, editing surfaces, multiline Korean painting, native renderer
+wrappers with separately emphasized prefixes, source disconnection,
 covering overlays, ancestor clipping/transforms, and teardown. The 20-sample timing check is a fixture acceptance gate, not a claim
 about real AI Studio performance. Results have a `-live-preview` filename suffix.
 
 Not yet a production implementation:
 
-- Only one short, homogeneous, visible prose block is supported. A line-crossing
-  range is rejected. Math, code, nested formatting, controls, and complex content
+- Only one short, visible prose block is supported. Each emphasis interval must
+  have homogeneous inline typography; unrelated native bold prefixes can remain.
+  Wrapped lines are painted only if true bold fits every native line's glyph space.
+  Math, code, nested formatting within an interval, controls, and complex shaping
   are rejected. These fallbacks still display the original Markdown.
 - Delimiter layout space remains. This cannot reproduce canonical Markdown
   reflow, even when the visible glyphs fit. Selection temporarily reveals source.
