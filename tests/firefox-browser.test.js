@@ -714,6 +714,9 @@ async (page) => {
       stretchyDisplayWidth: stretchyDisplay.clientWidth,
       stretchyContentWidth: stretchyHtml.scrollWidth,
       stretchyScrollWidth: stretchyKatex.scrollWidth,
+      stretchyOverflowContained: !!stretchyDisplay.closest('.aistudio-math-scroll') &&
+        getComputedStyle(stretchyDisplay.parentElement).overflowX === 'auto' &&
+        stretchyDisplay.parentElement.clientWidth <= stretchyDisplay.clientWidth + 2,
       stretchyNaturalWidth: Number(
         stretchyKatex.getAttribute('data-aistudio-math-natural-width') || 0
       ),
@@ -925,6 +928,8 @@ async (page) => {
       asciiJournalRowsOverlap: journalRowOverlap(asciiJournal),
       asciiJournalCompact:
         asciiJournal.scrollWidth <= asciiJournal.clientWidth,
+      asciiJournalOverflowContained: getComputedStyle(asciiJournal).overflowX === 'auto' &&
+        asciiJournal.getBoundingClientRect().right <= window.innerWidth + 1,
       asciiJournalSingleRepaired:
         asciiJournalSingle.querySelector(
           '.aistudio-ascii-delimited-grid[aria-hidden="true"]'
@@ -1078,11 +1083,9 @@ async (page) => {
         !currentModelResponse.textContent.includes('**') &&
         !currentModelResponse.textContent.includes('<u>') &&
         !currentModelResponse.textContent.includes('</u>'),
-      rolelessModelRepaired:
-        rolelessModelResponse.querySelector(
-          'strong.aistudio-md-repaired'
-        )?.textContent === '모델 출력은 복구' &&
-        !rolelessModelResponse.textContent.includes('**'),
+      rolelessModelPreserved:
+        !rolelessModelResponse.querySelector('strong.aistudio-md-repaired') &&
+        rolelessModelResponse.textContent.includes('**모델 출력은 복구**'),
       lowercaseUserPreserved:
         document.getElementById('lowercase-user-bold').textContent ===
           '사용자가 쓴 **원문 굵게 표기**는 유지합니다.' &&
@@ -1227,7 +1230,7 @@ async (page) => {
       unexpectedBarrierMathSources:
         window.__unexpectedBarrierMathSources.slice(),
       version: document.documentElement.getAttribute(
-        'data-aistudio-mobile-safe-11011'
+        'data-aistudio-mobile-safe-1110'
       )
     };
   });
@@ -1236,9 +1239,9 @@ async (page) => {
     rendering.breakCount !== 2 ||
     rendering.boldCount !== 1 ||
     rendering.boldText !== 'bold' ||
-    rendering.splitBoldCount !== 2 ||
+    rendering.splitBoldCount !== 1 ||
     rendering.splitBoldText !== 'split bold' ||
-    rendering.multipleBoldCount !== 3 ||
+    rendering.multipleBoldCount !== 2 ||
     rendering.multipleBoldText !== 'first and second' ||
     rendering.splitBoldItalicCount !== 1 ||
     rendering.splitBoldItalicText !== 'very important' ||
@@ -1336,7 +1339,8 @@ async (page) => {
     rendering.stretchyNaturalWidth <= rendering.stretchyDisplayWidth ||
     rendering.stretchyFitScale >= 1 ||
     rendering.stretchyFitScale < 0.58 ||
-    rendering.stretchyScrollWidth > rendering.stretchyDisplayWidth + 2 ||
+    (rendering.stretchyScrollWidth > rendering.stretchyDisplayWidth + 2 &&
+      !rendering.stretchyOverflowContained) ||
     rendering.boldWithMathText !==
       '공사기간과 겹치는 기간(4/1~12/31 = 9개월)만 직접 골라내어(×9/12)' ||
     rendering.boldWithMathWeight < 600 ||
@@ -1421,7 +1425,7 @@ async (page) => {
     Math.max(...rendering.asciiJournalDividerXs) -
       Math.min(...rendering.asciiJournalDividerXs) > 0.5 ||
     rendering.asciiJournalRowsOverlap ||
-    !rendering.asciiJournalCompact ||
+    (!rendering.asciiJournalCompact && !rendering.asciiJournalOverflowContained) ||
     !rendering.asciiJournalSingleRepaired ||
     !rendering.asciiJournalSingleOriginalPreserved ||
     rendering.asciiJournalSingleDividerCount !== 1 ||
@@ -1479,7 +1483,7 @@ async (page) => {
     rendering.currentModelUnderlineText !== '통상 신뢰성 있게 측정' ||
     !rendering.currentModelUnderlineDecoration.includes('underline') ||
     !rendering.currentModelMarkersRemoved ||
-    !rendering.rolelessModelRepaired ||
+    !rendering.rolelessModelPreserved ||
     !rendering.lowercaseUserPreserved ||
     JSON.stringify(rendering.selectorlessStrongTexts) !== JSON.stringify([
       '개발단계',
@@ -1542,7 +1546,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.10.11'
+    rendering.version !== '1.11.0'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }
@@ -1576,6 +1580,7 @@ async (page) => {
     fallbackSurface.appendChild(completedTurn);
 
     modelTurn.id = 'dynamic-roleless-model-turn';
+    modelTurn.setAttribute('data-turn-role', 'model');
     modelTurn.className = 'unknown-dynamic-response-shell';
     modelRenderer.id = 'dynamic-roleless-model-response';
     modelParagraph.textContent =

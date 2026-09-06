@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.10.11
+// @version      1.11.0
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.10.11';
-  const STYLE_ID = 'aistudio-mobile-safe-11011-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-11011';
+  const VERSION = '1.11.0';
+  const STYLE_ID = 'aistudio-mobile-safe-1110-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-1110';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -33,8 +33,8 @@
    * 그래서 이 버전은 "완료된 모델 출력"의 raw Markdown만 아주 보수적으로 고친다.
    *
    * 안전을 위해 하지 않는 것:
-   * - 생성 중 최신 답변 수정
-   * - KaTeX / MathJax 내부 수정
+   * - 생성이 감지된 동안 답변 측정/수정
+   * - 임의의 KaTeX / MathJax 재작성 (알려진 중첩 bold 결함만 예외)
    * - 실제 code / pre / link / input의 원문 수정
    * - 링크, 코드, 블록 경계를 가로질러 **bold**를 합치기
    * - 단, 강조 안에 이미 렌더된 인라인 수식만 끼어 있는 경우는 수식을
@@ -59,6 +59,11 @@
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
+  const MAX_INLINE_REPAIR_NODES = 4000;
+  const MAX_FALLBACK_NODES_PER_SLICE = 400;
+  const SCAN_BUDGET_MS = 6;
+  // Math is an opaque DOM atom in the Markdown projection, never empty text.
+  const INLINE_MATH_ATOM = '\uFFFC';
   const MAX_RAW_MATH_LENGTH = 12000;
   const MAX_FALLBACK_ROOT_LENGTH = 16000;
   const MAX_FALLBACK_ASCENT = 12;
@@ -169,19 +174,8 @@
   const FALLBACK_SURFACE_SELECTOR = FALLBACK_SURFACE_SELECTORS.join(',');
   const REPAIRED_ROOT_SELECTOR = '[data-aistudio-repair-root="1"]';
 
-  /*
-   * Response renderer elements are the stable fallback when the surrounding
-   * turn has not received a role/class yet. Restrict this fallback to chat
-   * turns; user turns are excluded separately by USER_SELECTOR.
-   */
-  const MODEL_RENDERER_SELECTOR = [
-    'ms-chat-turn ms-cmark-node',
-    'ms-chat-turn ms-text-chunk'
-  ].join(',');
-
   const STYLE_ROOT_SELECTOR = [
     REPAIRED_ROOT_SELECTOR,
-    MODEL_RENDERER_SELECTOR,
     '.chat-turn-container.model ms-cmark-node',
     '.chat-turn-container.model ms-text-chunk',
     ...MODEL_ROLE_SELECTORS.flatMap((roleSelector) => [
@@ -219,6 +213,7 @@
           `${turnSelector.trim()} ${activitySelector}`
         )
       )),
+    ...MODEL_TURN_SELECTOR.split(',').map((selector) => `${selector.trim()}[aria-busy="true"]`),
     /* 역할이 아직 없는 최신 turn도 생성 중에는 절대 수정하지 않는다. */
     ...MODEL_ACTIVITY_INDICATORS.map((activitySelector) => (
       `ms-chat-turn ${activitySelector}`
@@ -504,7 +499,8 @@
     'aistudio-mobile-safe-1107-style',
     'aistudio-mobile-safe-1108-style',
     'aistudio-mobile-safe-1109-style',
-    'aistudio-mobile-safe-11010-style'
+    'aistudio-mobile-safe-11010-style',
+    'aistudio-mobile-safe-11011-style'
   ];
 
   const CSS_TEXT = `
@@ -536,12 +532,7 @@
   --as-bold: 600;
 }
 
-html,
-body,
-button,
-input,
-textarea,
-select {
+${SCOPE} {
   font-family: var(--as-font) !important;
   -webkit-font-smoothing: antialiased !important;
   text-rendering: optimizeLegibility !important;
@@ -1167,6 +1158,28 @@ ${SCOPE} :where(.katex-display > .katex) {
   max-width: 100% !important;
 }
 
+/* Retain readable type for extreme formulas. Padding protects tall glyphs while
+ * only this outer viewport scrolls horizontally; inner stretchy clipping stays. */
+${SCOPE} .aistudio-math-scroll {
+  display: block !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding-block: 0.5em !important;
+}
+
+${SCOPE} .aistudio-math-scroll .katex-display {
+  text-align: left !important;
+}
+
+${SCOPE} .aistudio-math-scroll .katex-display > .katex {
+  width: max-content !important;
+  max-width: none !important;
+  text-align: left !important;
+}
+
 /*
  * details/summary, blockquote 같은 Markdown 부가 요소도 모바일에서 폭을 넘지 않게 한다.
  */
@@ -1187,9 +1200,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 `;
 
   const states = new WeakMap();
+  const rootEligibility = new WeakMap();
   const fallbackRoots = new WeakSet();
   const rawMathScopeRoots = new WeakSet();
   const mathFitOriginalStyles = new WeakMap();
+  const asciiVisuals = new WeakMap();
+  const asciiPreViews = new WeakMap();
+  const asciiCopyListeners = new WeakSet();
 
   let cleanedLegacy = false;
   let pendingTimerId = null;
@@ -1199,8 +1216,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let repairedTotal = 0;
   let mathFitResizeDirty = true;
   let fallbackDirty = true;
-  let lastFallbackScanAt = 0;
   const mathFitCache = new WeakMap();
+  let mathFitDirty = true;
+  let explicitRootsDirty = true;
+  let explicitRootCache = [];
+  const fallbackScanScopes = new Set();
+  let fallbackWalker = null;
+  let scanCursor = 0;
+  const OBSERVER_OPTIONS = {
+    childList: true, characterData: true, attributes: true, attributeOldValue: true, subtree: true,
+    attributeFilter: ['data-turn-role', 'data-message-author-role', 'data-role',
+      'data-author-role', 'data-message-role', 'aria-busy', 'aria-hidden', 'hidden', 'class']
+  };
 
   function elementOf(node) {
     if (!node) {
@@ -1343,6 +1370,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       if (source[index] === '{') {
         depth += 1;
+        if (depth > 64) return false;
       } else if (source[index] === '}') {
         depth -= 1;
 
@@ -1462,7 +1490,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return output;
   }
 
-  function normalizeKatexCommands(source) {
+  function normalizeKatexCommands(source, preserveComments = false) {
     let visibleSource = '';
 
     /*
@@ -1473,7 +1501,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
      * percent sign as a literal glyph before KaTeX parses the block.
      */
     for (let index = 0; index < source.length; index += 1) {
-      if (source[index] === '%' && !isEscaped(source, index)) {
+      if (!preserveComments && source[index] === '%' && !isEscaped(source, index)) {
         visibleSource += '\\%';
       } else {
         visibleSource += source[index];
@@ -1588,6 +1616,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         delimiters.open.length,
         source.length - delimiters.close.length
       ).trim();
+
+      const closingIndex = source.length - delimiters.close.length;
+      if (isEscaped(source, closingIndex)) return null;
+      for (let i = delimiters.open.length; i < closingIndex; i++) {
+        if (!isEscaped(source, i) && source.startsWith(delimiters.close, i)) return null;
+      }
 
       if (!tex) {
         return null;
@@ -1704,43 +1738,16 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function findEnvironmentMathBlocks(source, protectedRanges) {
     const blocks = [];
-    const openingPattern = /(?:\\)?begin\s*\{([A-Za-z][A-Za-z*]*)\}/g;
-    let opening;
-
-    while ((opening = openingPattern.exec(source))) {
-      const environment = opening[1];
-
-      if (!RAW_MATH_ENVIRONMENTS.has(environment)) {
-        continue;
-      }
-
-      const tokenPattern = /(?:\\)?(begin|end)\s*\{([A-Za-z][A-Za-z*]*)\}/g;
-      tokenPattern.lastIndex = openingPattern.lastIndex;
-      let depth = 1;
-      let closingEnd = -1;
-      let token;
-
-      while ((token = tokenPattern.exec(source))) {
-        if (token[2] !== environment) {
-          continue;
-        }
-
-        depth += token[1] === 'begin' ? 1 : -1;
-
-        if (depth === 0) {
-          closingEnd = tokenPattern.lastIndex;
-          break;
-        }
-      }
-
-      if (closingEnd === -1) {
-        continue;
-      }
-
-      const start = opening.index;
-      const end = closingEnd;
-
-      openingPattern.lastIndex = end;
+    const stacks = new Map();
+    for (const token of source.matchAll(/(?:\\)?(begin|end)\s*\{([A-Za-z][A-Za-z*]*)\}/g)) {
+      const environment = token[2];
+      if (!RAW_MATH_ENVIRONMENTS.has(environment) || isEscaped(source, token.index)) continue;
+      const stack = stacks.get(environment) || [];
+      stacks.set(environment, stack);
+      if (token[1] === 'begin') { stack.push(token.index); continue; }
+      const start = stack.pop();
+      if (start === undefined) continue;
+      const end = token.index + token[0].length;
 
       if (
         !whitespaceOnlyOnLineBefore(source, start) ||
@@ -1857,7 +1864,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function findEmbeddedRawMathBlocks(source) {
-    if (!source) {
+    if (!source || source.length > MAX_FALLBACK_ROOT_LENGTH) {
       return [];
     }
 
@@ -1876,11 +1883,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const nonOverlapping = [];
 
     for (const block of blocks) {
-      if (
-        !nonOverlapping.some((accepted) => (
-          block.start < accepted.end && block.end > accepted.start
-        ))
-      ) {
+      if (!nonOverlapping.length || block.start >= nonOverlapping[nonOverlapping.length - 1].end) {
         nonOverlapping.push(block);
       }
     }
@@ -2611,7 +2614,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         ? globalThis.katex
         : null;
 
-    return engine && typeof engine.render === 'function'
+    return engine && engine.version === KATEX_VERSION && typeof engine.render === 'function'
       ? engine
       : null;
   }
@@ -2695,14 +2698,22 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       'div'
     ].join(',');
     let missingRenderedSource = false;
+    let nodes = 0;
+    let characters = 0;
+    const boundedText = (text) => {
+      characters += text.length;
+      if (characters > MAX_FALLBACK_ROOT_LENGTH) missingRenderedSource = true;
+      return missingRenderedSource ? '' : text;
+    };
 
-    const visit = (node) => {
-      if (!node) {
+    const visit = (node, depth = 0) => {
+      if (++nodes > MAX_INLINE_REPAIR_NODES || depth > 64) missingRenderedSource = true;
+      if (!node || missingRenderedSource) {
         return '';
       }
 
       if (node.nodeType === 3) {
-        return node.nodeValue || '';
+        return boundedText(node.nodeValue || '');
       }
 
       if (node.nodeType !== 1) {
@@ -2716,14 +2727,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
           missingRenderedSource = true;
         }
 
-        return source;
+        return boundedText(source);
       }
 
       if (node.matches && node.matches('br')) {
         return '\n';
       }
 
-      const content = Array.from(node.childNodes || [], visit).join('');
+      const parts = [];
+      for (const child of node.childNodes || []) {
+        parts.push(visit(child, depth + 1));
+        if (missingRenderedSource) break;
+      }
+      const content = parts.join('');
 
       return node !== container && node.matches && node.matches(blockSelector)
         ? `\n${content}\n`
@@ -2891,6 +2907,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (
         !host.isConnected ||
         closest(host, USER_SELECTOR) ||
+        closest(host, 'pre, code, a, [contenteditable], [role="textbox"]') ||
         closest(host, '.aistudio-raw-math-repaired') ||
         closest(host, '.aistudio-rendered-math-bold-repaired') ||
         (
@@ -2912,7 +2929,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         continue;
       }
 
-      const normalized = normalizeKatexCommands(source);
+      const normalized = normalizeKatexCommands(source, true);
 
       if (normalized === source) {
         continue;
@@ -2920,7 +2937,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       const displayMode = Boolean(
         host.matches('ms-katex.display, .katex-display') ||
-        host.matches('[display], [display="true"]') ||
+        host.matches('[display="true"], [display="block"]') ||
         closest(host, '.katex-display') ||
         (host.querySelector && host.querySelector('.katex-display'))
       );
@@ -2935,7 +2952,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         ].join(' ')
       );
 
-      if (!replacement || typeof host.replaceWith !== 'function') {
+      if (!replacement || typeof host.replaceChildren !== 'function') {
         continue;
       }
 
@@ -2946,7 +2963,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         '1'
       );
       replacement.setAttribute('data-katex-version', KATEX_VERSION);
-      host.replaceWith(replacement);
+      // Preserve the native host (and listeners attached to it). Reuse the
+      // corresponding KaTeX layer so font-size is not multiplied by nesting.
+      const layer = host.matches('.katex') ? replacement.querySelector('.katex')
+        : host.matches('.katex-display') ? replacement.querySelector('.katex-display') : replacement;
+      host.replaceChildren(...Array.from(layer.childNodes));
+      host.classList.add('aistudio-rendered-math-bold-repaired');
+      host.setAttribute('data-aistudio-rendered-math-bold-repaired', '1');
+      const display = closest(host, '.katex-display, ms-katex.display');
+      if (display) {
+        mathFitCache.delete(display);
+        display.removeAttribute(MATH_FIT_CHECKED_ATTR);
+      }
       repaired += 1;
     }
 
@@ -2974,13 +3002,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function mappedRawMathSource(container) {
     let source = '';
     const segments = [];
+    let nodes = 0;
+    let overflow = false;
 
     const appendBoundary = () => {
       source += '\n';
     };
 
-    const visit = (node) => {
-      if (!node) {
+    const visit = (node, depth = 0) => {
+      if (++nodes > MAX_INLINE_REPAIR_NODES || depth > 64 ||
+          source.length > MAX_FALLBACK_ROOT_LENGTH) overflow = true;
+      if (!node || overflow) {
         return;
       }
 
@@ -3028,8 +3060,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         appendBoundary();
       }
 
-      for (const child of Array.from(node.childNodes || [])) {
-        visit(child);
+      for (const child of node.childNodes || []) {
+        visit(child, depth + 1);
+        if (overflow) break;
       }
 
       if (isBlock) {
@@ -3039,7 +3072,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     visit(container);
 
-    return { segments, source };
+    return overflow || source.length > MAX_FALLBACK_ROOT_LENGTH
+      ? { segments: [], source: '', overflow: true } : { segments, source };
   }
 
   function mappedRawMathPoint(segments, index, endPoint) {
@@ -3193,7 +3227,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const canReplaceWhole = !container.querySelector(
-      'a, code, pre, table, .aistudio-array-repaired, ' +
+      RAW_MATH_RANGE_BLOCK_SELECTOR + ', button, input, textarea, select, ' +
+      USER_SELECTOR + ', [contenteditable], [role="textbox"], a, code, pre, table, .aistudio-array-repaired, ' +
       '.aistudio-aligned-repaired, .aistudio-raw-math-repaired, ' +
       '.aistudio-rendered-math-bold-repaired'
     );
@@ -3346,13 +3381,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function isQuotedEmphasis(text) {
-    const pairs = new Map([
-      ['"', '"'],
-      ["'", "'"],
-      ['“', '”'],
-      ['‘', '’']
-    ]);
-    const closing = pairs.get(text[0]);
+    const closing = ({ '"': '"', "'": "'", '“': '”', '‘': '’' })[text[0]];
 
     return Boolean(
       closing &&
@@ -3363,93 +3392,61 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function findMatches(text) {
     const result = [];
-    const regex = /(\*\*\*|___|\*\*|__|\*)(\S(?:[\s\S]*?\S)?)\1/g;
-
-    let match;
-
-    while ((match = regex.exec(text))) {
-      const marker = match[1];
-      const sourceInner = match[2] || '';
+    const openers = new Map();
+    const literals = markdownFencedCodeRanges(text);
+    const backticks = new Map();
+    for (const token of text.matchAll(/`+/g)) {
+      if (isEscaped(text, token.index) || rangeOverlaps(literals, token.index, token.index + token[0].length)) continue;
+      const start = backticks.get(token[0]);
+      if (start === undefined) backticks.set(token[0], token.index);
+      else {
+        literals.push({ start, end: token.index + token[0].length });
+        backticks.delete(token[0]);
+      }
+    }
+    literals.sort((a, b) => a.start - b.start);
+    let literalIndex = 0;
+    // Tokenize runs once. An unmatched single * cannot consume the first half
+    // of the next ** pair. Only examine bounded candidate contents.
+    for (const token of text.matchAll(/\*+|_+/g)) {
+      const marker = token[0];
+      const index = token.index;
+      while (literalIndex < literals.length && literals[literalIndex].end <= index) {
+        openers.clear();
+        literalIndex++;
+      }
+      if (literals[literalIndex]?.start <= index && index < literals[literalIndex].end) {
+        openers.clear();
+        continue;
+      }
+      if (marker.length > 3 || marker === '_' || isEscaped(text, index)) continue;
+      const before = text[index - 1] || '';
+      const after = text[index + marker.length] || '';
+      const start = openers.get(marker);
+      const sourceInner = start === undefined || index - start > MAX_MATCH_INNER_LENGTH + 5
+        ? '' : text.slice(start + marker.length, index);
       const openingTrim = (
         marker[0] === '*' &&
         marker.length > 1 &&
         sourceInner.startsWith('__') &&
+        /^[가-힣]/.test(sourceInner.slice(2)) &&
         !sourceInner.endsWith('__')
       ) ? 2 : 0;
       const inner = sourceInner.slice(openingTrim);
-      const start = match.index;
-      const end = start + match[0].length;
-      const markerCharacter = marker[0];
-      const before = text[start - 1] || '';
-      const after = text[end] || '';
-      const closingMarkerStart = end - marker.length;
-
-      if (
-        isEscaped(text, start) ||
-        isEscaped(text, closingMarkerStart)
-      ) {
-        continue;
+      const valid = inner && inner.length <= MAX_MATCH_INNER_LENGTH &&
+        /\S/.test(before) && /^\S[\s\S]*\S$|^\S$/.test(inner) &&
+        !/\n\s*\n/.test(inner) && !hasMathLikeText(inner) &&
+        inner[0] !== marker[0] && inner[inner.length - 1] !== marker[0] &&
+        (marker !== '*' || isQuotedEmphasis(inner)) &&
+        !(marker[0] === '_' && isWordChar(after) && /^[0-9A-Za-z_]+$/.test(inner));
+      if (valid) {
+        const end = index + marker.length;
+        result.push({ start, end, openingTrim, marker, raw: text.slice(start, end), inner });
+        openers.clear();
+      } else if (after && /\S/.test(after) &&
+        !(marker[0] === '_' && isWordChar(before))) {
+        openers.set(marker, index);
       }
-
-      if (
-        !inner.trim() ||
-        inner.length > MAX_MATCH_INNER_LENGTH ||
-        hasMathLikeText(inner)
-      ) {
-        continue;
-      }
-
-      if (/\n\s*\n/.test(inner)) {
-        continue;
-      }
-
-      /*
-       * Single asterisks are much more ambiguous than bold markers. Repair
-       * only quoted prose, which covers AI Studio's leaked *"..."* emphasis
-       * without treating multiplication, wildcards, or list markers as HTML.
-       */
-      if (marker === '*' && !isQuotedEmphasis(inner)) {
-        continue;
-      }
-
-      /*
-       * 네 개 이상의 연속 마커나 중첩 마커 일부를 잘못 잡지 않는다.
-       */
-      if (
-        before === markerCharacter ||
-        after === markerCharacter ||
-        inner[0] === markerCharacter ||
-        inner[inner.length - 1] === markerCharacter
-      ) {
-        continue;
-      }
-
-      /*
-       * foo__bar__baz 같은 식별자를 Markdown으로 처리하지 않는다.
-       */
-      const asciiIdentifierInner = /^[0-9A-Za-z_]+$/.test(inner);
-
-      if (
-        markerCharacter === '_' &&
-        (
-          isWordChar(before) ||
-          (
-            isWordChar(after) &&
-            asciiIdentifierInner
-          )
-        )
-      ) {
-        continue;
-      }
-
-      result.push({
-        start,
-        end,
-        openingTrim,
-        marker,
-        raw: match[0],
-        inner
-      });
     }
 
     return result;
@@ -4432,6 +4429,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function analyzeAsciiDiagram(text) {
+    if (!text || text.length > MAX_ASCII_TREE_LENGTH ||
+      /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|SELECT|INSERT|UPDATE)\b/m.test(text) ||
+      /(?:^|\n)\s*[A-Za-z_$가-힣][\w$.[\]\-가-힣]*\s*(?:=|\+=|-=|\*=|\/=)/m.test(text)
+    ) return null;
     return (
       analyzeAsciiBoxTree(text) ||
       analyzeFramedAsciiBlock(text) ||
@@ -4665,19 +4666,30 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       code.classList.add('aistudio-ascii-tree-repaired');
       code.setAttribute('data-aistudio-ascii-tree-repaired', '1');
       pre.insertBefore(visual, code.nextSibling);
+      asciiVisuals.set(code, visual);
+      asciiPreViews.set(pre, { code, visual });
       pre.classList.add('aistudio-ascii-tree-block-repaired');
       pre.setAttribute(
         'data-aistudio-ascii-tree-block-repaired',
         '1'
       );
-      pre.addEventListener('copy', (event) => {
-        if (!event.clipboardData) {
-          return;
-        }
-
-        event.clipboardData.setData('text/plain', analysis.source);
-        event.preventDefault();
-      });
+      if (!asciiCopyListeners.has(pre)) {
+        asciiCopyListeners.add(pre);
+        pre.addEventListener('copy', (event) => {
+          const currentCode = pre.querySelector('code.aistudio-ascii-tree-repaired');
+          const currentVisual = currentCode && asciiVisuals.get(currentCode);
+          const selection = window.getSelection();
+          // Toolbar copying already reads original code. For manual selection,
+          // substitute raw text only when the whole diagram was selected.
+          if (!event.clipboardData || !currentVisual || !selection ||
+              selection.rangeCount !== 1 ||
+              !selection.containsNode(currentVisual, false)) return;
+          const range = selection.getRangeAt(0);
+          if (!pre.contains(range.startContainer) || !pre.contains(range.endContainer)) return;
+          event.clipboardData.setData('text/plain', currentCode.textContent || '');
+          event.preventDefault();
+        });
+      }
       repaired += 1;
     }
 
@@ -5055,83 +5067,6 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return repaired;
   }
 
-  function repairTextRecordForMatch(record, match) {
-    const textNode = record && record.node;
-
-    if (
-      !textNode ||
-      !textNode.parentNode ||
-      !textNode.isConnected
-    ) {
-      return false;
-    }
-
-    const text = textNode.nodeValue || '';
-    const markerLength = match.marker.length;
-    const innerStart = (
-      match.start + markerLength + (match.openingTrim || 0)
-    );
-    const innerEnd = match.end - markerLength;
-    const overlapStart = Math.max(record.start, match.start);
-    const overlapEnd = Math.min(record.end, match.end);
-
-    if (overlapEnd <= overlapStart) {
-      return false;
-    }
-
-    const localBoundaries = Array.from(new Set([
-      0,
-      text.length,
-      match.start - record.start,
-      innerStart - record.start,
-      innerEnd - record.start,
-      match.end - record.start
-    ].map((offset) => (
-      Math.max(0, Math.min(text.length, offset))
-    )))).sort((left, right) => left - right);
-
-    const fragment = document.createDocumentFragment();
-
-    for (
-      let index = 0;
-      index < localBoundaries.length - 1;
-      index += 1
-    ) {
-      const localStart = localBoundaries[index];
-      const localEnd = localBoundaries[index + 1];
-
-      if (localEnd <= localStart) {
-        continue;
-      }
-
-      const part = text.slice(localStart, localEnd);
-      const globalStart = record.start + localStart;
-      const globalEnd = record.start + localEnd;
-      const insideOpeningMarker =
-        globalStart >= match.start &&
-        globalEnd <= innerStart;
-      const insideClosingMarker =
-        globalStart >= innerEnd &&
-        globalEnd <= match.end;
-      const insideContent =
-        globalStart >= innerStart &&
-        globalEnd <= innerEnd;
-
-      if (insideOpeningMarker || insideClosingMarker) {
-        continue;
-      }
-
-      fragment.appendChild(
-        insideContent
-          ? createRepairedEmphasis(part, match.marker)
-          : document.createTextNode(part)
-      );
-    }
-
-    textNode.parentNode.replaceChild(fragment, textNode);
-    return true;
-  }
-
   function looksLikeEmbeddedMathElement(element) {
     if (!element || element.nodeType !== 1) {
       return false;
@@ -5166,25 +5101,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return [];
     }
 
-    const candidates = [];
-
-    if (looksLikeEmbeddedMathElement(fragment)) {
-      candidates.push(fragment);
-    }
-
-    if (fragment.querySelectorAll) {
-      for (const element of fragment.querySelectorAll('*')) {
-        if (looksLikeEmbeddedMathElement(element)) {
-          candidates.push(element);
-        }
+    if (looksLikeEmbeddedMathElement(fragment)) return [fragment];
+    const roots = [];
+    const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(element) {
+        if (!looksLikeEmbeddedMathElement(element)) return NodeFilter.FILTER_SKIP;
+        roots.push(element);
+        // Math is opaque: skip its potentially large nested KaTeX/MathML tree.
+        return NodeFilter.FILTER_REJECT;
       }
-    }
-
-    return candidates.filter((element) => !candidates.some((other) => (
-      other !== element &&
-      typeof other.contains === 'function' &&
-      other.contains(element)
-    )));
+    });
+    while (walker.nextNode()) { /* The filter collects and prunes math roots. */ }
+    return roots;
   }
 
   function insideEmbeddedMath(element) {
@@ -5204,7 +5132,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function fragmentTextWithoutEmbeddedMath(fragment) {
     const clone = fragment.cloneNode(true);
 
-    embeddedMathRoots(clone).forEach((element) => element.remove());
+    embeddedMathRoots(clone).forEach((element) => (
+      element.replaceWith(document.createTextNode(INLINE_MATH_ATOM))
+    ));
 
     return clone.textContent || '';
   }
@@ -5221,7 +5151,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     ).some((element) => !insideEmbeddedMath(element));
   }
 
-  function repairInlineMatchContainingMath(range, match) {
+  function repairInlineMatchContainingMath(range, match, containsMath = true) {
     const contents = range.extractContents();
     const preview = contents.cloneNode(true);
 
@@ -5242,17 +5172,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       match.marker.length + (match.openingTrim || 0),
       match.marker.length
     );
-    markEmbeddedMathRoots(contents);
+    if (containsMath) markEmbeddedMathRoots(contents);
 
     const strong = createRepairedEmphasis('', match.marker);
 
-    strong.classList.add('aistudio-md-contains-math');
+    if (containsMath) strong.classList.add('aistudio-md-contains-math');
     strong.replaceChildren(contents);
     range.insertNode(strong);
     return true;
   }
 
-  function repairInlineMatch(container, records, match) {
+  function prepareInlineMatch(records, match) {
     const start = textPosition(records, match.start, false);
     const end = textPosition(records, match.end, true);
 
@@ -5284,42 +5214,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return false;
     }
 
-    if (containsEmbeddedMath) {
-      const repaired = repairInlineMatchContainingMath(range, match);
-
-      if (typeof range.detach === 'function') {
-        range.detach();
-      }
-
-      return repaired;
-    }
-
-    if (typeof range.detach === 'function') {
-      range.detach();
-    }
-
-    const affected = records.filter((record) => (
-      record.end > match.start &&
-      record.start < match.end
-    ));
-
-    if (!affected.length) {
-      return false;
-    }
-
-    for (let index = affected.length - 1; index >= 0; index -= 1) {
-      repairTextRecordForMatch(affected[index], match);
-    }
-
-    return true;
+    return { range, match, containsEmbeddedMath };
   }
 
   function collectInlineText(container) {
     const records = [];
-    const walker = document.createTreeWalker(
-      container,
-      NodeFilter.SHOW_TEXT
-    );
     let text = '';
     const allowedSkipRoot = (
       container.matches &&
@@ -5329,44 +5228,59 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       )
     ) ? container : null;
 
-    while (walker.nextNode()) {
-      const textNode = walker.currentNode;
-      const value = textNode.nodeValue || '';
-
-      if (!value || skipped(textNode, allowedSkipRoot)) {
+    const skipRoot = closest(container, SKIP_SELECTOR);
+    if (closest(container, USER_SELECTOR) || (skipRoot && skipRoot !== allowedSkipRoot)) {
+      return { records, text };
+    }
+    const barrier = () => { if (!text.endsWith('\n\n')) text += '\n\n'; };
+    let node = container.firstChild;
+    let visited = 0;
+    while (node) {
+      if (++visited > MAX_INLINE_REPAIR_NODES || text.length > MAX_INLINE_REPAIR_LENGTH) {
+        return { records: [], text: '', overflow: true };
+      }
+      let descend = false;
+      if (node.nodeType === 3) {
+        const start = text.length;
+        text += node.nodeValue || '';
+        records.push({ node, start, end: text.length });
+      } else if (node.nodeType === 1) {
+        if (looksLikeEmbeddedMathElement(node) && !closest(node, USER_SELECTOR)) {
+          // A placeholder keeps **<math>amount</math>** nonempty. Never read
+          // hidden MathML/TeX or descend into a native math renderer.
+          const start = text.length;
+          text += INLINE_MATH_ATOM;
+          records.push({ node, start, end: text.length });
+        } else if (node.matches(SKIP_SELECTOR + ',' + USER_SELECTOR)) {
+          barrier();
+        } else {
+          if (node.matches(INLINE_REPAIR_BOUNDARY_SELECTOR)) barrier();
+          descend = true;
+        }
+      }
+      if (descend && node.firstChild) {
+        node = node.firstChild;
         continue;
       }
-
-      const start = text.length;
-      text += value;
-      records.push({
-        node: textNode,
-        start,
-        end: text.length
-      });
+      while (node && node !== container && !node.nextSibling) {
+        node = node.parentNode;
+        if (node && node !== container && node.nodeType === 1 &&
+            node.matches(INLINE_REPAIR_BOUNDARY_SELECTOR)) barrier();
+      }
+      node = node && node !== container ? node.nextSibling : null;
     }
-
-    return { records, text };
+    return text.length > MAX_INLINE_REPAIR_LENGTH
+      ? { records: [], text: '', overflow: true }
+      : { records, text };
   }
 
-  function repairInlineUnderlineMatch(records, match) {
-    const start = textPosition(records, match.start, false);
-    const end = textPosition(records, match.end, true);
-
-    if (!start || !end) {
-      return false;
-    }
-
+  function repairInlineUnderlineMatch(range, match) {
     if (
-      closest(start.node.parentElement, 'u, ins') ||
-      closest(end.node.parentElement, 'u, ins')
+      closest(range.startContainer, 'u, ins') ||
+      closest(range.endContainer, 'u, ins')
     ) {
       return false;
     }
-
-    const range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
 
     const selected = range.cloneContents();
     const selectedText = selected.textContent || '';
@@ -5436,20 +5350,21 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const matches = findUnderlineMatches(snapshot.text);
+    const planned = findUnderlineMatches(snapshot.text).map((match) => {
+      const start = textPosition(snapshot.records, match.start, false);
+      const end = textPosition(snapshot.records, match.end, true);
+      if (!start || !end) return null;
+      const range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+      return { match, range };
+    }).filter(Boolean);
     let repaired = 0;
 
-    for (let index = matches.length - 1; index >= 0; index -= 1) {
-      const current = collectInlineText(container);
-
-      if (
-        repairInlineUnderlineMatch(
-          current.records,
-          matches[index]
-        )
-      ) {
-        repaired += 1;
-      }
+    for (let index = planned.length - 1; index >= 0; index -= 1) {
+      const { range, match } = planned[index];
+      if (repairInlineUnderlineMatch(range, match)) repaired += 1;
+      range.detach?.();
     }
 
     return repaired;
@@ -5502,21 +5417,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return 0;
     }
 
-    const matches = findMatches(snapshot.text);
+    const operations = findMatches(snapshot.text).map((match) => (
+      prepareInlineMatch(snapshot.records, match)
+    )).filter(Boolean);
     let repaired = 0;
 
-    for (let index = matches.length - 1; index >= 0; index -= 1) {
-      const current = collect();
-
-      if (
-        repairInlineMatch(
-          container,
-          current.records,
-          matches[index]
-        )
-      ) {
-        repaired += 1;
-      }
+    // Live ranges track shared text-node offsets as later matches are removed.
+    // Project the container once rather than once for each marker pair.
+    for (let index = operations.length - 1; index >= 0; index--) {
+      const { range, match, containsEmbeddedMath } = operations[index];
+      try {
+        if (repairInlineMatchContainingMath(range, match, containsEmbeddedMath)) repaired++;
+      } finally { range.detach(); }
     }
 
     return repaired;
@@ -5580,6 +5492,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (
       !root ||
       !root.isConnected ||
+      !closest(root, MODEL_TURN_SELECTOR) ||
       closest(root, USER_SELECTOR)
     ) {
       return 0;
@@ -5739,6 +5652,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       String(naturalWidth)
     );
 
+    if (naturalWidth * scale > availableWidth + 1 &&
+        !display.parentElement?.classList.contains('aistudio-math-scroll')) {
+      const scroller = document.createElement('span');
+      scroller.className = 'aistudio-math-scroll';
+      scroller.setAttribute('role', 'region');
+      scroller.setAttribute('aria-label', '긴 수식 가로 스크롤');
+      scroller.setAttribute('tabindex', '0');
+      display.before(scroller);
+      scroller.appendChild(display);
+    }
+
     return true;
   }
 
@@ -5867,6 +5791,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   function fallbackRootForTextNode(textNode) {
     const value = textNode && textNode.nodeValue;
     const parent = textNode && textNode.parentElement;
+    if (!closest(parent, MODEL_TURN_SELECTOR)) return null;
 
     const asciiCode = parent
       ? closest(parent, 'pre > code')
@@ -5943,62 +5868,58 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function collectFallbackRoots() {
-    const body = document.body;
-
-    if (
-      !body ||
-      typeof document.createTreeWalker !== 'function'
-    ) {
-      return [];
+    if (!document.body) return [];
+    if (fallbackDirty) {
+      fallbackScanScopes.add(document.body);
+      fallbackDirty = false;
     }
-
     const roots = new Set();
-    const walker = document.createTreeWalker(
-      body,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(textNode) {
-          return hasFallbackRepairHint(textNode.nodeValue || '')
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_SKIP;
-        }
+    const started = schedulerNow();
+    let visited = 0;
+    while (visited < MAX_FALLBACK_NODES_PER_SLICE) {
+      if (!fallbackWalker) {
+        const scope = fallbackScanScopes.values().next().value;
+        if (!scope) break;
+        fallbackScanScopes.delete(scope);
+        if (!scope.isConnected) continue;
+        fallbackWalker = document.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            // Reject native math and editor subtrees before reading their text.
+            if (node.nodeType === 1 && node.matches(
+              USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR +
+              ', .katex, ms-katex, mjx-container, math, script, style, nav, [role="dialog"]'
+            )) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
       }
-    );
-
-    while (walker.nextNode()) {
-      const root = fallbackRootForTextNode(walker.currentNode);
-
-      if (root) {
-        roots.add(root);
+      const node = fallbackWalker.nextNode();
+      if (!node) { fallbackWalker = null; continue; }
+      visited++;
+      if (node.isConnected && node.nodeType === 3 && hasFallbackRepairHint(node.nodeValue || '')) {
+        const root = fallbackRootForTextNode(node);
+        if (root) roots.add(root);
       }
+      if (schedulerNow() - started >= SCAN_BUDGET_MS) break;
     }
-
+    if (fallbackWalker || fallbackScanScopes.size) schedule(50);
     return Array.from(roots);
   }
 
-  function collectRoots() {
-    const explicitRoots = Array.from(
-      document.querySelectorAll(REPAIR_ROOT_SELECTOR)
-    ).filter((root) => {
-      return Boolean(
-        root.isConnected &&
-        !closest(root, USER_SELECTOR) &&
-        hasRepairableRoot(root, root.textContent || '')
-      );
-    });
-
-    const fallbackNow = Date.now();
-    const fallbackFresh = fallbackDirty ||
-      fallbackNow - lastFallbackScanAt >= SCAN_MS;
-
-    if (fallbackFresh) {
-      lastFallbackScanAt = fallbackNow;
-      fallbackDirty = false;
+  function rootIsEligible(root) {
+    if (!rootEligibility.has(root)) {
+      rootEligibility.set(root, hasRepairableRoot(root, root.textContent || ''));
     }
+    return rootEligibility.get(root);
+  }
 
-    const fallbackList = fallbackFresh
-      ? collectFallbackRoots()
-      : [];
+  function collectRoots() {
+    if (explicitRootsDirty) {
+      explicitRootCache = Array.from(document.querySelectorAll(REPAIR_ROOT_SELECTOR));
+      explicitRootsDirty = false;
+    }
+    const explicitRoots = explicitRootCache;
+    const fallbackList = collectFallbackRoots();
 
     /*
      * 안정화 대기 중에는 비싼 body fallback 스캔을 반복하지 않는다.
@@ -6011,6 +5932,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         !root.matches(REPAIRED_ROOT_SELECTOR)
       ) {
         root.setAttribute('data-aistudio-repair-root', '1');
+        explicitRootCache.push(root);
       }
     }
 
@@ -6019,6 +5941,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       ...fallbackList
     ])).filter((root) => (
       root.isConnected &&
+      closest(root, MODEL_TURN_SELECTOR) &&
       !closest(root, USER_SELECTOR)
     ));
 
@@ -6027,14 +5950,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
      * 검증한 작은 scope는 유지한다. 상위 turn은 임의 div/custom host를
      * 순회하지 않으므로 이 예외가 없으면 검증된 수식이 누락된다.
      */
-    const roots = candidates.filter((root) => (
-      rawMathScopeRoots.has(root) ||
-      !candidates.some((candidate) => (
-        candidate !== root &&
-        typeof candidate.contains === 'function' &&
-        candidate.contains(root)
-      ))
-    ));
+    const candidateSet = new Set(candidates);
+    const roots = candidates.filter((root) => {
+      if (rawMathScopeRoots.has(root)) return rootIsEligible(root);
+      for (let parent = root.parentElement; parent; parent = parent.parentElement) {
+        if (candidateSet.has(parent)) return false;
+      }
+      return rootIsEligible(root);
+    });
 
     roots.sort((left, right) => {
       if (
@@ -6081,20 +6004,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function lastModelTurn(roots = []) {
-    const actionableRoots = roots.filter((root) => (
-      hasRepairableRoot(root, root.textContent || '')
-    ));
-    const models = actionableRoots.length
-      ? actionableRoots
-      : Array.from(
-        document.querySelectorAll(REPAIR_ROOT_SELECTOR)
-      ).filter((root) => (
-        root.isConnected &&
-        !closest(root, USER_SELECTOR) &&
-        hasRepairableRoot(root, root.textContent || '')
-      ));
-
-    const last = models[models.length - 1];
+    const last = roots[roots.length - 1];
 
     if (!last) {
       return null;
@@ -6171,17 +6081,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (!button) {
       return false;
     }
-
-    return Boolean(
-      (
-        button.matches &&
-        button.matches('button')
-      ) ||
-      (
-        button.querySelector &&
-        button.querySelector('.run-button-label')
-      )
-    );
+    if (closest(button, 'pre, code, ms-chat-turn, ' + MODEL_TURN_SELECTOR +
+      ', [role="dialog"], [role="menu"], nav')) return false;
+    // A response example or unrelated toolbar action is not a composer signal.
+    const composer = closest(button, 'ms-prompt-input, ms-chat-input, ms-prompt-box');
+    const form = closest(button, 'form');
+    return Boolean(composer || form?.querySelector(PROMPT_EDITOR_SELECTOR) ||
+      button.matches?.('.run-button, .ctrl-enter-submits') ||
+      button.querySelector?.('.run-button-label'));
   }
 
   function findRunButton() {
@@ -6228,25 +6135,27 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function generating() {
-    /* A visible composer Run action is the authoritative completed state. */
-    if (findRunButton()) {
-      return false;
-    }
-
     const activeStopButton = Array.from(
       document.querySelectorAll('button')
     ).some((button) => (
-      visible(button) &&
-      isStopActionLabel(buttonLabel(button))
+      isStopActionLabel(buttonLabel(button)) && isPromptRunButton(button) &&
+      visible(button)
     ));
 
     if (activeStopButton) {
       return true;
     }
 
-    const indicators = document.querySelectorAll(
-      MODEL_ACTIVITY_SELECTOR
-    );
+    // Explicit busy state outranks a Run button left visible during submission.
+    if (Array.from(document.querySelectorAll('[aria-busy="true"]')).some((indicator) =>
+      closest(indicator, MODEL_TURN_SELECTOR + ', ms-chat-turn, ms-prompt-input, ms-chat-input') &&
+      visible(indicator))) return true;
+
+    if (findRunButton()) {
+      return false;
+    }
+
+    const indicators = document.querySelectorAll(MODEL_ACTIVITY_SELECTOR);
 
     if (Array.from(indicators).some(visible)) {
       return true;
@@ -6263,8 +6172,23 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function scan() {
+    // Requests queued before focus changed must yield too, not just new events.
+    if (document.hidden || promptEditorActive()) return;
+    if (observer) {
+      handleMutations(observer.takeRecords());
+      observer.disconnect();
+    }
+    try {
+      scanResponses();
+    } finally {
+      if (observer && document.body) observer.observe(document.body, OBSERVER_OPTIONS);
+    }
+  }
+
+  function scanResponses() {
     if (
       document.hidden ||
+      promptEditorActive() ||
       !ENABLE_SAFE_OUTPUT_REPAIR
     ) {
       return;
@@ -6298,7 +6222,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
 
     const now = Date.now();
-    const fittedMathCount = fitWideDisplayMath(mathFitResizeDirty);
+    const fittedMathCount = (mathFitDirty || mathFitResizeDirty)
+      ? fitWideDisplayMath(mathFitResizeDirty) : 0;
+    mathFitDirty = false;
     mathFitResizeDirty = false;
 
     if (html) {
@@ -6327,7 +6253,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       );
     }
 
-    for (const root of roots) {
+    const sliceStarted = schedulerNow();
+    const firstRoot = scanCursor % (roots.length || 1);
+    for (let offset = 0; offset < roots.length; offset++) {
+      const index = (firstRoot + offset) % roots.length;
+      const root = roots[index];
+      if (offset && schedulerNow() - sliceStarted >= SCAN_BUDGET_MS) {
+        scanCursor = index;
+        schedule(50);
+        break;
+      }
+      scanCursor = (index + 1) % roots.length;
+      const previous = states.get(root);
+      if (previous?.attempted === previous?.text && previous?.lastAttemptAt &&
+          now - previous.lastAttemptAt < RETRY_MAX_MS) continue;
       const text = root.textContent || '';
 
       if (!hasRepairableRoot(root, text)) {
@@ -6403,8 +6342,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       const repaired = repairRoot(root);
       const after = root.textContent || '';
+      rootEligibility.delete(root);
 
       if (repaired > 0) {
+        mathFitDirty = true;
         repairedThisScan += repaired;
         repairedTotal += repaired;
         states.set(root, {
@@ -6537,6 +6478,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       fallbackRoots.delete(root);
       rawMathScopeRoots.delete(root);
       states.delete(root);
+      rootEligibility.delete(root);
     }
   }
 
@@ -6583,98 +6525,72 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return knownRoot;
   }
 
-  function isFallbackMutationTarget(element) {
-    if (
-      !element ||
-      fallbackBlocked(element) ||
-      !closest(element, FALLBACK_SURFACE_SELECTOR)
-    ) {
-      return false;
+  function handleMutations(mutations) {
+    let changed = false;
+    const invalidated = new Set();
+    for (const mutation of mutations) {
+      const element = elementOf(mutation.target);
+      if (!element || promptEditorFor(element)) continue;
+      if (mutation.attributeName === 'class' &&
+          !element.matches(MODEL_TURN_SELECTOR + ',' + USER_SELECTOR) &&
+          !/(?:^|\s)(?:model|user|model-prompt-container|user-prompt-container|user-message|human-message)(?:\s|$)/.test(mutation.oldValue || '')) continue;
+      if (mutation.type === 'attributes') clearFallbackRootsInsideUser(element);
+      if (closest(element, USER_SELECTOR)) continue;
+      // Cheap bookkeeping only. Never scan entire descendants in this callback.
+      const knownRoot = knownRepairRootForMutation(element);
+      const nativeMath = closest(element, '.aistudio-rendered-math-bold-repaired');
+      if (nativeMath && mutation.type !== 'attributes') {
+        nativeMath.classList.remove('aistudio-rendered-math-bold-repaired');
+        nativeMath.removeAttribute('data-aistudio-rendered-math-bold-repaired');
+      }
+      const pre = closest(element, 'pre');
+      const view = pre && asciiPreViews.get(pre);
+      if (view && mutation.type !== 'attributes' &&
+          (!pre.contains(view.code) || view.code.contains(element))) {
+        const { code, visual } = view;
+        visual.remove();
+        asciiVisuals.delete(code);
+        asciiPreViews.delete(pre);
+        code.classList.remove('aistudio-ascii-tree-repaired');
+        code.removeAttribute('data-aistudio-ascii-tree-repaired');
+        pre.classList.remove('aistudio-ascii-tree-block-repaired');
+        pre.removeAttribute('data-aistudio-ascii-tree-block-repaired');
+      }
+      const display = closest(element, '.katex-display, ms-katex.display');
+      if (display) {
+        mathFitCache.delete(display);
+        display.removeAttribute(MATH_FIT_CHECKED_ATTR);
+      }
+      if (knownRoot) {
+        for (let parent = element; parent; parent = parent.parentElement) {
+          if (rootEligibility.has(parent)) rootEligibility.delete(parent);
+          if (states.has(parent) && !invalidated.has(parent)) {
+            states.delete(parent);
+            invalidated.add(parent);
+          }
+          if (parent === knownRoot) break;
+        }
+        changed = true;
+      }
+      if (mutation.type !== 'characterData') explicitRootsDirty = true;
+      // A new generic paragraph or same-text structural rewrite must be
+      // discovered even when another record in this batch had a known root.
+      const scopes = mutation.type === 'childList'
+        ? Array.from(mutation.addedNodes || []).map(elementOf)
+        : [element];
+      for (const scope of scopes) {
+        if (scope && scope.isConnected && !fallbackBlocked(scope) &&
+            !promptEditorFor(scope)) {
+          fallbackScanScopes.add(scope.nodeType === 1 ? scope : element);
+          changed = true;
+        }
+      }
+      if (element.matches?.('button') || closest(element, 'button')) changed = true;
     }
-
-    return hasRepairableRoot(element, element.textContent || '');
-  }
-
-  function shouldObserveMutationTarget(
-    node,
-    includeDescendants = false
-  ) {
-    const element = elementOf(node);
-
-    if (
-      !element ||
-      promptEditorFor(element) ||
-      closest(element, USER_SELECTOR)
-    ) {
-      return false;
+    if (changed) {
+      mathFitDirty = true;
+      schedule(MUTATION_SCAN_DELAY_MS);
     }
-
-    if (
-      closest(element, MODEL_TURN_SELECTOR) ||
-      closest(element, REPAIR_ROOT_SELECTOR) ||
-      isFallbackMutationTarget(element)
-    ) {
-      return true;
-    }
-
-    if (
-      !includeDescendants ||
-      typeof element.querySelectorAll !== 'function' ||
-      !hasRepairableRoot(element, element.textContent || '')
-    ) {
-      return false;
-    }
-
-    /*
-     * Angular가 완성된 role 없는 ms-chat-turn을 한 번에 삽입하면 mutation의
-     * addedNode는 바깥 turn이다. 내부 renderer까지 확인해 10초 주기 스캔을
-     * 기다리지 않고 안정화 타이머를 시작한다.
-     */
-    const hasExplicitRoot = Array.from(
-      element.querySelectorAll(REPAIR_ROOT_SELECTOR)
-    ).some((candidate) => !closest(candidate, USER_SELECTOR));
-
-    if (hasExplicitRoot) {
-      return true;
-    }
-
-    const fallbackSurface =
-      element.matches(FALLBACK_SURFACE_SELECTOR)
-        ? element
-        : element.querySelector(FALLBACK_SURFACE_SELECTOR);
-
-    return Boolean(
-      fallbackSurface &&
-      hasRepairableRoot(
-        fallbackSurface,
-        fallbackSurface.textContent || ''
-      )
-    );
-  }
-
-  function hasUnmeasuredDisplayMath(node) {
-    const element = elementOf(node);
-
-    if (
-      !element ||
-      !element.querySelector ||
-      promptEditorFor(element) ||
-      closest(element, USER_SELECTOR)
-    ) {
-      return false;
-    }
-
-    return Boolean(
-      (
-        element.matches &&
-        element.matches('.katex-display, ms-katex.display') &&
-        !element.hasAttribute(MATH_FIT_CHECKED_ATTR)
-      ) ||
-      element.querySelector(
-        `.katex-display:not([${MATH_FIT_CHECKED_ATTR}]), ` +
-        `ms-katex.display:not([${MATH_FIT_CHECKED_ATTR}])`
-      )
-    );
   }
 
   function installObserver() {
@@ -6694,72 +6610,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return;
     }
 
-    observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        const mutationElement = elementOf(mutation.target);
-
-        if (promptEditorFor(mutationElement)) {
-          continue;
-        }
-
-        if (mutation.type === 'attributes') {
-          clearFallbackRootsInsideUser(mutationElement);
-        }
-
-        if (
-          hasUnmeasuredDisplayMath(mutation.target) ||
-          Array.from(mutation.addedNodes || []).some(
-            hasUnmeasuredDisplayMath
-          )
-        ) {
-          schedule(100);
-        }
-
-        const knownRoot = knownRepairRootForMutation(mutation.target);
-
-        if (knownRoot) {
-          /*
-           * Known roots are already collected by a bounded selector query.
-           * Reset same-text backoff for structural/attribute lifecycle changes
-           * without triggering the expensive full-body fallback TreeWalker.
-           */
-          states.delete(knownRoot);
-          schedule(MUTATION_SCAN_DELAY_MS);
-          return;
-        }
-
-        if (shouldObserveMutationTarget(mutation.target)) {
-          fallbackDirty = true;
-          schedule(MUTATION_SCAN_DELAY_MS);
-          return;
-        }
-
-        for (const node of mutation.addedNodes || []) {
-          if (shouldObserveMutationTarget(node, true)) {
-            fallbackDirty = true;
-            schedule(MUTATION_SCAN_DELAY_MS);
-            return;
-          }
-        }
-      }
-    });
-
-    observer.observe(target, {
-      childList: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: [
-        'data-turn-role',
-        'data-message-author-role',
-        'data-role',
-        'data-author-role',
-        'data-message-role',
-        'aria-busy',
-        'aria-hidden',
-        'hidden'
-      ],
-      subtree: true
-    });
+    observer = new MutationObserver(handleMutations);
+    observer.observe(target, OBSERVER_OPTIONS);
   }
 
   function boot() {
@@ -6772,6 +6624,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     installStyle();
     installObserver();
     schedule(250);
+
+    document.fonts?.addEventListener('loadingdone', () => {
+      mathFitResizeDirty = true;
+      if (!promptEditorActive()) schedule(150);
+    });
 
     html.setAttribute(VERSION_ATTR, VERSION);
     html.setAttribute(

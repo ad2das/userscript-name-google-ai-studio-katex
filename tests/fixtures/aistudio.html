@@ -6,9 +6,9 @@
   <title>AI Studio userscript fixture</title>
 </head>
 <body>
-  <button id="fixture-run-button" type="submit" class="ctrl-enter-submits ms-button-primary" aria-disabled="false">
+  <ms-prompt-input><button id="fixture-run-button" type="submit" class="ctrl-enter-submits ms-button-primary" aria-disabled="false">
     <span class="run-button-label">Run</span>
-  </button>
+  </button></ms-prompt-input>
   <button id="stale-stop-control" type="button" aria-label="Stop">Stop</button>
 
   <ms-chat-turn>
@@ -298,7 +298,7 @@ ________________________┴_______               ________________________┴____
       <div id="permanent-token-progress" role="progressbar" style="display:block;width:12px;height:2px">tokens</div>
     </header>
     <main id="selectorless-main">
-      <section id="reported-selectorless-model-output" class="next-response-shell">
+      <section id="reported-selectorless-model-output" class="next-response-shell" data-turn-role="model">
         <h2>K-IFRS 기준서 원문 비교</h2>
         <ol>
           <li>
@@ -326,7 +326,7 @@ ________________________┴_______               ________________________┴____
         must ascend to this smallest complete wrapper instead of stopping at
         the child that contains only the opening marker.
       -->
-      <section id="reported-selectorless-split-math" class="next-response-shell">
+      <section id="reported-selectorless-split-math" class="next-response-shell" data-turn-role="model">
         <h3>③ 사채상환손익 구하기 (손익 영향 ②)</h3>
         <div id="photo-split-aligned-wrapper">
           <div>\begin{aligned}</div>
@@ -373,7 +373,7 @@ ________________________┴_______               ________________________┴____
     instead of .katex/ms-katex. Both the bold markers and table <br> text must
     still be repaired from their smallest safe local roots.
   -->
-  <makersuite-virtualized-output id="reported-unscoped-historical-output">
+  <makersuite-virtualized-output id="reported-unscoped-historical-output" data-turn-role="model">
     <table>
       <tbody>
         <tr>

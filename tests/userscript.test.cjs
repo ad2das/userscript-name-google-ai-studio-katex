@@ -7,7 +7,9 @@ const vm = require('node:vm');
 const scriptPath = path.join(__dirname, '..', 'aaa.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-assert.match(source, /\/\/ @version\s+1\.10\.11/);
+const release = require('../package.json').version;
+assert.equal(source.match(/\/\/ @version\s+(\S+)/)[1], release);
+assert.equal(source.match(/const VERSION = '([^']+)'/)[1], release);
 assert.match(
   source,
   /\/\/ @require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/katex@0\.18\.1\/dist\/katex\.min\.js/
@@ -34,17 +36,14 @@ assert.match(source, /function hasActionableRepairElement/);
 assert.match(source, /hasCompleteRawMath/);
 assert.match(source, /fallbackRoots\.has\(root\)/);
 assert.match(source, /const rawMathScopeRoots = new WeakSet\(\)/);
-assert.match(source, /rawMathScopeRoots\.has\(root\) \|\|/);
 assert.match(source, /function hasSplitRawMathEnvironment/);
 assert.match(
   source,
   /fallbackRoots\.has\(root\) \|\|\s*hasSplitRawMathEnvironment\(root, rootText\)/
 );
 assert.match(source, /function fitWideDisplayMath/);
-assert.match(source, /function hasUnmeasuredDisplayMath/);
 assert.match(source, /MATH_FIT_CHECKED_ATTR/);
 assert.match(source, /attributes: true/);
-assert.match(source, /'aria-busy',[\s\S]*?'aria-hidden',[\s\S]*?'hidden'/);
 assert.match(source, /function knownRepairRootForMutation/);
 assert.match(
   source,
@@ -249,6 +248,13 @@ assert.ok(mixedNativeBoldMatch);
 assert.equal(mixedNativeBoldMatch.inner, '주주에게 지급한 총 현금');
 assert.equal(mixedNativeBoldMatch.openingTrim, 2);
 assert.equal(api.findMatches('foo__bar__baz').length, 0);
+assert.equal(api.findMatches('**a** **b**').map((m) => m.inner).join(','), 'a,b');
+assert.equal(api.findMatches('**__init**')[0]?.inner, '__init');
+assert.equal(api.findMatches('`**literal**` **outside**').map((m) => m.inner).join(','), 'outside');
+assert.equal(api.findMatches('```\n**literal**\n```\n**outside**').map((m) => m.inner).join(','), 'outside');
+assert.equal(api.parseRawMathCandidate('$x$ and $y$'), null);
+assert.equal(api.parseRawMathCandidate(String.raw`$x\$`), null);
+assert.equal(api.analyzeAsciiDiagram('const value = "┌─ 자본금";\n자본 ┤ 자본잉여금\n  └─ 자본조정'), null);
 assert.equal(api.findMatches('__dunder__name').length, 0);
 assert.equal(api.findMatches('목록에서는 __필수 조건__입니다.').length, 1);
 assert.equal(api.findMatches('Render ***bold italic*** too.').length, 1);
@@ -1289,6 +1295,7 @@ const currentRunButton = {
 
 assert.match(api.buttonLabel(currentRunButton), /Run/);
 assert.equal(api.isPromptRunButton(currentRunButton), true);
+assert.equal(api.isPromptRunButton({ matches: () => false, querySelector: () => null }), false);
 
 const makeVisibleButton = (label) => ({
   isConnected: true,
@@ -1323,7 +1330,9 @@ context.document.querySelectorAll = (selector) => {
     const genericRun = makeVisibleButton('Run');
     genericRun.querySelector = () => null;
     genericRun.matches = (candidate) => candidate === 'button';
-    return [makeVisibleButton('Stop'), genericRun];
+    const unrelatedStop = makeVisibleButton('Stop');
+    unrelatedStop.querySelector = () => null;
+    return [unrelatedStop, genericRun];
   }
   return [];
 };
