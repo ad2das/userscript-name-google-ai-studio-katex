@@ -531,6 +531,15 @@ assert.deepEqual(
   )),
   ['1,000', '2,000', '3,000']
 );
+for (const fixture of require('./fixtures/current-diagrams.cjs')) {
+  const diagram = api.analyzeAsciiDiagram(fixture.source);
+  assert.ok(diagram, fixture.name);
+  assert.equal(diagram.kind, 'character-grid', fixture.name);
+  assert.equal(diagram.layout, fixture.layout, fixture.name);
+  assert.equal(diagram.source, fixture.source, fixture.name);
+  assert.equal(api.analyzeDelimitedAsciiTable(fixture.source), null, fixture.name);
+}
+
 const reportedFramedBlock = [
   '┌──────────────────────────────────────────────────────────────┐',
   '│ [예제 8-7 소송 진행경과에 따른 회계처리 변화]                │',

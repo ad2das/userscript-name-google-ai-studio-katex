@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.11
+// @version      1.13.12
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.11';
-  const STYLE_ID = 'aistudio-mobile-safe-11311-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-11311';
+  const VERSION = '1.13.12';
+  const STYLE_ID = 'aistudio-mobile-safe-11312-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-11312';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -4468,7 +4468,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const source = text.replace(/\r\n?/g, '\n');
     const rawLines = source.split('\n');
     const horizontalFrames = rawLines.filter((line) => (
-      /^\s*[┌└╔╚+][─━═_=\-]{4,}[┐┘╗╝+]?\s*$/.test(line)
+      /^\s*[┌└╔╚+][─━═_=\-┬┴┼]{4,}[┐┘╗╝+]?\s*$/.test(line)
     ));
     const sideLines = rawLines.filter((line) => (
       /^\s*[|│┃║].*[|│┃║]\s*$/.test(line)
@@ -4478,7 +4478,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       rawLines.length < 3 ||
       rawLines.length > 40 ||
       horizontalFrames.length < 2 ||
-      !sideLines.length
+      !sideLines.some(line => /[가-힣]/.test(line))
     ) {
       return null;
     }
@@ -4488,14 +4488,26 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       asciiVerticalRunEntries(line).length > 0
     ));
 
-    if (
-      !populated.length ||
-      populated.some((line) => asciiVerticalRunEntries(line).length !== 2)
-    ) {
+    const axisCount = populated.length && asciiVerticalRunEntries(populated[0]).length;
+    if (!axisCount || axisCount < 2 || axisCount > 4 ||
+      populated.some((line) => asciiVerticalRunEntries(line).length !== axisCount)) {
       return null;
     }
 
-    const normalized = normalizeAsciiDelimitedAxes(sourceLines, 2);
+    const normalized = normalizeAsciiDelimitedAxes(sourceLines, axisCount);
+    // Horizontal corners/junctions must use the same axes as content rows.
+    // Previously only vertical strokes moved, leaving the frame behind.
+    rawLines.forEach((line, index) => {
+      if (!/^\s*[┌└├╔╚+][─━═_=\-┬┴┼]+[┐┘┤╗╝+]\s*$/.test(line)) return;
+      const joints = Array.from(line.trim()).filter(char => !/[─━═_=\-]/.test(char));
+      if (joints.length !== axisCount) return;
+      const horizontal = line.match(/[─━═_=\-]/)[0];
+      let rule = ' '.repeat(normalized.anchors[0]) + joints[0];
+      for (let axis = 1; axis < axisCount; axis += 1) {
+        rule += horizontal.repeat(Math.max(0, normalized.anchors[axis] - normalized.anchors[axis - 1] - 1)) + joints[axis];
+      }
+      normalized.lines[index] = asciiCharacterGridLine(rule);
+    });
     const analysis = createAsciiCharacterGridAnalysis(
       source,
       rawLines,
@@ -4514,7 +4526,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       !text ||
       text.length > MAX_ASCII_TREE_LENGTH ||
       !/[가-힣]/.test(text) ||
-      hasExecutableCodeSignals(text)
+      hasExecutableCodeSignals(text) ||
+      /[┌┐└┘├┤┬┴┼]/.test(text)
     ) {
       return null;
     }
@@ -4599,6 +4612,41 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return entries >= 3 ? { kind: 'leader-grid', rows, source } : null;
   }
 
+  function analyzeConnectedAsciiFlow(text) {
+    if (!text || text.length > MAX_ASCII_TREE_LENGTH || !/[가-힣]/.test(text) ||
+      !/[┌┐]/.test(text) || !/[│├└]/.test(text) || hasExecutableCodeSignals(text)) return null;
+    const source = text.replace(/\r\n?/g, '\n');
+    const rawLines = source.split('\n');
+    if (rawLines.length < 3 || rawLines.length > MAX_ASCII_TREE_LINES) return null;
+    let branchAxes = null;
+    const lines = rawLines.map(line => {
+      const chars = Array.from(line);
+      const joints = [];
+      let column = 0;
+      for (const char of chars) {
+        if (/[┌┐└┘├┤┬┴┼│]/.test(char)) joints.push({ char, column });
+        column += asciiCharacterWidth(char);
+      }
+      const opening = joints.filter(j => /[┌┐]/.test(j.char));
+      if (opening.length === 2) branchAxes = opening.map(j => j.column);
+      if (branchAxes && /^\s*│\s+│\s*$/.test(line)) {
+        return asciiCharacterGridLine(' '.repeat(branchAxes[0]) + '│' +
+          ' '.repeat(Math.max(0, branchAxes[1] - branchAxes[0] - 1)) + '│');
+      }
+      if (branchAxes && /^\s*└[─┬]+┘\s*$/.test(line)) {
+        const width = branchAxes[1] - branchAxes[0] - 1;
+        const middle = joints.find(j => j.char === '┬');
+        const offset = middle ? Math.max(0, Math.min(width - 1,
+          middle.column - joints[0].column - 1)) : -1;
+        let rule = '─'.repeat(Math.max(0, width));
+        if (offset >= 0) rule = rule.slice(0, offset) + '┬' + rule.slice(offset + 1);
+        return asciiCharacterGridLine(' '.repeat(branchAxes[0]) + '└' + rule + '┘');
+      }
+      return asciiCharacterGridLine(line);
+    });
+    return createAsciiCharacterGridAnalysis(source, rawLines, lines, { layout: 'flow' });
+  }
+
   function analyzeAsciiDiagram(text) {
     if (!text || text.length > MAX_ASCII_TREE_LENGTH ||
       /(?:^|\n)\s*(?:const|let|var|function|class|import|export|return|def|async|await|if|for|while|SELECT|INSERT|UPDATE)\b/m.test(text) ||
@@ -4607,6 +4655,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return (
       analyzeAsciiBoxTree(text) ||
       analyzeFramedAsciiBlock(text) ||
+      analyzeConnectedAsciiFlow(text) ||
       analyzeAsciiTimelineDiagram(text) ||
       analyzeAsciiArrowDiagram(text) ||
       analyzeMultiPanelAsciiTable(text) ||

@@ -104,7 +104,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.11 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.12 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -168,6 +168,14 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.13.12 repairs detached flowchart connectors and boxed-account/frame borders
+found in the current conversation. Flowcharts no longer use the accounting
+delimiter-table layout, and horizontal frame junctions share the content axes.
+Original code nodes and copy text remain unchanged. Four conversation-derived
+fixtures check painted connector coordinates, input/source preservation, and
+horizontal reachability on desktop and mobile. Installed-browser application
+still requires verification; fixture results alone do not prove live installation.
 
 1.13.11 accommodates multi-second gaps between native paragraph batches after
 backend completion. The live bridge now allows ten quiet seconds with a fixed
