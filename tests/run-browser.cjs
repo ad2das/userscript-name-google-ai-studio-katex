@@ -26,6 +26,8 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('amount-token-browser.test.js');
     if (process.argv.includes('--italic-note')) suites.splice(0, suites.length, 'italic-note-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('italic-note-browser.test.js');
+    if (process.argv.includes('--won')) suites.splice(0, suites.length, 'won-symbol-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('won-symbol-browser.test.js');
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915

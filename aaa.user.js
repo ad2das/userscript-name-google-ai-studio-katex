@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.18
+// @version      1.13.19
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.18';
+  const VERSION = '1.13.19';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -618,6 +618,19 @@ ${SCOPE} :where(strong, b, .aistudio-md-repaired:not(.aistudio-md-italic)) {
   -webkit-text-stroke: 0 !important;
 }
 
+${SCOPE} .aistudio-won-amount { white-space: nowrap; }
+${SCOPE} .aistudio-won-symbol {
+  display: inline-grid;
+  vertical-align: baseline;
+}
+${SCOPE} .aistudio-won-symbol > .aistudio-won-source {
+  grid-area: 1 / 1;
+  visibility: hidden;
+}
+${SCOPE} .aistudio-won-symbol::after {
+  content: '₩';
+  grid-area: 1 / 1;
+}
 ${SCOPE} .aistudio-amount-token,
 ${SCOPE} .aistudio-amount-token :where(span, ms-cmark-node) {
   white-space: nowrap !important;
@@ -4810,11 +4823,82 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return repaired;
   }
 
+  function clearWonSymbol(symbol) {
+    const amount = symbol.parentElement?.classList.contains('aistudio-won-amount') ? symbol.parentElement : null;
+    const source = symbol.firstElementChild;
+    if (source?.classList.contains('aistudio-won-source')) source.replaceWith(...source.childNodes);
+    symbol.replaceWith(...symbol.childNodes);
+    if (amount) amount.replaceWith(...amount.childNodes);
+  }
+
+  function hasWonContext(block) {
+    if (!block) return false;
+    const context = (closest(block, 'blockquote') || block).textContent || '';
+    return context.length <= 6000 && /(?:재고|원가|매입|매출|판매|금액|충당금|계약|단가|평가손실)/.test(context) &&
+      !/(?:정규식|역슬래시|파일|경로|코드|치환|이스케이프|regex)/i.test(context);
+  }
+
+  function validWonSymbol(symbol) {
+    if (symbol.textContent !== '\\' || !hasWonContext(closest(symbol, 'p,td,th')) ||
+        closest(symbol, INLINE_NESTED_SKIP_SELECTOR + ',' + USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',a,[contenteditable],[role="button"],[role="link"],[role="textbox"]')) return false;
+    const amountHost = symbol.parentElement?.classList.contains('aistudio-won-amount') ? symbol.parentElement : symbol;
+    const before = amountHost.previousSibling?.textContent || '';
+    const after = (symbol.nextSibling?.textContent || '') + (amountHost !== symbol ? amountHost.nextSibling?.textContent || '' : '');
+    const amount = after.match(/^((?:\d{1,3}(?:,\d{3})+|\d{1,12})(?:\.\d{1,2})?)(?=$|[\s)）.,!?;:가-힣])/);
+    return (!before || /[\s(（:：①-⑳]$/.test(before)) && !!amount &&
+      !/^[.,]\d|^[\\/A-Za-z0-9_]/.test(after.slice(amount[1].length));
+  }
+
+  function repairWonSymbols(root) {
+    // A literal U+005C in Korean accounting prose is sometimes used as KRW.
+    // Project only that glyph; retain the original text for native source/copy.
+    const blocks = new Set(root.querySelectorAll('p,td,th'));
+    const own = closest(root, 'p,td,th');
+    if (own) blocks.add(own);
+    let repaired = 0;
+    for (const block of blocks) {
+      if (!hasWonContext(block)) continue;
+      const nodes = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      for (const node of nodes) {
+        if (closest(node.parentElement, INLINE_NESTED_SKIP_SELECTOR + ',' + USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',a,.aistudio-won-symbol,[contenteditable],[role="button"],[role="link"],[role="textbox"]') ||
+            closest(node.parentElement, ':is(span,strong,b,em,i,ms-cmark-node):is([role],[tabindex])')) continue;
+        const matches = Array.from(node.nodeValue.matchAll(/(^|[\s(（:：①-⑳])\\((?:\d{1,3}(?:,\d{3})+|\d{1,12})(?:\.\d{1,2})?)(?=$|[\s)）.,!?;:가-힣])/g));
+        for (const match of matches.reverse()) {
+          const start = match.index + match[1].length;
+          const end = start + 1 + match[2].length;
+          // A dot followed by a digit indicates an invalid/long decimal, not
+          // a sentence-ending period. Never reinterpret path components.
+          if (/^[.,]\d|^[\\/A-Za-z0-9_]/.test(node.nodeValue.slice(end))) continue;
+          const glyph = node.splitText(start);
+          const amountText = glyph.splitText(1);
+          amountText.splitText(match[2].length);
+          const amount = document.createElement('span');
+          amount.className = 'aistudio-won-amount';
+          const symbol = document.createElement('span');
+          symbol.className = 'aistudio-won-symbol';
+          symbol.setAttribute('aria-label', '₩');
+          const source = document.createElement('span');
+          source.className = 'aistudio-won-source';
+          source.setAttribute('aria-hidden', 'true');
+          glyph.before(amount);
+          source.append(glyph);
+          symbol.append(source);
+          amount.append(symbol, amountText);
+          repaired++;
+        }
+      }
+    }
+    return repaired;
+  }
+
   function hasRepairableRoot(root, text = '') {
     const rootText = text || (root && root.textContent) || '';
 
     return Boolean(
       hasRepairableText(rootText) ||
+      /\\\d/.test(rootText) ||
       (/\d원/.test(rootText) && Array.from(root?.querySelectorAll('strong:not(.aistudio-amount-token), b:not(.aistudio-amount-token)') || []).some(isAmountToken)) ||
       (/\|\s*:?-{3,}:?\s*\|/.test(rootText) && !!root?.querySelector('br')) ||
       ((/p\.\s*\d{2,10}(?:\s*\/\s*PDF\s*(?:p\.\s*)?\d{2,10}|:[^\n]{1,240}(?:\bp\.|\bLevel)\s*\d{1,10})/i.test(rootText) ||
@@ -6138,6 +6222,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     repaired += repairMisparsedItalicNotes(root);
     repaired += repairInlineEmphasis(root);
     repaired += repairAmountTokens(root);
+    repaired += repairWonSymbols(root);
     if (/\|\s*:?-{3,}:?\s*\|/.test(rootText)) repaired += repairRawTables(root);
     // Do not retry individual text nodes after context-aware repair: a code
     // span/fence can start in a sibling node, so per-node fallback loses safety.
@@ -7187,6 +7272,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
     for (const paragraph of userRoot.querySelectorAll('.aistudio-raw-table-host')) clearRawTable(paragraph);
     for (const token of userRoot.querySelectorAll('.aistudio-amount-token')) token.classList.remove('aistudio-amount-token');
+    for (const symbol of userRoot.querySelectorAll('.aistudio-won-symbol')) clearWonSymbol(symbol);
 
     const marked = [];
 
@@ -7268,7 +7354,13 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         pendingCleanup.add(element);
         changed = true;
       }
-      if (closest(element, USER_SELECTOR)) continue;
+      if (closest(element, USER_SELECTOR)) {
+        // A framework may move a previously repaired model block into a user
+        // turn. Defer cleanup through the same generation/editor guard.
+        pendingCleanup.add(element);
+        changed = true;
+        continue;
+      }
       // Cheap bookkeeping only. Never scan entire descendants in this callback.
       const knownRoot = knownRepairRootForMutation(element);
       if (knownRoot && mutation.type !== 'attributes') {
@@ -7319,6 +7411,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (!element.isConnected || promptEditorFor(element)) continue;
       clearFallbackRootsInsideUser(element);
       if (closest(element, USER_SELECTOR)) continue;
+      const wonBlock = closest(element, 'p,td,th') || element;
+      for (const symbol of wonBlock.querySelectorAll('.aistudio-won-symbol')) {
+        if (!validWonSymbol(symbol)) clearWonSymbol(symbol);
+      }
       const amount = closest(element, '.aistudio-amount-token');
       if (amount && !isAmountToken(amount)) amount.classList.remove('aistudio-amount-token');
       for (const token of element.querySelectorAll('.aistudio-amount-token')) {
