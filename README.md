@@ -104,7 +104,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.10 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.11 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
@@ -168,6 +168,12 @@ Fixtures also verify zero userscript auth-refresh/fetch calls and exactly one na
 Run click. They do not validate a signed-in AI Studio session or prove that a real
 Google permission error is fixed. See [the 1.12.0 review](AUDIT-1.12.0.md) and
 [historical audits](AUDIT.md) for evidence and limits.
+
+1.13.11 accommodates multi-second gaps between native paragraph batches after
+backend completion. The live bridge now allows ten quiet seconds with a fixed
+thirty-second ceiling. Idle waiting does not poll or repaint; prompt activity
+still clears the bridge immediately. Regressions cover a 5.5-second native pause,
+source preservation, no idle polling, and expiry despite continued mutations.
 
 1.13.10 keeps the live-to-native transition available while late response text
 is still arriving after the backend reports completion. It ends after two quiet

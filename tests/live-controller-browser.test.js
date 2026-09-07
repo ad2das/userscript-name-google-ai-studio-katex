@@ -80,6 +80,37 @@ async (page) => {
   await page.waitForFunction(() => !__controller.stats().layerConnected);
   await page.evaluate(() => {
     document.querySelector('button').textContent = 'Stop';
+    document.getElementById('model').innerHTML = '<p>늦은 네이티브 출력을 기다리는 본문입니다.</p>';
+  });
+  await page.waitForFunction(() => __controller.stats().layerConnected);
+  await page.evaluate(() => { document.querySelector('button').textContent = 'Run'; });
+  await page.waitForFunction(() => __controller.stats().draining);
+  const idleRenders = await page.evaluate(() => __controller.stats().renderedBlocks);
+  await page.waitForTimeout(5500);
+  checks.postRunPauseDoesNotPoll = await page.evaluate(before =>
+    __controller.stats().renderedBlocks === before, idleRenders);
+  await page.evaluate(() => {
+    const p = document.createElement('p');
+    p.id = 'paused-render';
+    p.textContent = "공백 뒤 다시 도착한 **'강조";
+    document.getElementById('model').append(p);
+  });
+  await page.waitForTimeout(100);
+  checks.postRunLongPauseStillPaints = await page.evaluate(() =>
+    __controller.stats().ranges === 1 &&
+    document.getElementById('paused-render').textContent === "공백 뒤 다시 도착한 **'강조");
+  await page.evaluate(() => {
+    let revision = 0;
+    globalThis.__lateMutationTimer = setInterval(() => {
+      document.getElementById('paused-render').firstChild.nodeValue = `계속 도착한 **'강조 ${++revision}`;
+    }, 200);
+  });
+  await page.waitForTimeout(25000);
+  checks.postRunBridgeHasHardDeadline = await page.evaluate(() =>
+    !__controller.stats().draining && !__controller.stats().layerConnected);
+  await page.evaluate(() => clearInterval(__lateMutationTimer));
+  await page.evaluate(() => {
+    document.querySelector('button').textContent = 'Stop';
     document.getElementById('model').innerHTML = '<p>**다음 생성** 끝</p>';
   });
   await page.waitForFunction(() => __controller.stats().ranges === 1);

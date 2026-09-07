@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.10
+// @version      1.13.11
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.10';
-  const STYLE_ID = 'aistudio-mobile-safe-11310-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-11310';
+  const VERSION = '1.13.11';
+  const STYLE_ID = 'aistudio-mobile-safe-11311-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-11311';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -7332,7 +7332,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     function extendDrain() {
       if (!draining) return;
       clearTimeout(drainTimer);
-      drainTimer = setTimeout(finishDrain, Math.max(0, Math.min(2000, drainDeadline - Date.now())));
+      drainTimer = setTimeout(finishDrain, Math.max(0, Math.min(10000, drainDeadline - Date.now())));
     }
     function finishDrain() {
       draining = false;
@@ -7349,9 +7349,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         drainTimer = null;
       } else if (wasActive) {
         draining = true;
-        // Backend completion can precede native text rendering. Keep a quiet
-        // window for late paragraphs, with a hard bound and immediate typing exit.
-        drainDeadline = Date.now() + 10000;
+        // Backend completion can precede native text rendering, including
+        // multi-second pauses between paragraph batches. This timer does not
+        // poll or repaint idle output; typing still tears the layer down at once.
+        drainDeadline = Date.now() + 30000;
         extendDrain();
       }
       wasActive = running;
