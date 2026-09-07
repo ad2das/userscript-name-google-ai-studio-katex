@@ -34,6 +34,10 @@ async (page) => {
       let opening;
       for (const row of points) {
         if (row.some(p => p.char === '┌')) opening = row;
+        else if (opening?.length === 1 && row.length === 1 && /[┤└]/.test(row[0].char)) {
+          drift = Math.max(drift, Math.abs(row[0].x - opening[0].x));
+          comparisons++;
+        }
         else if (opening && row.length === opening.length && row.length >= 2) {
           row.forEach((p, i) => { drift = Math.max(drift, Math.abs(p.x - opening[i].x)); comparisons++; });
         } else if (opening && row[0]?.char === '└' && row[row.length - 1]?.char === '┘') {

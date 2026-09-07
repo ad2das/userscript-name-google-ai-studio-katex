@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.12
+// @version      1.13.13
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,9 +20,9 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.12';
-  const STYLE_ID = 'aistudio-mobile-safe-11312-style';
-  const VERSION_ATTR = 'data-aistudio-mobile-safe-11312';
+  const VERSION = '1.13.13';
+  const STYLE_ID = 'aistudio-mobile-safe-11313-style';
+  const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
   const KATEX_CSS_ID = 'aistudio-katex-0181-css';
   const KATEX_CSS_URL =
@@ -4618,6 +4618,21 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const source = text.replace(/\r\n?/g, '\n');
     const rawLines = source.split('\n');
     if (rawLines.length < 3 || rawLines.length > MAX_ASCII_TREE_LINES) return null;
+    // A centered parent between two explicitly marked outgoing branches is a
+    // fork, even when source indentation places the two corners on different
+    // columns. Keep every label/arrow in source order; normalize only layout.
+    const forkRows = rawLines.map(line => line.trim());
+    if (forkRows.length === 3 && /^┌─+\s*\[/.test(forkRows[0]) &&
+        /^\[[^\]\n]+\]$/.test(forkRows[1]) && /^└─+\s*\[/.test(forkRows[2]) &&
+        forkRows.filter(line => /[┌└]/.test(line)).length === 2) {
+      const axis = asciiCharacterGridLine(forkRows[1]).columns + 1;
+      const normalized = [
+        ' '.repeat(axis) + forkRows[0],
+        forkRows[1] + ' ┤',
+        ' '.repeat(axis) + forkRows[2]
+      ].map(asciiCharacterGridLine);
+      return createAsciiCharacterGridAnalysis(source, rawLines, normalized, { layout: 'flow' });
+    }
     let branchAxes = null;
     const lines = rawLines.map(line => {
       const chars = Array.from(line);

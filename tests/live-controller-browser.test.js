@@ -84,7 +84,12 @@ async (page) => {
   });
   await page.waitForFunction(() => __controller.stats().layerConnected);
   await page.evaluate(() => { document.querySelector('button').textContent = 'Run'; });
-  await page.waitForFunction(() => __controller.stats().draining);
+  // Entering the completion phase can precede the already-queued animation
+  // frame. Start the no-poll measurement only after that work has drained.
+  await page.waitForFunction(() => {
+    const stats = __controller.stats();
+    return stats.draining && stats.queued === 0 && !stats.discovering;
+  });
   const idleRenders = await page.evaluate(() => __controller.stats().renderedBlocks);
   await page.waitForTimeout(5500);
   checks.postRunPauseDoesNotPoll = await page.evaluate(before =>
@@ -95,7 +100,7 @@ async (page) => {
     p.textContent = "공백 뒤 다시 도착한 **'강조";
     document.getElementById('model').append(p);
   });
-  await page.waitForTimeout(100);
+  await page.waitForFunction(() => __controller.stats().ranges === 1, null, { timeout: 3000 });
   checks.postRunLongPauseStillPaints = await page.evaluate(() =>
     __controller.stats().ranges === 1 &&
     document.getElementById('paused-render').textContent === "공백 뒤 다시 도착한 **'강조");
