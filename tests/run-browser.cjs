@@ -28,6 +28,8 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('italic-note-browser.test.js');
     if (process.argv.includes('--won')) suites.splice(0, suites.length, 'won-symbol-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('won-symbol-browser.test.js');
+    if (process.argv.includes('--completion-latency')) suites.splice(0, suites.length, 'completion-latency-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('completion-latency-browser.test.js');
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915

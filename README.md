@@ -12,6 +12,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.20 wakes completion work promptly on Run/Stop changes, uses short quiet
+  windows and frame-sliced continuations instead of stacked idle waits. The
+  generation/typing guards and bounded scan budget remain in place. A 48-paragraph
+  busy-idle fixture measures completion and late-tail latency.
 - 1.13.19 projects literal backslashes before Korean accounting amounts as won
   signs, preserving the original text and native nodes. Code, paths, regex
   examples, user input and generation-time mutations are excluded.
@@ -129,7 +133,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.19 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.20 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

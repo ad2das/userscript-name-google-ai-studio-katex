@@ -1190,6 +1190,10 @@ async (page) => {
         sourceOf('unscoped-bold-with-katex-annotation') ===
           String.raw`\frac{9}{12}`,
       unscopedRootMarked:
+        // A faster completed-turn pass may repair these descendants before
+        // fallback discovery reaches them. Either local or enclosing marked
+        // ownership is valid; text, math identity and styles are tested above.
+        !!unscopedBold.closest('[data-aistudio-repair-root="1"]') ||
         unscopedBold.querySelector(
           '[data-aistudio-repair-root="1"]'
         ) !== null,
@@ -1199,7 +1203,7 @@ async (page) => {
       unscopedBreakMarkersRemoved:
         !unscopedBreak.textContent.includes('<br>'),
       unscopedBreakRootMarked:
-        unscopedBreak.getAttribute('data-aistudio-repair-root') === '1',
+        !!unscopedBreak.closest('[data-aistudio-repair-root="1"]'),
       unscopedUserPreserved:
         document.getElementById('unscoped-user-literal').textContent ===
           '사용자의 **보존할 원문**입니다.' &&
@@ -1555,7 +1559,7 @@ async (page) => {
     ]) ||
     !rendering.fencedMathPreserved ||
     rendering.unexpectedBarrierMathSources.length !== 0 ||
-    rendering.version !== '1.13.19'
+    rendering.version !== '1.13.20'
   ) {
     throw new Error(`Firefox rendering regression: ${JSON.stringify(rendering)}`);
   }

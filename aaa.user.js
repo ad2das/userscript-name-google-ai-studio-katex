@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.19
+// @version      1.13.20
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.19';
+  const VERSION = '1.13.20';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -57,8 +57,8 @@
   const PROMPT_IDLE_MS = 1600;
   const MUTATION_SCAN_DELAY_MS = 450;
   const GENERATION_RECHECK_MS = 750;
-  const OLD_TURN_WAIT_MS = 500;
-  const LAST_TURN_WAIT_MS = 1500;
+  const OLD_TURN_WAIT_MS = 150;
+  const LAST_TURN_WAIT_MS = 300;
   const RETRY_BASE_MS = 2000;
   const RETRY_MAX_MS = 30000;
   const MAX_MATCH_INNER_LENGTH = 2000;
@@ -1340,6 +1340,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let liveEmphasisController = null;
   let observer = null;
   let repairedTotal = 0;
+  let generationObserved = false;
   let lastPromptActivity = -Infinity;
   let promptComposing = false;
   let mathFitResizeDirty = true;
@@ -6221,8 +6222,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     repaired += repairProseCodeBold(root);
     repaired += repairMisparsedItalicNotes(root);
     repaired += repairInlineEmphasis(root);
-    repaired += repairAmountTokens(root);
-    repaired += repairWonSymbols(root);
+    if (/\d원/.test(rootText)) repaired += repairAmountTokens(root);
+    if (/\\\d/.test(rootText)) repaired += repairWonSymbols(root);
     if (/\|\s*:?-{3,}:?\s*\|/.test(rootText)) repaired += repairRawTables(root);
     // Do not retry individual text nodes after context-aware repair: a code
     // span/fence can start in a sibling node, so per-node fallback loses safety.
@@ -6989,6 +6990,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const html = document.documentElement;
     const pageGenerating = generating();
+    generationObserved = pageGenerating;
 
     if (html) {
       html.setAttribute(
@@ -7010,7 +7012,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         html.setAttribute('data-aistudio-mobile-fix-deferred-roots', '-1');
       }
 
-      schedule(GENERATION_RECHECK_MS);
+      schedule(GENERATION_RECHECK_MS, true);
       return;
     }
 
@@ -7095,8 +7097,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
         states.set(root, state);
         schedule(
-          (isLastTurn ? LAST_TURN_WAIT_MS : OLD_TURN_WAIT_MS) + 50,
-          visiblePriority
+          (isLastTurn ? LAST_TURN_WAIT_MS : OLD_TURN_WAIT_MS) + 16,
+          true
         );
         continue;
       }
@@ -7114,7 +7116,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const stabilityRemaining = wait - (now - state.since);
 
       if (stabilityRemaining > 0) {
-        schedule(stabilityRemaining + 50, visiblePriority);
+        schedule(stabilityRemaining + 16, true);
         continue;
       }
 
@@ -7151,7 +7153,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         });
 
         /* 새 KaTeX의 실제 폭은 DOM 삽입 다음 프레임에서 계산한다. */
-        schedule(hasRepairableRoot(root, after) ? 250 : 100);
+        schedule(16, true);
 
         continue;
       }
@@ -7339,12 +7341,20 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function handleMutations(mutations) {
     let changed = false;
+    let controlChanged = false;
     const invalidated = new Set();
     for (const mutation of mutations) {
       const element = elementOf(mutation.target);
-      if (!element || promptEditorFor(element)) continue;
+      if (!element) continue;
+      if (promptEditorFor(element)) {
+        // The official Run/Stop control can live inside the prompt container.
+        // Observe its signal without walking or repairing any editor content.
+        if (closest(element, 'button')) { changed = true; controlChanged = true; }
+        continue;
+      }
       if (closest(element, '.aistudio-live-preview-layer')) continue;
       const changedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
+      if (closest(element, 'button') || changedNodes.some(node => node.nodeType === 1 && node.matches('button'))) controlChanged = true;
       if (changedNodes.length && changedNodes.every(node =>
           node.nodeType === 1 && node.matches('.aistudio-live-preview-layer'))) continue;
       if (mutation.attributeName === 'class' &&
@@ -7402,7 +7412,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
     if (changed) {
       mathFitDirty = true;
-      schedule(MUTATION_SCAN_DELAY_MS);
+      // Stop -> Run should not wait behind an idle callback. Keep token-stream
+      // polling coalesced; every urgent scan still rechecks generation/typing.
+      schedule(controlChanged ? 0 : generationObserved ? MUTATION_SCAN_DELAY_MS : 120, true);
     }
   }
 

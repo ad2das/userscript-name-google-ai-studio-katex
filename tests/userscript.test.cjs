@@ -64,7 +64,7 @@ assert.match(
 );
 assert.match(
   source,
-  /const pageGenerating = generating\(\);[\s\S]*?if \(pageGenerating\) \{[\s\S]*?schedule\(GENERATION_RECHECK_MS\);\s*return;[\s\S]*?fitWideDisplayMath\(mathFitResizeDirty\)/
+  /const pageGenerating = generating\(\);[\s\S]*?if \(pageGenerating\) \{[\s\S]*?schedule\(GENERATION_RECHECK_MS, true\);\s*return;[\s\S]*?fitWideDisplayMath\(mathFitResizeDirty\)/
 );
 assert.doesNotMatch(source, /recoverPermissionError|permissionErrorSurface/);
 assert.doesNotMatch(
