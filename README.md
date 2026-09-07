@@ -12,6 +12,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.17 keeps short, standalone bold Korean amounts such as `10,000원` on one
+  line without changing native text or nodes. Long prose, code, links, and user
+  input remain untouched; reused native emphasis loses this style when changed.
+
 - 1.13.16 restores bounded raw pipe tables left inside a native paragraph, including
   accounting T-accounts with an intentionally empty separator column. The display
   preserves numeric alignment, bold/italic runs, original native nodes, and whole-table
@@ -117,7 +121,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.16 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.17 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

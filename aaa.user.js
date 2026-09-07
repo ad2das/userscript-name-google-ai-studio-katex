@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.16
+// @version      1.13.17
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.16';
+  const VERSION = '1.13.17';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -616,6 +616,13 @@ ${SCOPE} :where(strong, b, .aistudio-md-repaired:not(.aistudio-md-italic)) {
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
+}
+
+${SCOPE} .aistudio-amount-token,
+${SCOPE} .aistudio-amount-token :where(span, ms-cmark-node) {
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
 }
 
 /* AI Studio가 문자로 노출한 속성 없는 <u>...</u>의 안전한 fallback. */
@@ -4782,11 +4789,33 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     ));
   }
 
+  function isAmountToken(element) {
+    const value = element.textContent || '';
+    if (value.length > 16 || !/^(?:\d{1,3}(?:,\d{3})+|\d{1,12})(?:\.\d{1,2})?원$/.test(value) ||
+        closest(element, INLINE_NESTED_SKIP_SELECTOR + ',' + USER_SELECTOR + ',[contenteditable],[role="button"],[role="link"],[role="textbox"]') ||
+        closest(element, ':is(strong,b,span,ms-cmark-node):is([role],[tabindex])')) return false;
+    const descendants = element.querySelectorAll('*');
+    return descendants.length <= 32 && Array.from(descendants).every(node =>
+      /^(SPAN|MS-CMARK-NODE)$/.test(node.tagName) && !node.matches('[role],[tabindex],[contenteditable],.inline-code'));
+  }
+
+  function repairAmountTokens(root) {
+    let repaired = 0;
+    for (const token of root.querySelectorAll('strong, b')) {
+      if (!token.classList.contains('aistudio-amount-token') && isAmountToken(token)) {
+        token.classList.add('aistudio-amount-token');
+        repaired++;
+      }
+    }
+    return repaired;
+  }
+
   function hasRepairableRoot(root, text = '') {
     const rootText = text || (root && root.textContent) || '';
 
     return Boolean(
       hasRepairableText(rootText) ||
+      (/\d원/.test(rootText) && Array.from(root?.querySelectorAll('strong:not(.aistudio-amount-token), b:not(.aistudio-amount-token)') || []).some(isAmountToken)) ||
       (/\|\s*:?-{3,}:?\s*\|/.test(rootText) && !!root?.querySelector('br')) ||
       ((/p\.\s*\d{2,10}(?:\s*\/\s*PDF\s*(?:p\.\s*)?\d{2,10}|:[^\n]{1,240}(?:\bp\.|\bLevel)\s*\d{1,10})/i.test(rootText) ||
         /\d{1,5}p\s*\d{1,5}p\s*\([^\n()]{1,240}\)\s*(?:와|과)\s*\d{1,5}p\s*\d{1,5}p/i.test(rootText) ||
@@ -6072,6 +6101,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (hasAsciiBoxTreeHint(rootText)) repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
     repaired += repairInlineEmphasis(root);
+    repaired += repairAmountTokens(root);
     if (/\|\s*:?-{3,}:?\s*\|/.test(rootText)) repaired += repairRawTables(root);
     // Do not retry individual text nodes after context-aware repair: a code
     // span/fence can start in a sibling node, so per-node fallback loses safety.
@@ -7120,6 +7150,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       return;
     }
     for (const paragraph of userRoot.querySelectorAll('.aistudio-raw-table-host')) clearRawTable(paragraph);
+    for (const token of userRoot.querySelectorAll('.aistudio-amount-token')) token.classList.remove('aistudio-amount-token');
 
     const marked = [];
 
@@ -7252,6 +7283,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (!element.isConnected || promptEditorFor(element)) continue;
       clearFallbackRootsInsideUser(element);
       if (closest(element, USER_SELECTOR)) continue;
+      const amount = closest(element, '.aistudio-amount-token');
+      if (amount && !isAmountToken(amount)) amount.classList.remove('aistudio-amount-token');
+      for (const token of element.querySelectorAll('.aistudio-amount-token')) {
+        if (!isAmountToken(token)) token.classList.remove('aistudio-amount-token');
+      }
       const rawParagraph = closest(element, 'p');
       const rawView = rawParagraph && rawTableViews.get(rawParagraph);
       if (rawView && (!rawParagraph.contains(rawView.source) || rawView.source.contains(element) || element === rawParagraph)) clearRawTable(rawParagraph);

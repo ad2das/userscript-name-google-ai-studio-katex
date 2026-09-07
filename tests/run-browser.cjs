@@ -22,6 +22,8 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('scroll-priority-browser.test.js');
     if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('current-diagrams-browser.test.js');
     if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('raw-table-browser.test.js');
+    if (process.argv.includes('--amount')) suites.splice(0, suites.length, 'amount-token-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('amount-token-browser.test.js');
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915
