@@ -12,6 +12,9 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.22 keeps mobile list-item and paragraph equations readable when a native
+  inline KaTeX atom is wider than its container. Only proven-wide equations get
+  a keyboard-accessible horizontal viewport; native math nodes stay intact.
 - 1.13.21 defers the main mutation observer's record processing while typing,
   including beforeinput/keydown and IME activity. Deferred records are replayed
   in 64-record slices after input settles, preserving late output rewrites.
@@ -137,7 +140,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.21 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.22 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

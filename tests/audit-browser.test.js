@@ -28,6 +28,7 @@ async (page) => {
     mount('batch-a', '<p><code>**첫째**</code></p>');
     mount('batch-b', '<p><code>**둘째**</code></p>');
     mount('native', '<p><ms-katex display="false"></ms-katex></p>');
+    mount('inline-overflow', '<ul style="width:180px"><li><p><ms-katex id="wide-inline" display="false"></ms-katex></p></li></ul>');
     mount('fit', '<div class="markdown" style="width:180px"><span id="fit-host"></span></div>');
     mount('nested-protected', '<p>\\begin{aligned}x&amp;=y\\end{aligned}<span data-turn-role="user">**사용자 원문**</span><span contenteditable="plaintext-only">**편집 원문**</span></p>');
     const unknown = document.createElement('ms-chat-turn');
@@ -42,6 +43,8 @@ async (page) => {
     document.getElementById('responses').append(classArrival);
     window.__nativeHost = document.querySelector('#native ms-katex');
     katex.render('\\mathbf{10{,}000\\text{원}}%SECRET_COMMENT\n+x', __nativeHost);
+    window.__wideInlineHost = document.getElementById('wide-inline');
+    katex.render('\\text{시가총액}=\\text{당기순이익}\\times\\mathrm{PER}=\\mathbf{1{,}000{,}000\\text{원}}', __wideInlineHost);
     katex.render('x', document.getElementById('fit-host'), { displayMode: true });
     window.__nestedProtected = Array.from(document.querySelectorAll('#nested-protected [data-turn-role], #nested-protected [contenteditable]'));
     window.__nestedText = __nestedProtected.map((el) => el.innerHTML);
@@ -71,6 +74,13 @@ async (page) => {
     tests.nativeInlinePreserved = !__nativeHost.querySelector('.katex-display');
     tests.nativeCommentPreserved = __nativeHost.querySelector('annotation').textContent.includes('%SECRET_COMMENT') &&
       !__nativeHost.querySelector('.katex-html').textContent.includes('SECRET_COMMENT');
+    const inlineScroller = document.querySelector('#inline-overflow .aistudio-inline-math-scroll');
+    tests.wideInlineIdentity = document.getElementById('wide-inline') === __wideInlineHost;
+    tests.wideInlineContained = !!inlineScroller &&
+      inlineScroller.clientWidth <= 180 &&
+      inlineScroller.scrollWidth > inlineScroller.clientWidth &&
+      getComputedStyle(inlineScroller).overflowX === 'auto' &&
+      inlineScroller.getAttribute('tabindex') === '0';
     tests.rawControlsPreserved = __controls.every((node) => node.isConnected);
     const codeRun = document.createElement('button');
     codeRun.textContent = 'Run';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.21
+// @version      1.13.22
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.21';
+  const VERSION = '1.13.22';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1292,6 +1292,30 @@ ${SCOPE} .aistudio-math-scroll .katex-display > .katex {
   width: max-content !important;
   max-width: none !important;
   text-align: left !important;
+}
+
+/* A native inline ms-katex is an unbreakable atom.  When the whole equation
+ * is wider than a list item or paragraph, AI Studio clips its right edge at
+ * mobile widths.  Only proven-wide atoms receive this keyboard-accessible
+ * viewport; ordinary inline equations keep their native baseline behavior. */
+${SCOPE} .aistudio-inline-math-scroll {
+  display: inline-block !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding-block: 0.3em !important;
+  vertical-align: middle !important;
+}
+
+${SCOPE} .aistudio-inline-math-scroll > :where(
+  ms-katex:not(.display),
+  mjx-container:not([display="true"])
+) {
+  display: inline-block !important;
+  width: max-content !important;
+  max-width: none !important;
 }
 
 /*
@@ -6457,7 +6481,61 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
     }
 
+    fitted += containWideInlineMath();
+
     return fitted;
+  }
+
+  function containWideInlineMath() {
+    const candidates = Array.from(document.querySelectorAll(
+      'ms-katex:not(.display), mjx-container:not([display="true"])'
+    ));
+    let contained = 0;
+
+    for (const host of candidates) {
+      if (
+        !host.isConnected ||
+        closest(host, USER_SELECTOR) ||
+        !closest(host, STYLE_ROOT_SELECTOR) ||
+        host.parentElement?.classList.contains('aistudio-inline-math-scroll') ||
+        closest(host, '.katex-display, ms-katex.display')
+      ) {
+        continue;
+      }
+
+      let container = host.parentElement;
+      let remainingAscents = 6;
+      while (
+        container &&
+        container !== document.body &&
+        !container.clientWidth &&
+        remainingAscents > 0
+      ) {
+        container = container.parentElement;
+        remainingAscents -= 1;
+      }
+
+      const availableWidth = Math.floor(container?.clientWidth || 0);
+      const naturalWidth = Math.ceil(Math.max(
+        host.scrollWidth || 0,
+        host.getBoundingClientRect().width || 0
+      ));
+
+      if (!availableWidth || naturalWidth <= availableWidth + 1) {
+        continue;
+      }
+
+      const scroller = document.createElement('span');
+      scroller.className = 'aistudio-inline-math-scroll';
+      scroller.setAttribute('role', 'region');
+      scroller.setAttribute('aria-label', '긴 인라인 수식 가로 스크롤');
+      scroller.setAttribute('tabindex', '0');
+      host.before(scroller);
+      scroller.appendChild(host);
+      contained += 1;
+    }
+
+    return contained;
   }
 
   function nearViewport(element) {
