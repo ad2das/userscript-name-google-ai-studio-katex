@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.20
+// @version      1.13.21
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.20';
+  const VERSION = '1.13.21';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1343,6 +1343,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   let generationObserved = false;
   let lastPromptActivity = -Infinity;
   let promptComposing = false;
+  const deferredMutationBatches = [];
+  let deferredMutationOffset = 0;
   let mathFitResizeDirty = true;
   let fallbackDirty = true;
   const mathFitCache = new WeakMap();
@@ -6941,6 +6943,21 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       schedule(promptComposing ? PROMPT_IDLE_MS : Math.max(50, PROMPT_IDLE_MS - (Date.now() - lastPromptActivity) + 50));
       return;
     }
+    // Keep native editor mutation storms off the keystroke's microtask path.
+    // Replay only a small slice after typing settles; retain output mutations
+    // too, so late native rewrites and ownership cleanup are not lost.
+    if (deferredMutationBatches.length) {
+      const batch = deferredMutationBatches[0];
+      const end = Math.min(batch.length, deferredMutationOffset + 64);
+      handleMutations(batch.slice(deferredMutationOffset, end));
+      deferredMutationOffset = end;
+      if (end === batch.length) {
+        deferredMutationBatches.shift();
+        deferredMutationOffset = 0;
+      }
+      schedule(16, true);
+      return;
+    }
     if (observer) {
       handleMutations(observer.takeRecords());
       observer.disconnect();
@@ -7340,6 +7357,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   }
 
   function handleMutations(mutations) {
+    if (!mutations.length) return;
+    // Guard the callback itself, not only scan(). Framework changes outside
+    // the textarea can otherwise trigger thousands of ancestor lookups/key.
+    if (promptEditorActive()) {
+      deferredMutationBatches.push(mutations);
+      schedule(PROMPT_IDLE_MS + 50);
+      return;
+    }
     let changed = false;
     let controlChanged = false;
     const invalidated = new Set();
@@ -7906,7 +7931,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     };
     // Passive activity observation only: never read prompt values, cancel input,
     // intercept keyboard shortcuts, or keep output frozen for idle focus.
-    for (const type of ['focusin', 'input', 'compositionstart', 'compositionend']) {
+    for (const type of ['focusin', 'keydown', 'beforeinput', 'input', 'compositionstart', 'compositionend']) {
       document.addEventListener(type, notePromptActivity, { passive: true, capture: true });
     }
     if (promptEditorFor(document.activeElement)) lastPromptActivity = Date.now();

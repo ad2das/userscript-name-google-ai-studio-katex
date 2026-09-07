@@ -12,6 +12,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.21 defers the main mutation observer's record processing while typing,
+  including beforeinput/keydown and IME activity. Deferred records are replayed
+  in 64-record slices after input settles, preserving late output rewrites.
+  The typing regression now also tests the full installed configuration.
 - 1.13.20 wakes completion work promptly on Run/Stop changes, uses short quiet
   windows and frame-sliced continuations instead of stacked idle waits. The
   generation/typing guards and bounded scan budget remain in place. A 48-paragraph
@@ -133,7 +137,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.20 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.21 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
