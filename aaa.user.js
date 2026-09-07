@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.13
+// @version      1.13.16
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.13';
+  const VERSION = '1.13.16';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -857,6 +857,21 @@ ${SCOPE} .aistudio-ascii-tree-visual {
   word-break: normal !important;
 }
 
+${SCOPE} .aistudio-raw-table-source {
+  display: block !important;
+  position: absolute !important;
+  width: 1px !important; height: 1px !important;
+  overflow: hidden !important; clip-path: inset(50%) !important;
+  white-space: pre !important;
+}
+${SCOPE} .aistudio-raw-table-visual { display: block !important; max-width: 100% !important; }
+${SCOPE} .aistudio-raw-table-caption { display: block !important; margin-bottom: 12px !important; }
+${SCOPE} .aistudio-raw-table-scroll { display: block !important; max-width: 100% !important; overflow-x: auto !important; }
+${SCOPE} .aistudio-raw-table-grid { display: table !important; width: max-content !important; min-width: 100% !important; border-collapse: collapse !important; }
+${SCOPE} .aistudio-raw-table-row { display: table-row !important; }
+${SCOPE} .aistudio-raw-table-cell { display: table-cell !important; padding: 8px 12px !important; vertical-align: top !important; white-space: pre !important; }
+${SCOPE} [data-aistudio-raw-table-text]::before { content: attr(data-aistudio-raw-table-text) !important; }
+
 ${SCOPE} .aistudio-ascii-tree-row {
   display: contents !important;
 }
@@ -1291,6 +1306,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
   const asciiVisuals = new WeakMap();
   const asciiPreViews = new WeakMap();
   const asciiCopyListeners = new WeakSet();
+  const rawTableViews = new WeakMap();
+  const rawTableCopyListeners = new WeakSet();
   const pendingCleanup = new Set();
   const pendingMathInvalidation = new Set();
 
@@ -4770,10 +4787,147 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     return Boolean(
       hasRepairableText(rootText) ||
-      (/p\.\s*\d{2,10}(?:\s*\/\s*PDF\s*(?:p\.\s*)?\d{2,10}|:[^\n]{1,240}(?:\bp\.|\bLevel)\s*\d{1,10})/i.test(rootText) && root?.querySelector('s, del')) ||
+      (/\|\s*:?-{3,}:?\s*\|/.test(rootText) && !!root?.querySelector('br')) ||
+      ((/p\.\s*\d{2,10}(?:\s*\/\s*PDF\s*(?:p\.\s*)?\d{2,10}|:[^\n]{1,240}(?:\bp\.|\bLevel)\s*\d{1,10})/i.test(rootText) ||
+        /\d{1,5}p\s*\d{1,5}p\s*\([^\n()]{1,240}\)\s*(?:와|과)\s*\d{1,5}p\s*\d{1,5}p/i.test(rootText) ||
+        /\d{2,10}번[\s\S]{1,500}(?:이어서|다음)\s*(?:\*\*)?\d{2,10}번/.test(rootText)) && root?.querySelector('s, del')) ||
       hasUnrepairedAsciiBoxTree(root, rootText) ||
       hasUnwrappedMobileTable(root)
     );
+  }
+
+  function projectRawTable(source) {
+    const lines = [[]];
+    let nodes = 0, visited = 0, characters = 0;
+    const visit = (node, bold = false, italic = false, depth = 0) => {
+      if (++visited > 10000 || depth > 16) return false;
+      if (node.nodeType === 8) return true;
+      if (++nodes > 1200) return false;
+      if (node.nodeType === 3) {
+        const value = node.nodeValue || '';
+        if ((characters += value.length) > 12000 || /[`\\]/.test(value)) return false;
+        for (const char of value) {
+          if (char === '\n') lines.push([]);
+          else lines[lines.length - 1].push({ char, bold, italic });
+        }
+        return true;
+      }
+      if (node.nodeType !== 1 || node.matches('[contenteditable], [role], [tabindex], .inline-code') ||
+          !/^(MS-CMARK-NODE|SPAN|STRONG|B|EM|I|BR)$/.test(node.tagName)) return false;
+      if (node.tagName === 'BR') { lines.push([]); return true; }
+      for (const child of node.childNodes) if (!visit(child, bold || /^(STRONG|B)$/.test(node.tagName), italic || /^(EM|I)$/.test(node.tagName), depth + 1)) return false;
+      return true;
+    };
+    if (!visit(source)) return null;
+    const texts = lines.map(line => line.map(item => item.char).join(''));
+    const start = texts.findIndex(line => /^\s*\|/.test(line));
+    if (start < 0 || start > 1 || (start && texts[0].length > 240)) return null;
+    while (texts.length && !texts[texts.length - 1].trim()) { texts.pop(); lines.pop(); }
+    if (texts.length - start < 3 || texts.length - start > 52) return null;
+    const split = (line) => {
+      let first = 0, last = line.length - 1;
+      while (first <= last && /\s/.test(line[first].char)) first++;
+      while (last >= first && /\s/.test(line[last].char)) last--;
+      if (line[first]?.char !== '|' || line[last]?.char !== '|') return null;
+      const cells = [[]];
+      for (let i = first + 1; i < last; i++) {
+        if (line[i].char === '|') cells.push([]);
+        else cells[cells.length - 1].push(line[i]);
+      }
+      return cells.map(cell => {
+        while (cell.length && /\s/.test(cell[0].char)) cell.shift();
+        while (cell.length && /\s/.test(cell[cell.length - 1].char)) cell.pop();
+        return cell;
+      });
+    };
+    const rows = lines.slice(start).map(split);
+    const columns = rows[0]?.length;
+    if (!columns || columns < 2 || columns > 16 || rows.some(row => !row || row.length !== columns)) return null;
+    const separators = rows[1].map(cell => cell.map(item => item.char).join(''));
+    if (!separators.every(cell => /^:?-{3,}:?$/.test(cell))) return null;
+    return { caption: start ? lines[0] : null, rows: [rows[0], ...rows.slice(2)],
+      align: separators.map(cell => cell.endsWith(':') ? (cell.startsWith(':') ? 'center' : 'right') : 'left'),
+      text: texts.join('\n') };
+  }
+
+  function clearRawTable(paragraph) {
+    const view = rawTableViews.get(paragraph);
+    if (!view) return;
+    view.visual.remove();
+    view.source.classList.remove('aistudio-raw-table-source');
+    paragraph.classList.remove('aistudio-raw-table-host');
+    rawTableViews.delete(paragraph);
+  }
+
+  function repairRawTables(root) {
+    const candidates = Array.from(root.querySelectorAll('p > ms-cmark-node'));
+    if (root.matches('p')) candidates.push(...root.children);
+    else if (root.matches('ms-cmark-node') && root.parentElement?.matches('p')) candidates.push(root);
+    let count = 0;
+    for (const source of new Set(candidates)) {
+      const paragraph = source.parentElement;
+      if (!source.matches('ms-cmark-node') || paragraph.children.length !== 1 ||
+          rawTableViews.has(paragraph) || closest(source, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ', pre, code, .inline-code, a, table')) continue;
+      const projection = projectRawTable(source);
+      if (!projection) continue;
+      const visual = document.createElement('span');
+      visual.className = 'aistudio-raw-table-visual';
+      const appendRuns = (parent, items, header = false) => {
+        let run = null, weight = null, italic = null;
+        for (const item of items) {
+          const bold = header || item.bold;
+          if (!run || weight !== bold || italic !== item.italic) {
+            run = document.createElement('span');
+            run.setAttribute('data-aistudio-raw-table-text', '');
+            run.style.fontWeight = bold ? '700' : '400';
+            run.style.fontStyle = item.italic ? 'italic' : 'normal';
+            parent.append(run); weight = bold; italic = item.italic;
+          }
+          run.setAttribute('data-aistudio-raw-table-text', run.getAttribute('data-aistudio-raw-table-text') + item.char);
+        }
+      };
+      if (projection.caption) {
+        const caption = document.createElement('span');
+        caption.className = 'aistudio-raw-table-caption';
+        caption.setAttribute('aria-hidden', 'true');
+        appendRuns(caption, projection.caption); visual.append(caption);
+      }
+      const scroller = document.createElement('span');
+      scroller.className = 'aistudio-raw-table-scroll';
+      scroller.setAttribute('role', 'region');
+      scroller.setAttribute('aria-label', '표 가로 스크롤');
+      scroller.tabIndex = 0;
+      const grid = document.createElement('span');
+      grid.className = 'aistudio-raw-table-grid';
+      grid.setAttribute('aria-hidden', 'true');
+      projection.rows.forEach((cells, rowIndex) => {
+        const row = document.createElement('span'); row.className = 'aistudio-raw-table-row';
+        cells.forEach((items, column) => {
+          const cell = document.createElement('span'); cell.className = 'aistudio-raw-table-cell';
+          cell.style.textAlign = projection.align[column];
+          appendRuns(cell, items, rowIndex === 0); row.append(cell);
+        }); grid.append(row);
+      });
+      scroller.append(grid); visual.append(scroller);
+      source.classList.add('aistudio-raw-table-source');
+      paragraph.classList.add('aistudio-raw-table-host');
+      paragraph.append(visual);
+      rawTableViews.set(paragraph, { source, visual, text: projection.text });
+      if (!rawTableCopyListeners.has(paragraph)) {
+        rawTableCopyListeners.add(paragraph);
+        paragraph.addEventListener('copy', event => {
+          const view = rawTableViews.get(paragraph), selection = window.getSelection();
+          if (!view || !event.clipboardData || selection?.rangeCount !== 1) return;
+          const range = selection.getRangeAt(0);
+          if (!paragraph.contains(range.startContainer) || !paragraph.contains(range.endContainer)) return;
+          const bounds = document.createRange(); bounds.selectNode(view.visual);
+          if (range.compareBoundaryPoints(Range.START_TO_START, bounds) > 0 || range.compareBoundaryPoints(Range.END_TO_END, bounds) < 0) return;
+          event.clipboardData.setData('text/plain', view.text); event.preventDefault();
+        });
+      }
+      count++;
+    }
+    return count;
   }
 
   function repairAsciiBoxTrees(root) {
@@ -5414,10 +5568,17 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
+  function isInlineEmphasisBoundary(element) {
+    // A verified range repair can span native renderer wrappers. Keep those
+    // wrappers in place while allowing emphasis to continue across the range.
+    return element.matches(INLINE_EMPHASIS_BOUNDARY_SELECTOR) &&
+      !(element.matches('ms-cmark-node') && closest(element, '.aistudio-page-range-repaired'));
+  }
+
   function fragmentCrossesUnsafeInlineBoundary(fragment) {
     return Array.from(
       fragment.querySelectorAll(INLINE_EMPHASIS_BOUNDARY_SELECTOR)
-    ).some((element) => !insideEmbeddedMath(element) &&
+    ).some((element) => isInlineEmphasisBoundary(element) && !insideEmbeddedMath(element) &&
       !closest(element, '.inline-code'));
   }
 
@@ -5621,7 +5782,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         } else if (node.matches(skipSelector + ',' + USER_SELECTOR)) {
           barrier();
         } else {
-          if (node.matches(INLINE_EMPHASIS_BOUNDARY_SELECTOR)) barrier();
+          if (isInlineEmphasisBoundary(node)) barrier();
           descend = true;
         }
       }
@@ -5632,7 +5793,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       while (node && node !== container && !node.nextSibling) {
         node = node.parentNode;
         if (node && node !== container && node.nodeType === 1 &&
-            node.matches(INLINE_EMPHASIS_BOUNDARY_SELECTOR)) barrier();
+            isInlineEmphasisBoundary(node)) barrier();
       }
       node = node && node !== container ? node.nextSibling : null;
     }
@@ -5911,6 +6072,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (hasAsciiBoxTreeHint(rootText)) repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
     repaired += repairInlineEmphasis(root);
+    if (/\|\s*:?-{3,}:?\s*\|/.test(rootText)) repaired += repairRawTables(root);
     // Do not retry individual text nodes after context-aware repair: a code
     // span/fence can start in a sibling node, so per-node fallback loses safety.
     return repaired;
@@ -5924,6 +6086,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (!node || --budget.remaining < 0 || depth > 16) return null;
       if (node.nodeType === 8) return '';
       if (node.nodeType === 3) return node.nodeValue;
+      if (node.nodeType === 1 && node.tagName === 'BR' && !node.matches('[contenteditable], [role], [tabindex]')) return '\n';
       if (node.nodeType !== 1 ||
           !/^(SPAN|MS-CMARK-NODE|STRONG|EM|B|I)$/.test(node.tagName) ||
           node.matches('[contenteditable], [role], [tabindex], .inline-code') ||
@@ -5954,14 +6117,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const after = adjacentText(strike, 'nextSibling');
       const parts = Array.from(strike.childNodes, child => inlineText(child));
       if (before === null || after === null || parts.some(part => part === null)) continue;
-      const left = before.match(/\bp\.\s*(\d{1,5})\s*$/i);
       const middleText = parts.join('');
+      // Suffix-page outlines: PDF 31p~35p (section description)와 36p~38p.
+      // Require both explicit p suffixes and a parenthesized section joined by
+      // 와/과. This must not remove intentional deletions between plain numbers.
+      const suffix = middleText.match(/^\s*(\d{1,5})p\s*\([^\n()]{1,240}\)\s*(?:와|과)\s*(\d{1,5})p\s*$/i);
+      const problems = middleText.match(/^\s*(\d{1,5})번[\s\S]{1,500}?(?:이어서|다음)\s*(?:\*\*)?(\d{1,5})\s*$/);
+      const left = problems ? before.match(/(?:요청하신|이번)\s*(\d{1,5})\s*$/) : suffix ? before.match(/\b(\d{1,5})p\s*$/i) : before.match(/\bp\.\s*(\d{1,5})\s*$/i);
       const pdf = middleText.match(/^\s*(\d{1,5})\s*\/\s*PDF\s*(?:p\.\s*)?(\d{1,5})\s*$/i);
       // Verified outline form: p.A~B: description + p.C~D (or Level C~D).
       // Require an explicit range label, bounded descriptive text and endpoints.
       const outline = !pdf && middleText.match(/^\s*(\d{1,5}):[^\n]{1,240}?(\bp\.|\bLevel)\s*(\d{1,5})\s*$/i);
-      const middle = pdf || (outline && [outline[0], outline[1], outline[3]]);
-      const right = after.match(/^\s*(\d{1,5})(?=\s*(?:페이지|쪽|\)|:))/);
+      const middle = problems || suffix || pdf || (outline && [outline[0], outline[1], outline[3]]);
+      const right = problems ? after.match(/^\s*(\d{1,5})번\s*(?:문제|풀이)/) : suffix ? after.match(/^\s*(\d{1,5})p(?=\s|[),.:]|$)/i) : after.match(/^\s*(\d{1,5})(?=\s*(?:페이지|쪽|\)|:))/);
       if (!left || !middle || !right) continue;
       const bookSpan = Number(middle[1]) - Number(left[1]);
       const pdfSpan = Number(right[1]) - Number(middle[2]);
@@ -5969,6 +6137,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       // ranges need not, but must still be ordered and bounded.
       if (bookSpan < 0 || bookSpan > 100 || pdfSpan < 0 || pdfSpan > 100 ||
           (pdf && bookSpan !== pdfSpan) ||
+          (problems && Number(middle[2]) <= Number(middle[1])) ||
           (outline && /Level/i.test(outline[2]) &&
             (Number(middle[2]) < 1 || Number(right[1]) > 3))) continue;
       strike.before(document.createTextNode('~'));
@@ -6950,6 +7119,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (!userRoot) {
       return;
     }
+    for (const paragraph of userRoot.querySelectorAll('.aistudio-raw-table-host')) clearRawTable(paragraph);
 
     const marked = [];
 
@@ -7082,6 +7252,9 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (!element.isConnected || promptEditorFor(element)) continue;
       clearFallbackRootsInsideUser(element);
       if (closest(element, USER_SELECTOR)) continue;
+      const rawParagraph = closest(element, 'p');
+      const rawView = rawParagraph && rawTableViews.get(rawParagraph);
+      if (rawView && (!rawParagraph.contains(rawView.source) || rawView.source.contains(element) || element === rawParagraph)) clearRawTable(rawParagraph);
       let emphasis = closest(element, '.aistudio-md-repaired');
       while (emphasis) {
         const parent = emphasis.parentElement;

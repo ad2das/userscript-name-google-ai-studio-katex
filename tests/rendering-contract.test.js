@@ -196,6 +196,52 @@ async (page) => {
       checks[key] = outline.textContent === expected && native.isConnected && getComputedStyle(native).textDecorationLine === 'none';
     }
     const rejectedOutlines = document.createElement('div');
+    const problemRanges = document.createElement('p');
+    problemRanges.innerHTML = '<ms-cmark-node><span>요청하신 4</span><s><ms-cmark-node><span>6번 계산 문제 풀이가 완료되었습니다!</span><br><ms-cmark-node></ms-cmark-node><span>이 문제들을 통해 원가흐름을 익혔습니다. 이어서 **7</span></ms-cmark-node></s><span>9번 문제 풀이**를 확인하세요.</span></ms-cmark-node>';
+    response.append(problemRanges);
+    const problemNodes = Array.from(problemRanges.querySelectorAll('*'));
+    __contract.repairRoot(problemRanges);
+    checks.problemNumberRanges = problemRanges.textContent === '요청하신 4~6번 계산 문제 풀이가 완료되었습니다!이 문제들을 통해 원가흐름을 익혔습니다. 이어서 7~9번 문제 풀이를 확인하세요.' &&
+      getComputedStyle(problemRanges.querySelector('s')).textDecorationLine === 'none';
+    checks.problemRangeBold = Array.from(problemRanges.querySelectorAll('strong')).map(e => e.textContent).join('') === '7~9번 문제 풀이';
+    checks.problemRangeNativeNodes = problemNodes.every(node => node.isConnected);
+    const problemOnce = problemRanges.innerHTML;
+    __contract.repairRoot(problemRanges);
+    checks.problemRangeIdempotent = problemOnce === problemRanges.innerHTML;
+    const rejectedProblems = document.createElement('div');
+    rejectedProblems.innerHTML = '<p>요청하신 6<s>4번 풀이 완료. 이어서 **7</s>9번 문제 풀이**</p>' +
+      '<p>요청하신 4<s>6번 풀이 완료. 이어서 **7</s>5번 문제 풀이**</p>' +
+      '<p>요청하신 4<s>6번 삭제할 내용 **7</s>9번 문제 풀이**</p>' +
+      '<p>요청하신 4<s>6번 풀이 완료. 이어서 **5</s>9번 문제 풀이**</p>' +
+      '<p>요청하신 4<s>6번 <a href="#">풀이</a> 완료. 이어서 7</s>9번 문제</p>';
+    response.append(rejectedProblems);
+    const rejectedProblemStrikes = Array.from(rejectedProblems.querySelectorAll('s'));
+    __contract.repairRoot(rejectedProblems);
+    checks.invalidProblemRangesPreserved = rejectedProblemStrikes.every(e => e.isConnected &&
+      !e.classList.contains('aistudio-page-range-repaired') && getComputedStyle(e).textDecorationLine === 'line-through');
+    const suffixPages = document.createElement('p');
+    suffixPages.innerHTML = '<ms-cmark-node><strong>다음 안내:</strong><!--anchor--><span> PDF 31p</span><!--anchor--><s><ms-cmark-node><span>35p (제8절 심화학습: 소매재고법 특수사항 및 예제 1-14)와 36p</span></ms-cmark-node></s><!--anchor--><span>38p (농림어업 등)은 앞서 설명했습니다.</span></ms-cmark-node>';
+    response.append(suffixPages);
+    const suffixNodes = Array.from(suffixPages.querySelectorAll('*'));
+    const suffixText = suffixPages.textContent;
+    __contract.repairRoot(suffixPages);
+    checks.suffixPageRanges = suffixPages.textContent === suffixText.replace('31p35p', '31p~35p').replace('36p38p', '36p~38p') &&
+      getComputedStyle(suffixPages.querySelector('s')).textDecorationLine === 'none';
+    checks.suffixRangeNodesPreserved = suffixNodes.every(node => node.isConnected);
+    const suffixOnce = suffixPages.innerHTML;
+    __contract.repairRoot(suffixPages);
+    checks.suffixRangeIdempotent = suffixOnce === suffixPages.innerHTML;
+    const invalidSuffix = document.createElement('div');
+    invalidSuffix.innerHTML = '<p>PDF 35p<s>31p (설명)와 36p</s>38p</p>' +
+      '<p>PDF 31p<s>35p (설명)와 38p</s>36p</p>' +
+      '<p>PDF 31p<s>35p 삭제한 문장 36p</s>38p</p>' +
+      '<p>PDF 31p<s>35p (설명)와 36p</s>138p</p>' +
+      '<p>PDF 31p<s><a href="#">35p (설명)와 36p</a></s>38p</p>' +
+      '<p data-turn-role="user">PDF 31p<s>35p (설명)와 36p</s>38p</p>';
+    response.append(invalidSuffix);
+    const invalidSuffixBefore = invalidSuffix.innerHTML;
+    __contract.repairRoot(invalidSuffix);
+    checks.invalidSuffixRangesPreserved = invalidSuffix.innerHTML === invalidSuffixBefore;
     rejectedOutlines.innerHTML = '<p>p.390<s>389: 설명 + p.396</s>402)</p><p>p.386<s>389: Level 1</s>9)</p><p>p.386<s>389: 삭제한 문장</s>3)</p>';
     response.append(rejectedOutlines);
     const rejectedBefore = rejectedOutlines.innerHTML;

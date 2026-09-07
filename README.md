@@ -12,6 +12,19 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.16 restores bounded raw pipe tables left inside a native paragraph, including
+  accounting T-accounts with an intentionally empty separator column. The display
+  preserves numeric alignment, bold/italic runs, original native nodes, and whole-table
+  plain-text copy; wide tables scroll within the mobile response. Code, links,
+  malformed tables, and user/editor content are excluded.
+
+- 1.13.15 also restores paired exercise-number ranges (`4~6번 ... 이어서 7~9번`)
+  with native line breaks and bold spanning the misparsed strikethrough.
+
+- 1.13.14 restores suffix-page ranges such as `31p~35p (section)와 36p~38p`
+  when native Markdown mistakes their tildes for strikethrough. Native inline
+  nodes are retained; deliberate deletions and protected content remain untouched.
+
 - KaTeX display math horizontal scrolling on mobile
 - Wide display formulas fitted to the available mobile width without leaking
   KaTeX `underbrace`/stretchy SVG segments as long black lines
@@ -104,7 +117,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.13 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.16 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

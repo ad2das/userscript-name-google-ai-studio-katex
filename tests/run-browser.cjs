@@ -16,10 +16,12 @@ const run = async () => {
     const suites = process.argv.includes('--t-account') ? ['t-account-browser.test.js'] : process.argv.includes('--live-typing') ? ['live-typing-browser.test.js'] : process.argv.includes('--live-integration') ? ['live-integration-browser.test.js'] : process.argv.includes('--live-controller') ? ['live-controller-browser.test.js'] : process.argv.includes('--live-preview') ? ['live-preview-browser.test.js'] : process.argv.includes('--scheduler') ? ['scheduler-browser.test.js'] : process.argv.includes('--contract') ? ['rendering-contract.test.js'] : process.argv.includes('--photo') ? ['photo-regression.test.js'] : process.argv.includes('--audit')
       ? ['audit-browser.test.js']
       : ['firefox-browser.test.js', 'audit-browser.test.js', 'photo-regression.test.js', 'rendering-contract.test.js', 'scheduler-browser.test.js', 'live-preview-browser.test.js', 'live-controller-browser.test.js', 'live-integration-browser.test.js', 'live-typing-browser.test.js', 't-account-browser.test.js'];
-    if (process.argv.includes('--diagrams')) suites.splice(0, suites.length, 'current-diagrams-browser.test.js');
+    if (process.argv.includes('--raw-table')) suites.splice(0, suites.length, 'raw-table-browser.test.js');
+    else if (process.argv.includes('--diagrams')) suites.splice(0, suites.length, 'current-diagrams-browser.test.js');
     else if (process.argv.includes('--scroll')) suites.splice(0, suites.length, 'scroll-priority-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('scroll-priority-browser.test.js');
     if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('current-diagrams-browser.test.js');
+    if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('raw-table-browser.test.js');
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915
