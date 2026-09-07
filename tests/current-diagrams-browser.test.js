@@ -43,6 +43,12 @@ async (page) => {
         }
       }
       const pre = document.querySelector('pre');
+      // Geometry alone can pass after dropping a long label, formula or arrow.
+      // Compare all non-layout characters against the complete original source.
+      const visibleText = Array.from(visual.querySelectorAll('[data-aistudio-ascii-cell]'))
+        .map(cell => cell.getAttribute('data-aistudio-ascii-cell')).join('');
+      const semanticText = text => text.replace(/[\s┌┐└┘├┤┬┴┼│─]/g, '');
+      const contentPreserved = semanticText(visibleText) === semanticText(source);
       pre.scrollLeft = pre.scrollWidth;
       const reachable = pre.scrollWidth <= pre.clientWidth + 1 ||
         (['auto', 'scroll'].includes(getComputedStyle(pre).overflowX) && pre.scrollLeft > 0);
@@ -54,12 +60,12 @@ async (page) => {
         singleVisual: document.querySelectorAll('.aistudio-ascii-tree-visual').length === 1,
         userPreserved: document.querySelector('[data-turn-role="user"] code').textContent === source &&
           !document.querySelector('[data-turn-role="user"] .aistudio-ascii-tree-visual'),
-        comparisons, drift, reachable
+        contentPreserved, comparisons, drift, reachable
       };
     }, fixture);
     await page.screenshot({ path: `output/playwright/current-${fixture.name}-${page.viewportSize().width}.png`, fullPage: true });
     const r = results[fixture.name];
-    if (!r.correctLayout || !r.sourcePreserved || !r.inputPreserved || !r.userPreserved || !r.singleVisual || !r.reachable || r.comparisons < 2 || r.drift > 1) throw new Error(JSON.stringify({ fixture: fixture.name, ...r }));
+    if (!r.correctLayout || !r.sourcePreserved || !r.contentPreserved || !r.inputPreserved || !r.userPreserved || !r.singleVisual || !r.reachable || r.comparisons < 2 || r.drift > 1) throw new Error(JSON.stringify({ fixture: fixture.name, ...r }));
   }
   return results;
 }
