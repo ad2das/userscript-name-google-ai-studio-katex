@@ -12,6 +12,11 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.18 recovers a narrowly recognized parenthetical italic note with a quoted
+  bold clause when native Markdown consumes its closing delimiter into the italic
+  tail. Native wrapper nodes and listeners remain; unrelated unmatched stars,
+  code, links, and interactive content are excluded.
+
 - 1.13.17 keeps short, standalone bold Korean amounts such as `10,000원` on one
   line without changing native text or nodes. Long prose, code, links, and user
   input remain untouched; reused native emphasis loses this style when changed.
@@ -121,7 +126,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.17 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.18 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

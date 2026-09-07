@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.17
+// @version      1.13.18
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.17';
+  const VERSION = '1.13.18';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -6076,6 +6076,41 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     return repaired;
   }
 
+  function repairMisparsedItalicNotes(root) {
+    // Native Markdown can consume the second closing bold star as the opener
+    // of the outer italic note's tail. Only recover the observed parenthetical
+    // note + quoted bold clause + native italic tail, never arbitrary stars.
+    const paragraphs = new Set(root.querySelectorAll('p'));
+    const parent = closest(root, 'p');
+    if (parent) paragraphs.add(parent);
+    let repaired = 0;
+    for (const p of paragraphs) {
+      if (closest(p, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',pre,code,a')) continue;
+      const host = p.children.length === 1 && p.firstElementChild;
+      if (!host || host.tagName !== 'MS-CMARK-NODE') continue;
+      const parts = Array.from(host.childNodes).filter(n => n.nodeType !== 8 && (n.nodeType !== 3 || n.nodeValue.trim()));
+      if (parts.length !== 2) continue;
+      const [lead, tail] = parts;
+      if (lead.nodeType !== 1 || tail.nodeType !== 1 || lead.tagName !== 'SPAN' ||
+          lead.children.length || lead.matches('[role],[tabindex],[contenteditable]') ||
+          !((tail.tagName === 'SPAN' && tail.style.fontStyle === 'italic') || /^(EM|I)$/.test(tail.tagName))) continue;
+      const textNodes = Array.from(lead.childNodes).filter(n => n.nodeType !== 8);
+      if (textNodes.length !== 1 || textNodes[0].nodeType !== 3) continue;
+      const match = textNodes[0].nodeValue.match(/^\*(\(※[^*`\n]{1,200}?)\*\*("[^*`\n]{1,240}")\*$/);
+      const tailText = tail.textContent || '';
+      if (!match || !/^[^*`\n]{1,300}\)$/.test(tailText) ||
+          tail.matches('[role],[tabindex],[contenteditable]') || tail.querySelectorAll('*').length > 32 ||
+          Array.from(tail.querySelectorAll('*')).some(n => !/^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) || n.matches('[role],[tabindex],[contenteditable],.inline-code'))) continue;
+      const italic = createRepairedEmphasis('', '*');
+      const bold = createRepairedEmphasis(match[2], '**');
+      textNodes[0].nodeValue = match[1];
+      italic.append(textNodes[0], bold);
+      lead.append(italic);
+      repaired++;
+    }
+    return repaired;
+  }
+
   function repairRoot(root) {
     if (
       !root ||
@@ -6100,6 +6135,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     if (hasLiteralUnderline(rootText)) repaired += repairLiteralUnderlines(root);
     if (hasAsciiBoxTreeHint(rootText)) repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
+    repaired += repairMisparsedItalicNotes(root);
     repaired += repairInlineEmphasis(root);
     repaired += repairAmountTokens(root);
     if (/\|\s*:?-{3,}:?\s*\|/.test(rootText)) repaired += repairRawTables(root);
