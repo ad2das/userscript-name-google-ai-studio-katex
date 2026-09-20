@@ -605,6 +605,24 @@ assert.equal(leaderTable.source, leaderSource);
 assert.deepEqual(JSON.parse(JSON.stringify(leaderTable.rows[1])), { label: '수익', amount: 'X,XXX', note: '(①번)' });
 assert.equal(api.analyzeAsciiDiagram('안녕 .... 잠깐\n다음 .... 계속\n끝 .... 마침'), null);
 assert.equal(api.analyzeAsciiDiagram('파일 .... index.js\n파일 .... main.js\n파일 .... test.js'), null);
+const middleDotLeaderSource = '[계산 예시]\n수익 ·········· X,XXX (①번)\n기타수익 ····· XXX\n재료비 ········· (XXX) (②번)\n─────────────────\n총비용 ······ (X,XXX)';
+const middleDotLeader = api.analyzeAsciiDiagram(middleDotLeaderSource);
+assert.equal(middleDotLeader?.kind, 'leader-grid');
+assert.equal(middleDotLeader.source, middleDotLeaderSource);
+assert.deepEqual(JSON.parse(JSON.stringify(middleDotLeader.rows[1])), { label: '수익', amount: 'X,XXX', note: '(①번)' });
+const ellipsisLeaderSource = '[계산 예시]\n수익 …………… X,XXX (①번)\n기타수익 … XXX\n재료비 …………… (XXX) (②번)\n총비용 ……… (X,XXX)';
+const ellipsisLeader = api.analyzeAsciiDiagram(ellipsisLeaderSource);
+assert.equal(ellipsisLeader?.kind, 'leader-grid');
+assert.equal(ellipsisLeader.source, ellipsisLeaderSource);
+assert.deepEqual(JSON.parse(JSON.stringify(ellipsisLeader.rows[2])), { label: '기타수익', amount: 'XXX', note: '' });
+const spacedLeaderSource = '[계산 예시]\n수익 · · · · · X,XXX\n기타수익 · · · XXX\n재료비 · · · · · (XXX)\n총비용 · · · (X,XXX)';
+assert.equal(api.analyzeAsciiDiagram(spacedLeaderSource)?.kind, 'leader-grid');
+const dottedLabelLeaderSource = '매출·수익 ······ 10,000\n기타·수익 ···· 20,000\n합계·수익 ······ 30,000';
+const dottedLabelLeader = api.analyzeAsciiDiagram(dottedLabelLeaderSource);
+assert.equal(dottedLabelLeader?.kind, 'leader-grid');
+assert.equal(dottedLabelLeader.rows[0].label, '매출·수익');
+assert.equal(dottedLabelLeader.rows[2].amount, '30,000');
+assert.equal(api.analyzeAsciiDiagram('항목 · 1,000\n항목 · 2,000\n항목 · 3,000'), null);
 assert.ok(tightAccount, 'A ruled account may have a tight Unicode divider');
 assert.equal(tightAccount.kind, 'delimited-grid');
 assert.equal(tightAccount.source, tightAccountSource);
@@ -1468,6 +1486,38 @@ assert.deepEqual(
 assert.equal(
   api.normalizeKatexCommands(String.raw`\bm x + y`),
   String.raw`\boldsymbol x + y`
+);
+assert.equal(
+  api.simpleTexRuns(String.raw`\alpha + \beta = \Gamma`).map(run => run.text).join(''),
+  'α + β = Γ'
+);
+const unknownCommandRuns = api.simpleTexRuns(String.raw`\notacommand x + \foo{y}`)
+  .map(run => run.text).join('');
+assert.ok(
+  !unknownCommandRuns.includes('\\'),
+  'Unknown commands must not leak their backslash name into projected text'
+);
+assert.equal(unknownCommandRuns.replace(/\s+/g, ' ').trim(), 'x + y');
+assert.equal(
+  api.simpleTexRuns(String.raw`a\ b`).map(run => run.text).join('').replace(/\s+/g, ' '),
+  'a b'
+);
+assert.equal(
+  api.simpleTexRuns(String.raw`a\hspace{1cm}b`).map(run => run.text).join('').replace(/\s+/g, ' '),
+  'a b'
+);
+assert.equal(
+  api.simpleTexRuns(String.raw`x\phantom{abc}y`).map(run => run.text).join('').replace(/\s+/g, ' '),
+  'xy'
+);
+const unknownCellArray = api.parseRawArray(String.raw`begin{array}{lc}
+\alpha & \notacommand x \\
+1 & 2
+end{array}`);
+assert.ok(unknownCellArray);
+assert.deepEqual(
+  Array.from(unknownCellArray.rows, (row) => Array.from(row)),
+  [['α', 'x'], ['1', '2']]
 );
 
 console.log('userscript tests passed');

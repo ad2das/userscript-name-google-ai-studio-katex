@@ -84,9 +84,35 @@ async (page) => {
       dotsPainted: dots.length === 4 && dots.every(e => getComputedStyle(e).borderBottomStyle === 'dotted' && e.getBoundingClientRect().width > 5)
     };
   }, leaderSource);
+  const unicodeLeaderSource = '[계산 예시]\n수익 ·········· X,XXX (①번)\n기타수익 ……… XXX\n재료비 ········· (XXX) (②번)\n─────────────────\n총비용 …… (X,XXX)';
+  await page.evaluate(text => {
+    const pre = document.createElement('pre');
+    pre.id = 'leader-table-unicode';
+    const code = document.createElement('code');
+    code.textContent = text;
+    pre.append(code);
+    document.querySelector('article').append(pre);
+    globalThis.__unicodeLeaderCode = code;
+  }, unicodeLeaderSource);
+  await page.waitForFunction(() => !!document.querySelector('#leader-table-unicode .aistudio-ascii-leader-grid'));
+  result.leaderUnicode = await page.evaluate(text => {
+    const pre = document.getElementById('leader-table-unicode');
+    const amounts = Array.from(pre.querySelectorAll('.aistudio-ascii-delimited-amount'));
+    const rights = amounts.map(e => e.getBoundingClientRect().right);
+    const dots = Array.from(pre.querySelectorAll('.aistudio-ascii-leader-dots'));
+    const notes = Array.from(pre.querySelectorAll('.aistudio-ascii-delimited-note'));
+    return {
+      sourcePreserved: pre.querySelector('code') === __unicodeLeaderCode && __unicodeLeaderCode.textContent === text,
+      aligned: rights.length === 4 && Math.max(...rights) - Math.min(...rights) < 1,
+      amountsPreserved: amounts.map(e => e.getAttribute('data-aistudio-ascii-cell')).join('|') === 'X,XXX|XXX|(XXX)|(X,XXX)',
+      notesPreserved: notes.map(e => e.getAttribute('data-aistudio-ascii-cell')).join('|') === '(①번)||(②번)|',
+      dotsPainted: dots.length === 4 && dots.every(e => getComputedStyle(e).borderBottomStyle === 'dotted' && e.getBoundingClientRect().width > 5)
+    };
+  }, unicodeLeaderSource);
   await page.screenshot({path:'output/playwright/t-account-alignment.png'});
   if (!result.sourcePreserved || !result.aligned || !result.oneVisual) throw new Error(JSON.stringify(result));
   if (!result.single.fullWidthRules || !result.single.aligned || !result.single.sourcePreserved || !result.single.wrappedAmountPreserved || !result.single.horizontalContentReachable) throw new Error(JSON.stringify(result.single));
   if (Object.values(result.leader).some(value => value !== true)) throw new Error(JSON.stringify(result.leader));
+  if (Object.values(result.leaderUnicode).some(value => value !== true)) throw new Error(JSON.stringify(result.leaderUnicode));
   return result;
 }

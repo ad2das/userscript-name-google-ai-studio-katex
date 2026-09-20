@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.23
+// @version      1.13.24
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.23';
+  const VERSION = '1.13.24';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -2502,6 +2502,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       const command = commandMatch[1];
       const lowerCommand = command.toLowerCase();
       let next = index + 1 + command.length;
+      const followedBySpace = /\s/.test(source[next] || '');
 
       while (/\s/.test(source[next] || '')) {
         next += 1;
@@ -2582,6 +2583,50 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       }
 
       const symbols = {
+        alpha: 'α',
+        beta: 'β',
+        gamma: 'γ',
+        delta: 'δ',
+        epsilon: 'ε',
+        varepsilon: 'ε',
+        zeta: 'ζ',
+        eta: 'η',
+        theta: 'θ',
+        vartheta: 'ϑ',
+        iota: 'ι',
+        kappa: 'κ',
+        lambda: 'λ',
+        mu: 'μ',
+        nu: 'ν',
+        xi: 'ξ',
+        pi: 'π',
+        varpi: 'ϖ',
+        rho: 'ρ',
+        sigma: 'σ',
+        varsigma: 'ς',
+        tau: 'τ',
+        upsilon: 'υ',
+        phi: 'φ',
+        varphi: 'φ',
+        chi: 'χ',
+        psi: 'ψ',
+        omega: 'ω',
+        Gamma: 'Γ',
+        Delta: 'Δ',
+        Theta: 'Θ',
+        Lambda: 'Λ',
+        Xi: 'Ξ',
+        Pi: 'Π',
+        Sigma: 'Σ',
+        Phi: 'Φ',
+        Psi: 'Ψ',
+        Omega: 'Ω',
+        sum: '∑',
+        prod: '∏',
+        int: '∫',
+        oint: '∮',
+        partial: '∂',
+        nabla: '∇',
         approx: '≈',
         cdot: '·',
         ge: '≥',
@@ -2591,23 +2636,132 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         leq: '≤',
         neq: '≠',
         pm: '±',
+        mp: '∓',
         times: '×',
-        to: '→'
+        div: '÷',
+        to: '→',
+        rightarrow: '→',
+        Rightarrow: '⇒',
+        leftarrow: '←',
+        Leftarrow: '⇐',
+        leftrightarrow: '↔',
+        Leftrightarrow: '⇔',
+        mapsto: '↦',
+        uparrow: '↑',
+        downarrow: '↓',
+        cdots: '…',
+        ldots: '…',
+        dots: '…',
+        vdots: '⋮',
+        ddots: '⋱',
+        ll: '≪',
+        gg: '≫',
+        subset: '⊂',
+        subseteq: '⊆',
+        supset: '⊃',
+        supseteq: '⊇',
+        in: '∈',
+        notin: '∉',
+        forall: '∀',
+        exists: '∃',
+        nexists: '∄',
+        emptyset: '∅',
+        varnothing: '∅',
+        equiv: '≡',
+        sim: '∼',
+        simeq: '≃',
+        cong: '≅',
+        propto: '∝',
+        perp: '⊥',
+        parallel: '∥',
+        angle: '∠',
+        degree: '°',
+        prime: '′',
+        langle: '⟨',
+        rangle: '⟩',
+        lceil: '⌈',
+        rceil: '⌉',
+        lfloor: '⌊',
+        rfloor: '⌋',
+        therefore: '∴',
+        because: '∵',
+        circ: '∘',
+        ast: '∗',
+        star: '⋆',
+        bullet: '•',
+        oplus: '⊕',
+        otimes: '⊗',
+        wedge: '∧',
+        vee: '∨',
+        neg: '¬',
+        land: '∧',
+        lor: '∨',
+        checkmark: '✓',
+        square: '□',
+        triangle: '△'
       };
 
-      if (Object.prototype.hasOwnProperty.call(symbols, lowerCommand)) {
-        appendTexRun(runs, symbols[lowerCommand], bold);
+      if (
+        Object.prototype.hasOwnProperty.call(symbols, command) ||
+        Object.prototype.hasOwnProperty.call(symbols, lowerCommand)
+      ) {
+        appendTexRun(
+          runs,
+          (Object.prototype.hasOwnProperty.call(symbols, command)
+            ? symbols[command]
+            : symbols[lowerCommand]) + (followedBySpace ? ' ' : ''),
+          bold
+        );
         index = next;
         continue;
       }
 
-      if (lowerCommand === 'quad' || lowerCommand === 'qquad') {
+      const spacingCommands = new Set([
+        'quad',
+        'qquad',
+        'enspace',
+        'enskip',
+        'thinspace',
+        'negthinspace',
+        'hspace',
+        'vspace',
+        'hskip',
+        'vskip',
+        'kern',
+        'mkern',
+        'mskip',
+        'space',
+        'nobreakspace'
+      ]);
+
+      if (spacingCommands.has(lowerCommand)) {
+        if (source[next] === '{') {
+          const group = readTexGroup(source, next);
+
+          if (group) {
+            next = group.end + 1;
+          }
+        }
+
         appendTexRun(runs, ' ', bold);
         index = next;
         continue;
       }
 
-      if ([',', ';', ':', '!'].includes(command)) {
+      if (['phantom', 'hphantom', 'vphantom'].includes(lowerCommand)) {
+        if (source[next] === '{') {
+          const group = readTexGroup(source, next);
+
+          if (group) {
+            next = group.end + 1;
+          }
+        }
+
+        index = next;
+        continue;
+      }
+
+      if ([',', ';', ':', '!', ' '].includes(command)) {
         appendTexRun(runs, ' ', bold);
         index = next;
         continue;
@@ -2618,13 +2772,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         continue;
       }
 
-      if (/^[&%_#$\\{}]$/.test(command)) {
-        appendTexRun(runs, command, bold);
+      if (command === '\\') {
+        appendTexRun(runs, ' ', bold);
         index = next;
         continue;
       }
 
-      appendTexRun(runs, `\\${command}`, bold);
+      if (/^[&%_#$\\{}]$/.test(command)) {
+        appendTexRun(runs, command + (followedBySpace ? ' ' : ''), bold);
+        index = next;
+        continue;
+      }
+
+      // Unknown commands are dropped instead of leaking their backslash name
+      // into the projected cell text. Any following group still renders.
+      if (followedBySpace) {
+        appendTexRun(runs, ' ', bold);
+      }
+
       index = next;
     }
 
@@ -4694,6 +4859,24 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     };
   }
 
+  const LEADER_GLYPH_PATTERN = /[.·…‥․．]/;
+
+  // Collapse typographic leader runs (ASCII dots, middle dots, ellipses and
+  // their full-width variants) into the canonical dotted run the leader-row
+  // matcher understands. Short ASCII dot runs stay literal so prose keeps
+  // its meaning.
+  function canonicalizeLeaderRuns(line) {
+    if (!LEADER_GLYPH_PATTERN.test(line)) return line;
+    return line.replace(/(?:[.·…‥․．]\s*){2,}|…|‥/g, (run) => {
+      const glyphs = run.replace(/\s+/g, '');
+      if (glyphs.length >= 2 && (glyphs.length >= 4 || !glyphs.includes('.'))) {
+        return ' ........ ';
+      }
+      if (glyphs.length === 1 && /[…‥]/.test(glyphs)) return ' ........ ';
+      return run;
+    });
+  }
+
   function analyzeAsciiLeaderTable(text) {
     if (!text || text.length > MAX_ASCII_TREE_LENGTH || !/[가-힣]/.test(text)) return null;
     const source = text.replace(/\r/g, '');
@@ -4707,7 +4890,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         rows.push({ spanning: true, text: trimmed });
         continue;
       }
-      const match = trimmed.match(/^([^\n.]+?)\s+\.{4,}\s*(\(?[+-]?[₩$]?(?:\d[\d,]*(?:\.\d+)?|[Xx]+(?:,[Xx]+)*|-)\)?)(?:\s+(\([^\n]+\)))?$/);
+      const canonical = canonicalizeLeaderRuns(trimmed);
+      const match = canonical.match(/^([^\n.]+?)\s+\.{4,}\s*(\(?[+-]?[₩$]?(?:\d[\d,]*(?:\.\d+)?|[Xx]+(?:,[Xx]+)*|-)\)?)(?:\s+(\([^\n]+\)))?$/);
       if (!match) return null;
       rows.push({ label: match[1].trim(), amount: match[2], note: match[3] || '' });
       entries += 1;

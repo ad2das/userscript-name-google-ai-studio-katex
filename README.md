@@ -12,6 +12,12 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.24 recognizes typographic leader variants (`·`, `…`, `‥`, `․`, `．`) in
+  fallback leader tables, including spaced and full-width runs, without treating
+  single middle dots or short ASCII dot runs as leaders. Unknown TeX commands
+  inside repaired aligned/array cells are dropped instead of leaking their
+  backslash names; common symbol commands map to their glyphs, and
+  spacing/phantom commands are consumed together with their arguments.
 - 1.13.23 consumes LaTeX row-spacing arguments (`\\[6pt]`, `\[6pt]`, `\\*[4pt]`,
   including a bracket left at the start of the next line) and `\cr`/`\crcr`
   separators while splitting repaired aligned/array rows, so fallback rebuilds
@@ -146,7 +152,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.23 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.24 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script
