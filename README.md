@@ -12,6 +12,12 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.23 consumes LaTeX row-spacing arguments (`\\[6pt]`, `\[6pt]`, `\\*[4pt]`,
+  including a bracket left at the start of the next line) and `\cr`/`\crcr`
+  separators while splitting repaired aligned/array rows, so fallback rebuilds
+  no longer expose `[6pt]` text or create phantom rows. Leading `\cline{...}`
+  and `\hdashline` rules are stripped with `\hline`, and a single-token `\bm x`
+  is normalized to `\boldsymbol x`.
 - 1.13.22 keeps mobile list-item and paragraph equations readable when a native
   inline KaTeX atom is wider than its container. Only proven-wide equations get
   a keyboard-accessible horizontal viewport; native math nodes stay intact.
@@ -140,7 +146,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.22 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.23 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

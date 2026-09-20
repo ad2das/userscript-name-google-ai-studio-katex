@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.22
+// @version      1.13.23
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.22';
+  const VERSION = '1.13.23';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1687,6 +1687,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     const aliasesNormalized = visibleSource
       .replace(/\\bm(?=\s*\{)/g, '\\boldsymbol')
+      .replace(/\\bm(?=\s)/g, '\\boldsymbol')
       .replace(/\\bfseries\b/g, '\\bf');
 
     let normalized = propagateBoldIntoText(aliasesNormalized);
@@ -2207,6 +2208,12 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
   function splitRawMathRows(body) {
     const rows = [];
+    const rowSpacing =
+      /^[ \t]*(?:\r?\n[ \t]*)?\\?\[[ \t]*[+-]?(?:\d+(?:\.\d+)?|\.\d+)[ \t]*(?:pt|px|em|ex|mu|mm|cm|in|bp|pc|dd|cc|sp|fil|fill|filll)[ \t]*\]/;
+    const consumeSpacing = (position) => {
+      const match = body.slice(position).match(rowSpacing);
+      return match ? position + match[0].length : position;
+    };
     let current = '';
     let depth = 0;
 
@@ -2233,7 +2240,37 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       if (character === '\\' && depth === 0) {
         if (body[index + 1] === '\\') {
           finishRow();
-          index += 1;
+          const star = body[index + 2] === '*' ? 1 : 0;
+          index = consumeSpacing(index + 2 + star) - 1;
+          continue;
+        }
+
+        if (body[index + 1] === '[') {
+          // A row-spacing argument whose double backslash was lost by the
+          // renderer still separates rows.
+          const spaced = consumeSpacing(index);
+          if (spaced !== index) {
+            finishRow();
+            index = spaced - 1;
+            continue;
+          }
+        }
+
+        if (
+          body.startsWith('\\crcr', index) &&
+          !/[A-Za-z]/.test(body[index + 5] || '')
+        ) {
+          finishRow();
+          index = consumeSpacing(index + 5) - 1;
+          continue;
+        }
+
+        if (
+          body.startsWith('\\cr', index) &&
+          !/[A-Za-z]/.test(body[index + 3] || '')
+        ) {
+          finishRow();
+          index = consumeSpacing(index + 3) - 1;
           continue;
         }
 
@@ -2249,7 +2286,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
         if (body[cursor] === '\n' || cursor >= body.length) {
           finishRow();
-          index = cursor;
+          index = consumeSpacing(cursor + 1) - 1;
           continue;
         }
       }
@@ -2334,8 +2371,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let text = (source || '').trim();
     let hasRule = false;
     let match;
+    const rule =
+      /^\\hline\b\s*|^\\hdashline\b\s*|^\\cline\s*\{[^{}\n]*\}\s*/i;
 
-    while ((match = text.match(/^\\hline\b\s*/i))) {
+    while ((match = text.match(rule))) {
       hasRule = true;
       text = text.slice(match[0].length).trim();
     }

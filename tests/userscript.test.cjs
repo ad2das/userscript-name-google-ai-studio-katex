@@ -120,9 +120,12 @@ const instrumented = source.replace(
     parseRawArray,
     parseRawMathCandidate,
     repairTableBreakTextNode,
-    simpleTexRuns
+    simpleTexRuns,
+    splitRawMathRows,
+    stripLeadingArrayRules
   };
-}());`
+}());
+`
 );
 
 const context = {
@@ -1400,6 +1403,71 @@ assert.equal(
   api.generating(),
   false,
   'a visible composer Run must override stale Stop-like controls'
+);
+
+// Row separators: spacing arguments, \cr/\crcr, and lost-backslash forms must
+// split rows without leaking the separator into cells or creating phantom rows.
+assert.deepEqual(
+  Array.from(api.splitRawMathRows(String.raw`a &= b \cr c &= d`)),
+  ['a &= b', 'c &= d']
+);
+assert.deepEqual(
+  Array.from(api.splitRawMathRows(String.raw`a &= b \crcr c &= d`)),
+  ['a &= b', 'c &= d']
+);
+assert.deepEqual(
+  Array.from(api.splitRawMathRows(String.raw`a &= b \\[6pt] c &= d`)),
+  ['a &= b', 'c &= d']
+);
+assert.deepEqual(
+  Array.from(api.splitRawMathRows(String.raw`a &= b \[6pt] c &= d`)),
+  ['a &= b', 'c &= d']
+);
+assert.deepEqual(
+  Array.from(api.splitRawMathRows(String.raw`a &= b \\*[4pt] c &= d`)),
+  ['a &= b', 'c &= d']
+);
+assert.deepEqual(
+  Array.from(api.splitRawMathRows(String.raw`a &= b \\ [note] c &= d`)),
+  ['a &= b', '[note] c &= d']
+);
+assert.deepEqual(
+  Array.from(api.splitRawMathRows('a &= b \\\\\n[6pt]\nc &= d')),
+  ['a &= b', 'c &= d']
+);
+const spacedAligned = api.parseRawAligned(String.raw`begin{aligned}
+a &= \mathbf{b} \\[6pt]
+c &= d
+end{aligned}`);
+assert.ok(spacedAligned);
+assert.deepEqual(
+  Array.from(spacedAligned.rows, (row) => Array.from(row)),
+  [['a', '= \\mathbf{b}'], ['c', '= d']]
+);
+const trailingSpacedAligned = api.parseRawAligned(String.raw`begin{aligned}
+a &= b \\[6pt]
+end{aligned}`);
+assert.ok(trailingSpacedAligned);
+assert.equal(trailingSpacedAligned.rows.length, 1);
+const clineRule = api.stripLeadingArrayRules(String.raw`\cline{1-2} a & b`);
+assert.equal(clineRule.text, 'a & b');
+assert.equal(clineRule.hasRule, true);
+const dashRule = api.stripLeadingArrayRules(String.raw`\hline \hdashline a & b`);
+assert.equal(dashRule.text, 'a & b');
+assert.equal(dashRule.hasRule, true);
+const spacedArray = api.parseRawArray(String.raw`begin{array}{c|c}
+\text{차변} & \text{대변} \\[2pt]
+\cline{1-2}
+& \text{기초잔액} \\
+end{array}`);
+assert.ok(spacedArray);
+assert.deepEqual(
+  Array.from(spacedArray.rows, (row) => Array.from(row)),
+  [['차변', '대변'], ['', '기초잔액']]
+);
+assert.equal(
+  api.normalizeKatexCommands(String.raw`\bm x + y`),
+  String.raw`\boldsymbol x + y`
 );
 
 console.log('userscript tests passed');
