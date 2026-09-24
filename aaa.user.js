@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.24
+// @version      1.13.25
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.24';
+  const VERSION = '1.13.25';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -6983,6 +6983,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const explicitRoots = explicitRootCache;
     const fallbackList = collectFallbackRoots();
 
+    // Typing resumed mid-scan: stop before candidate filtering or geometry reads.
+    if (promptEditorActive()) {
+      return [];
+    }
+
     /*
      * 안정화 대기 중에는 비싼 body fallback 스캔을 반복하지 않는다.
      * 최초에 찾은 작은 후보만 명시적 root로 승격해 다음 예약 스캔에서도
@@ -7013,6 +7018,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
      * 순회하지 않으므로 이 예외가 없으면 검증된 수식이 누락된다.
      */
     const candidateSet = new Set(candidates);
+    if (promptEditorActive()) {
+      return [];
+    }
+
     const roots = candidates.filter((root) => {
       if (rawMathScopeRoots.has(root)) return rootIsEligible(root);
       for (let parent = root.parentElement; parent; parent = parent.parentElement) {
@@ -7049,6 +7058,10 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
       return 0;
     });
+
+    if (promptEditorActive()) {
+      return [];
+    }
 
     const selected = roots.filter(nearViewport);
 
@@ -7130,6 +7143,29 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     ].join(' ').replace(/\s+/g, ' ').trim();
   }
 
+  const STOP_LABEL_HINT_RE = /(?:stop|cancel|abort|중지|정지|취소)/i;
+  const RUN_LABEL_HINT_RE = /(?:run|retry|rerun|실행|재시도|다시\s*생성)/i;
+
+  function labelHint(button, pattern) {
+    if (!button) {
+      return false;
+    }
+
+    return Boolean(
+      pattern.test(button.textContent || '') ||
+      pattern.test(button.getAttribute?.('aria-label') || '') ||
+      pattern.test(button.getAttribute?.('title') || '')
+    );
+  }
+
+  function stopLabelHint(button) {
+    return labelHint(button, STOP_LABEL_HINT_RE);
+  }
+
+  function runLabelHint(button) {
+    return labelHint(button, RUN_LABEL_HINT_RE);
+  }
+
   function isStopActionLabel(label) {
     return /(?:^|\s)(?:stop|cancel|abort|중지|정지|취소)(?:\s|$)/i.test(
       label || ''
@@ -7162,14 +7198,18 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     );
 
     return buttons.find((button) => {
+      if (!runLabelHint(button)) {
+        return false;
+      }
+
       const label = buttonLabel(button);
 
       return (
-        visible(button) &&
-        isPromptRunButton(button) &&
-        !button.disabled && button.getAttribute?.('aria-disabled') !== 'true' &&
         isRunActionLabel(label) &&
-        !isStopActionLabel(label)
+        !isStopActionLabel(label) &&
+        !button.disabled && button.getAttribute?.('aria-disabled') !== 'true' &&
+        isPromptRunButton(button) &&
+        visible(button)
       );
     }) || null;
   }
@@ -7204,7 +7244,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     const activeStopButton = Array.from(
       document.querySelectorAll('button')
     ).some((button) => (
-      isStopActionLabel(buttonLabel(button)) && isPromptRunButton(button) &&
+      stopLabelHint(button) && isStopActionLabel(buttonLabel(button)) && isPromptRunButton(button) &&
       visible(button)
     ));
 
@@ -7373,6 +7413,11 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     for (let offset = 0; offset < roots.length; offset++) {
       const index = (firstRoot + offset) % roots.length;
       const root = roots[index];
+      if (offset && promptEditorActive()) {
+        scanCursor = index;
+        schedule(PROMPT_IDLE_MS + 50);
+        break;
+      }
       if (offset && schedulerNow() - sliceStarted >= SCAN_BUDGET_MS) {
         scanCursor = index;
         schedule(16, true);
@@ -8068,6 +8113,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     let currentRoot = null;
     let renderedBlocks = 0;
     let discoveryWalker = null;
+    let syncFrame = 0;
+    let syncDiscover = false;
     let wasActive = false;
     let draining = false;
     let drainTimer = null;
@@ -8116,6 +8163,19 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       projectors.get(block)?.invalidate();
       dirty.add(block);
     }
+    function scheduleSync(discover = false) {
+      if (stopped) return;
+      if (typing() || document.hidden) { finishDrain(); return; }
+      syncDiscover = syncDiscover || discover;
+      if (syncFrame) return;
+      syncFrame = requestAnimationFrame(() => {
+        syncFrame = 0;
+        const pendingDiscover = syncDiscover;
+        syncDiscover = false;
+        synchronize(pendingDiscover);
+      });
+    }
+
     function synchronize(discover = false) {
       if (stopped) return;
       if (typing() || document.hidden || !phaseAllowed()) { finishDrain(); return; }
@@ -8183,14 +8243,14 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         else if (!element?.closest('button')) discover = true;
       }
       if (responseChanged) extendDrain();
-      if (relevant) synchronize(discover);
+      if (relevant) scheduleSync(discover);
     });
     observer.observe(document.body, { subtree: true, childList: true, characterData: true,
       attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-busy'] });
     const invalidateAll = () => {
       if (typing() || document.hidden) { finishDrain(); return; }
       for (const block of projectors.keys()) queue(block);
-      synchronize(true);
+      scheduleSync(true);
     };
     const events = [[document, 'scroll'], [document, 'selectionchange'], [document, 'input'],
       [document, 'compositionstart'], [document, 'compositionend'], [document, 'visibilitychange'],
@@ -8207,6 +8267,8 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
         clearTimeout(drainTimer);
         cancelAnimationFrame(frame);
         observer.disconnect();
+        cancelAnimationFrame(syncFrame);
+        syncFrame = 0;
         for (const [target, type] of events) target?.removeEventListener(type, invalidateAll, true);
         clear();
         style.remove();

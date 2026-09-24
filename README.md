@@ -12,6 +12,10 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.25 cuts typing-time work: run/stop probes pre-filter buttons by label text
+  before reading geometry, the live emphasis controller coalesces its non-typing
+  synchronize passes into one animation frame, and the scan pipeline aborts root
+  collection and repair slices the moment the prompt editor becomes active again.
 - 1.13.24 recognizes typographic leader variants (`·`, `…`, `‥`, `․`, `．`) in
   fallback leader tables, including spaced and full-width runs, without treating
   single middle dots or short ASCII dot runs as leaders. Unknown TeX commands
@@ -152,7 +156,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.24 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.25 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

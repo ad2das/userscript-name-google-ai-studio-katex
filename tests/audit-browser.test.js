@@ -241,18 +241,27 @@ async (page) => {
     }
     // A scan already queued before focusing the editor must also yield to typing.
     const editor = document.querySelector('textarea');
+    // A pending repairable root must not be collected once the editor is active.
+    const yieldTurn = document.createElement('ms-chat-turn');
+    yieldTurn.dataset.turnRole = 'model';
+    yieldTurn.innerHTML = '<ms-cmark-node><p>**입력 시작 전 수집 중단**</p></ms-cmark-node>';
+    document.getElementById('responses').append(yieldTurn);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     editor.focus();
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true }));
     bodyWalkers = 0;
     styleReads = 0;
     __audit.scan();
     const typing = { bodyWalkers, styleReads };
+    const rootsWhileTyping = __audit.collectRoots().length;
     editor.blur();
     document.createTreeWalker = originalWalker;
     window.getComputedStyle = originalStyle;
-    return { turns: 180, paragraphs: 3600, scanMs: timings, typing };
+    return { turns: 180, paragraphs: 3600, scanMs: timings, typing, rootsWhileTyping };
   });
   console.log(JSON.stringify({ checks: result, performance: perf }));
   result.typingIdle = perf.typing.bodyWalkers === 0 && perf.typing.styleReads === 0;
+  result.typingYieldsRootCollection = perf.rootsWhileTyping === 0;
   if (!process.env.AISTUDIO_AUDIT_BASELINE && Object.values(result).some((ok) => !ok)) {
     throw new Error('Audit regression: ' + JSON.stringify(result));
   }
