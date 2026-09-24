@@ -41,6 +41,8 @@ async (page) => {
   const installedSource = process.env.AISTUDIO_TYPING_BASELINE
     ? require('node:child_process').execFileSync('git',['show','77aeea5:aaa.user.js'],{encoding:'utf8'})
     : fs.readFileSync('aaa.user.js','utf8');
+  const composerSource = installedSource.replace(/\n  if \(document\.readyState === 'loading'\)/,
+    '\n  globalThis.__typingAudit = { scan, repairRoot };\n  if (document.readyState === \'loading\')');
   await page.addScriptTag({content:installedSource});
   await page.locator('#input').focus();
   const enabled = await page.evaluate(async () => {
@@ -62,5 +64,30 @@ async (page) => {
   await page.locator('#input').blur();
   await page.waitForFunction(()=>document.querySelector('#late strong')?.textContent==='지연 문장',null,{timeout:12000});
   result.lateRewriteRepaired=true;
+  // The live composer host is now ms-prompt-box; the whole composer must stay
+  // opaque to scans and cleanup, including attachment chips with images.
+  await page.setContent('<main role="main"><ms-prompt-box id="box"><div class="textarea-row"><textarea id="box-input"></textarea></div><div class="attachment-chip"><img id="chip-img" alt="첨부" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="></div><p id="box-hint">**첨부 대기**</p></ms-prompt-box><article data-turn-role="model"><ms-cmark-node><p id="box-late">**모델 문단 복구**</p></ms-cmark-node></article></main>');
+  await page.addScriptTag({ content: composerSource });
+  await page.waitForFunction(() => document.querySelector('#box-late strong')?.textContent === '모델 문단 복구', null, { timeout: 12000 });
+  result.composer = await page.evaluate(() => {
+    const box = document.getElementById('box');
+    const chip = box.querySelector('.attachment-chip');
+    const img = document.getElementById('chip-img');
+    chip.classList.add('uploading');
+    const extra = document.createElement('span');
+    extra.textContent = '업로드 중';
+    chip.append(extra);
+    const before = box.innerHTML;
+    window.__typingAudit.scan();
+    return {
+      composerUntouched: box.innerHTML === before,
+      chipImageSame: document.getElementById('chip-img') === img,
+      noArtifactsInComposer: !box.querySelector('[data-aistudio-repair-root], .aistudio-md-repaired, .aistudio-amount-token, .aistudio-won-symbol'),
+      composerNotRepairRoot: !box.hasAttribute('data-aistudio-repair-root')
+    };
+  });
+  if (!process.env.AISTUDIO_TYPING_BASELINE && Object.values(result.composer).some((x) => !x)) {
+    throw new Error('composer opacity regression: ' + JSON.stringify(result.composer));
+  }
   return result;
 }

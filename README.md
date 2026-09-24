@@ -12,6 +12,12 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.26 removes the per-keystroke style-recalc cost that made long
+  conversations laggy while typing: the stylesheet scope no longer walks
+  ancestors against the full protected list on every recalc (measured 50-130 ms
+  frames on the live site drop to zero), and the current `ms-prompt-box`
+  composer host is treated as an opaque editor island so attachment chips and
+  upload progress are never touched.
 - 1.13.25 cuts typing-time work: run/stop probes pre-filter buttons by label text
   before reading geometry, the live emphasis controller coalesces its non-typing
   synchronize passes into one animation frame, and the scan pipeline aborts root
@@ -156,7 +162,7 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 The script is intended for mobile Firefox with Violentmonkey. It uses standard browser
 DOM APIs and can also run in other userscript managers.
 
-Version 1.13.25 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
+Version 1.13.26 uses a pinned KaTeX 0.18.1 `@require`, explicit update/download
 URLs, and no privileged GM API.
 Violentmonkey runs it in the isolated content-script context, where it can repair the
 rendered DOM without accessing AI Studio's page JavaScript objects. The script

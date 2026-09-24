@@ -23,6 +23,12 @@ assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
 assert.match(source, /function promptEditorFor/);
 assert.match(source, /function promptEditorActive/);
+// Live-site typing cost: the scope prefix must not walk ancestors against the
+// full protected list on every style recalc (measured 50-130 ms frames on the
+// real conversation page). Container exclusion via :has() stays.
+assert.ok(!source.includes(':not(:where(${PROTECTED_CSS_SELECTOR}) *)'));
+assert.match(source, /:not\(:has\(\$\{PROTECTED_CSS_SELECTOR\}\)\)/);
+assert.match(source, /'ms-prompt-box'/);
 assert.match(
   source,
   /\[contenteditable\]:not\(\[contenteditable=\"false\"\]\)/
