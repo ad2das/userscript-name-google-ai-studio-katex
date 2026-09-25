@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.26
+// @version      1.13.27
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.26';
+  const VERSION = '1.13.27';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -472,14 +472,26 @@
   const EMBEDDED_MATH_CLASS_TOKEN =
     /^(?:katex|mathjax|mathjax-container|math|math-inline|inline-math|math-container|math-renderer|rendered-math|latex|latex-inline|tex-math|formula|formula-inline|equation|equation-inline)$/i;
 
-  const PROTECTED_CSS_SELECTOR = USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR;
-  // A scope containing an editor/user island must not impose inherited styles
-  // on that island. The former descendant exclusion (`:not(:where(PROTECTED) *)`)
-  // forced an ancestor walk against the full protected list for every element on
-  // every style recalc; on a long conversation that turned each keystroke into
-  // 50-130 ms frames (measured on the live site). The `:has()` container
-  // exclusion keeps the island protection at a fraction of the cost.
-  const SCOPE = `:where(${STYLE_ROOT_SELECTOR}):not(:where(${PROTECTED_CSS_SELECTOR})):not(:has(${PROTECTED_CSS_SELECTOR}))`;
+  /*
+   * Islands that can appear inside model content. Every scope item carries a
+   * boolean island-marker guard, so a style root whose subtree contains an
+   * island is excluded and protected subtrees keep their native styles. The
+   * marker is maintained in JS (refreshIslandMarks) because :has() in the
+   * scope prefix defeated incremental style invalidation and taxed every
+   * composer attribute change (measured ~0.5 s per 26-char burst on a
+   * 60k-element conversation); the marker selector alone costs nothing.
+   */
+  const CONTENT_ISLAND_CSS_SELECTOR = [
+    '[data-turn-role="user" i]',
+    '[data-role="user" i]',
+    '.user-prompt-container',
+    '[contenteditable]'
+  ].join(',');
+  const ISLAND_MARKER_ATTRIBUTE = 'data-aistudio-island';
+  // The stylesheet is expanded at boot: functional pseudo-classes in the scope
+  // prefix defeat Firefox's incremental style invalidation, which made every
+  // composer attribute change force a document-wide restyle (measured ~145 ms
+  // per keystroke on a 60k-element conversation).
 
   const LEGACY_STYLE_IDS = [
     'aistudio-mobile-safe-1131-style',
@@ -544,7 +556,81 @@
     'aistudio-mobile-safe-1111-style'
   ];
 
-  const CSS_TEXT = `
+/*
+   * Boot-time stylesheet build. The authored sheet references the style-root
+   * list as @SCOPE@; each rule keeps one compact :where() scope carrying the
+   * island-marker guard, and selector entries are never expanded. Measured on
+   * a 60k-element conversation: expanded entries and per-rule subject guards
+   * cost more under the per-keystroke restyle pattern, and :has() in the
+   * scope defeated incremental invalidation entirely. Only the built string
+   * reaches the document.
+   */
+  function expandCss(raw, scopeSelector, protectedSelector) {
+    const scopeItems = [":where(" + scopeSelector + "):not([" + ISLAND_MARKER_ATTRIBUTE + "])"];
+    const expandScope = (selector) => {
+      const start = selector.indexOf("@SCOPE@");
+      if (start < 0) return [selector];
+      const before = selector.slice(0, start);
+      const after = selector.slice(start + 7);
+      const expanded = [];
+      for (const item of scopeItems) {
+        for (const rest of expandScope(before + item + after)) {
+          expanded.push(rest);
+        }
+      }
+      return expanded;
+    };
+    const rebuilt = [];
+    let scan = 0;
+    let last = 0;
+    while (scan < raw.length) {
+      if (raw.startsWith("/*", scan)) {
+        const close = raw.indexOf("*/", scan + 2);
+        const end = close < 0 ? raw.length : close + 2;
+        if (scan > last) rebuilt.push(raw.slice(last, scan));
+        rebuilt.push(raw.slice(scan, end));
+        scan = end;
+        last = end;
+        continue;
+      }
+      if (raw[scan] === "{") {
+        const prelude = raw.slice(last, scan);
+        let depth = 1;
+        let cursor = scan + 1;
+        while (cursor < raw.length && depth > 0) {
+          if (raw.startsWith("/*", cursor)) {
+            const close = raw.indexOf("*/", cursor + 2);
+            cursor = close < 0 ? raw.length : close + 2;
+            continue;
+          }
+          if (raw[cursor] === "{") depth += 1;
+          else if (raw[cursor] === "}") depth -= 1;
+          cursor += 1;
+        }
+        const body = raw.slice(scan, cursor);
+        if (prelude.includes(":where(") || prelude.includes("@SCOPE@")) {
+          const collapsed = prelude.replace(/\s+/g, " ").trim();
+const selectors = [];
+          for (const scoped of expandScope(collapsed)) {
+            if (!selectors.includes(scoped)) selectors.push(scoped);
+          }
+          const lead = (prelude.match(/^\s*/) || [""])[0];
+          rebuilt.push(lead + selectors.join(",\n") + " ");
+        } else {
+          rebuilt.push(prelude);
+        }
+        rebuilt.push(body);
+        scan = cursor;
+        last = cursor;
+        continue;
+      }
+      scan += 1;
+    }
+    if (last < raw.length) rebuilt.push(raw.slice(last));
+    return rebuilt.join("");
+  }
+
+  const CSS_TEXT = expandCss(`
 :root {
   --as-font:
     "Google Sans Text",
@@ -573,13 +659,13 @@
   --as-bold: 600;
 }
 
-${SCOPE} {
+@SCOPE@ {
   font-family: var(--as-font) !important;
   -webkit-font-smoothing: antialiased !important;
   text-rendering: optimizeLegibility !important;
 }
 
-${SCOPE} {
+@SCOPE@ {
   max-width: 100% !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
@@ -594,7 +680,7 @@ ${SCOPE} {
   word-break: normal !important;
 }
 
-${SCOPE} :where(
+@SCOPE@ :where(
   p,
   li,
   blockquote,
@@ -618,35 +704,35 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-${SCOPE} :where(strong, b, .aistudio-md-repaired:not(.aistudio-md-italic)) {
+@SCOPE@ :where(strong, b, .aistudio-md-repaired:not(.aistudio-md-italic)) {
   font-family: inherit !important;
   font-weight: var(--as-bold) !important;
   text-shadow: none !important;
   -webkit-text-stroke: 0 !important;
 }
 
-${SCOPE} .aistudio-won-amount { white-space: nowrap; }
-${SCOPE} .aistudio-won-symbol {
+@SCOPE@ .aistudio-won-amount { white-space: nowrap; }
+@SCOPE@ .aistudio-won-symbol {
   display: inline-grid;
   vertical-align: baseline;
 }
-${SCOPE} .aistudio-won-symbol > .aistudio-won-source {
+@SCOPE@ .aistudio-won-symbol > .aistudio-won-source {
   grid-area: 1 / 1;
   visibility: hidden;
 }
-${SCOPE} .aistudio-won-symbol::after {
+@SCOPE@ .aistudio-won-symbol::after {
   content: '₩';
   grid-area: 1 / 1;
 }
-${SCOPE} .aistudio-amount-token,
-${SCOPE} .aistudio-amount-token :where(span, ms-cmark-node) {
+@SCOPE@ .aistudio-amount-token,
+@SCOPE@ .aistudio-amount-token :where(span, ms-cmark-node) {
   white-space: nowrap !important;
   overflow-wrap: normal !important;
   word-break: keep-all !important;
 }
 
 /* AI Studio가 문자로 노출한 속성 없는 <u>...</u>의 안전한 fallback. */
-${SCOPE} u.aistudio-underline-repaired {
+@SCOPE@ u.aistudio-underline-repaired {
   font: inherit !important;
   color: inherit !important;
   text-decoration-line: underline !important;
@@ -660,7 +746,7 @@ ${SCOPE} u.aistudio-underline-repaired {
  * 원문으로 노출된 완전한 TeX 블록은 고정 버전 KaTeX로 다시 렌더한다.
  * 파싱이 성공한 경우에만 이 래퍼가 만들어진다.
  */
-${SCOPE} .aistudio-raw-math-repaired {
+@SCOPE@ .aistudio-raw-math-repaired {
   max-width: 100% !important;
   box-sizing: border-box !important;
   overflow: visible !important;
@@ -668,23 +754,23 @@ ${SCOPE} .aistudio-raw-math-repaired {
   word-break: normal !important;
 }
 
-${SCOPE} .aistudio-raw-math-display {
+@SCOPE@ .aistudio-raw-math-display {
   display: block !important;
   margin: 0.65em 0 !important;
 }
 
-${SCOPE} .aistudio-raw-math-inline {
+@SCOPE@ .aistudio-raw-math-inline {
   display: inline !important;
   margin: 0 !important;
 }
 
-${SCOPE} .aistudio-raw-math-repaired :where(.katex, .katex *) {
+@SCOPE@ .aistudio-raw-math-repaired :where(.katex) {
   overflow-wrap: normal !important;
   word-break: normal !important;
 }
 
 /* Markdown **...** 안의 수식도 주변 굵기와 맞추는 시각적 fallback. */
-${SCOPE} :where(
+@SCOPE@ :where(
   .aistudio-raw-math-bold > .katex,
   .aistudio-md-contains-math .katex,
   .aistudio-md-embedded-math
@@ -699,7 +785,7 @@ ${SCOPE} :where(
  * KaTeX는 굵은 수학 그룹 안의 텍스트 그룹에 굵기를 상속하지 않는다.
  * 정규화된 한글 fallback 글꼴에도 굵기를 명시해 페이지 CSS의 간섭을 막는다.
  */
-${SCOPE} :where(
+@SCOPE@ :where(
   .aistudio-raw-math-repaired,
   .aistudio-rendered-math-bold-repaired
 ) .katex :where(.mathbf, .textbf, .boldsymbol).hangul_fallback {
@@ -709,7 +795,7 @@ ${SCOPE} :where(
 }
 
 /* KaTeX 글꼴 메트릭이 없는 ① 같은 enclosed glyph도 굵은 그룹에 맞춘다. */
-${SCOPE} :where(
+@SCOPE@ :where(
   .aistudio-raw-math-repaired,
   .aistudio-rendered-math-bold-repaired
 ) .aistudio-katex-bold-glyph-fallback {
@@ -719,7 +805,7 @@ ${SCOPE} :where(
   text-shadow: 0.01em 0 currentColor, -0.01em 0 currentColor !important;
 }
 
-${SCOPE} .aistudio-rendered-math-bold-repaired {
+@SCOPE@ .aistudio-rendered-math-bold-repaired {
   max-width: 100% !important;
   box-sizing: border-box !important;
   overflow: visible !important;
@@ -729,7 +815,7 @@ ${SCOPE} .aistudio-rendered-math-bold-repaired {
  * AI Studio가 raw \\begin{array} 블록의 명령/행 구분 백슬래시를
  * 일부 잃어버린 경우에만 쓰는 보수적인 HTML fallback이다.
  */
-${SCOPE} .aistudio-array-repaired {
+@SCOPE@ .aistudio-array-repaired {
   display: inline-grid !important;
   grid-template-columns:
     repeat(var(--aistudio-array-columns), max-content) !important;
@@ -742,11 +828,11 @@ ${SCOPE} .aistudio-array-repaired {
   vertical-align: middle !important;
 }
 
-${SCOPE} .aistudio-array-row {
+@SCOPE@ .aistudio-array-row {
   display: contents !important;
 }
 
-${SCOPE} .aistudio-array-cell {
+@SCOPE@ .aistudio-array-cell {
   display: block !important;
   grid-column: span var(--aistudio-array-span, 1) !important;
   padding: 0.12em 0.45em !important;
@@ -756,30 +842,30 @@ ${SCOPE} .aistudio-array-cell {
   vertical-align: baseline !important;
 }
 
-${SCOPE} .aistudio-array-rule {
+@SCOPE@ .aistudio-array-rule {
   border-top: 1px solid currentColor !important;
 }
 
-${SCOPE} .aistudio-array-align-l {
+@SCOPE@ .aistudio-array-align-l {
   text-align: left !important;
 }
 
-${SCOPE} .aistudio-array-align-c {
+@SCOPE@ .aistudio-array-align-c {
   text-align: center !important;
 }
 
-${SCOPE} .aistudio-array-align-r {
+@SCOPE@ .aistudio-array-align-r {
   text-align: right !important;
 }
 
-${SCOPE} .aistudio-array-divider {
+@SCOPE@ .aistudio-array-divider {
   border-left: 1px solid currentColor !important;
 }
 
 /*
  * 깨진 \\begin{aligned} 블록을 수식의 & 정렬점에 맞춰 복원한다.
  */
-${SCOPE} .aistudio-aligned-repaired {
+@SCOPE@ .aistudio-aligned-repaired {
   display: inline-table !important;
   max-width: 100% !important;
   margin: 0.65em auto !important;
@@ -790,11 +876,11 @@ ${SCOPE} .aistudio-aligned-repaired {
   vertical-align: middle !important;
 }
 
-${SCOPE} .aistudio-aligned-row {
+@SCOPE@ .aistudio-aligned-row {
   display: table-row !important;
 }
 
-${SCOPE} .aistudio-aligned-cell {
+@SCOPE@ .aistudio-aligned-cell {
   display: table-cell !important;
   padding: 0.12em 0 !important;
   white-space: nowrap !important;
@@ -803,40 +889,40 @@ ${SCOPE} .aistudio-aligned-cell {
   vertical-align: baseline !important;
 }
 
-${SCOPE} .aistudio-aligned-anchor {
+@SCOPE@ .aistudio-aligned-anchor {
   padding-right: 0.22em !important;
   text-align: right !important;
 }
 
-${SCOPE} .aistudio-aligned-expression {
+@SCOPE@ .aistudio-aligned-expression {
   padding-left: 0.08em !important;
   text-align: left !important;
 }
 
-${SCOPE} .aistudio-tex-bold {
+@SCOPE@ .aistudio-tex-bold {
   font-weight: var(--as-bold) !important;
 }
 
-${SCOPE} .aistudio-md-bold-italic {
+@SCOPE@ .aistudio-md-bold-italic {
   font-style: italic !important;
 }
 
-${SCOPE} .aistudio-md-italic {
+@SCOPE@ .aistudio-md-italic {
   font-style: italic !important;
   font-weight: inherit !important;
 }
 
-${SCOPE} :where(a) {
+@SCOPE@ :where(a) {
   overflow-wrap: anywhere !important;
   word-break: normal !important;
 }
 
-${SCOPE} :where(code, pre, kbd, samp) {
+@SCOPE@ :where(code, pre, kbd, samp) {
   font-family: var(--as-mono) !important;
   letter-spacing: 0 !important;
 }
 
-${SCOPE} pre {
+@SCOPE@ pre {
   max-width: 100% !important;
   min-width: 0 !important;
 
@@ -850,7 +936,7 @@ ${SCOPE} pre {
   white-space: pre !important;
 }
 
-${SCOPE} pre code {
+@SCOPE@ pre code {
   white-space: pre !important;
   overflow-wrap: normal !important;
   word-break: normal !important;
@@ -861,7 +947,7 @@ ${SCOPE} pre code {
  * 공유 grid column에 놓는다. 각 cell의 실제 텍스트와 줄바꿈은 유지되어
  * AI Studio의 복사/다운로드 동작은 원문을 그대로 읽을 수 있다.
  */
-${SCOPE} pre.aistudio-ascii-tree-block-repaired >
+@SCOPE@ pre.aistudio-ascii-tree-block-repaired >
 code.aistudio-ascii-tree-repaired {
   position: absolute !important;
   width: 1px !important;
@@ -874,7 +960,7 @@ code.aistudio-ascii-tree-repaired {
   white-space: pre !important;
 }
 
-${SCOPE} .aistudio-ascii-tree-visual {
+@SCOPE@ .aistudio-ascii-tree-visual {
   display: inline-grid !important;
   grid-template-columns: max-content max-content max-content !important;
   width: max-content !important;
@@ -884,26 +970,26 @@ ${SCOPE} .aistudio-ascii-tree-visual {
   word-break: normal !important;
 }
 
-${SCOPE} .aistudio-raw-table-source {
+@SCOPE@ .aistudio-raw-table-source {
   display: block !important;
   position: absolute !important;
   width: 1px !important; height: 1px !important;
   overflow: hidden !important; clip-path: inset(50%) !important;
   white-space: pre !important;
 }
-${SCOPE} .aistudio-raw-table-visual { display: block !important; max-width: 100% !important; }
-${SCOPE} .aistudio-raw-table-caption { display: block !important; margin-bottom: 12px !important; }
-${SCOPE} .aistudio-raw-table-scroll { display: block !important; max-width: 100% !important; overflow-x: auto !important; }
-${SCOPE} .aistudio-raw-table-grid { display: table !important; width: max-content !important; min-width: 100% !important; border-collapse: collapse !important; }
-${SCOPE} .aistudio-raw-table-row { display: table-row !important; }
-${SCOPE} .aistudio-raw-table-cell { display: table-cell !important; padding: 8px 12px !important; vertical-align: top !important; white-space: pre !important; }
-${SCOPE} [data-aistudio-raw-table-text]::before { content: attr(data-aistudio-raw-table-text) !important; }
+@SCOPE@ .aistudio-raw-table-visual { display: block !important; max-width: 100% !important; }
+@SCOPE@ .aistudio-raw-table-caption { display: block !important; margin-bottom: 12px !important; }
+@SCOPE@ .aistudio-raw-table-scroll { display: block !important; max-width: 100% !important; overflow-x: auto !important; }
+@SCOPE@ .aistudio-raw-table-grid { display: table !important; width: max-content !important; min-width: 100% !important; border-collapse: collapse !important; }
+@SCOPE@ .aistudio-raw-table-row { display: table-row !important; }
+@SCOPE@ .aistudio-raw-table-cell { display: table-cell !important; padding: 8px 12px !important; vertical-align: top !important; white-space: pre !important; }
+@SCOPE@ [data-aistudio-raw-table-text]::before { content: attr(data-aistudio-raw-table-text) !important; }
 
-${SCOPE} .aistudio-ascii-tree-row {
+@SCOPE@ .aistudio-ascii-tree-row {
   display: contents !important;
 }
 
-${SCOPE} :where(
+@SCOPE@ :where(
   .aistudio-ascii-tree-left,
   .aistudio-ascii-tree-junction,
   .aistudio-ascii-tree-right,
@@ -914,7 +1000,7 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-${SCOPE} :where(
+@SCOPE@ :where(
   .aistudio-ascii-tree-left,
   .aistudio-ascii-tree-junction,
   .aistudio-ascii-tree-right,
@@ -923,37 +1009,37 @@ ${SCOPE} :where(
   content: attr(data-aistudio-ascii-cell) !important;
 }
 
-${SCOPE} .aistudio-ascii-tree-left {
+@SCOPE@ .aistudio-ascii-tree-left {
   grid-column: 1 !important;
   justify-self: end !important;
 }
 
-${SCOPE} .aistudio-ascii-tree-junction {
+@SCOPE@ .aistudio-ascii-tree-junction {
   grid-column: 2 !important;
 }
 
-${SCOPE} .aistudio-ascii-tree-right {
+@SCOPE@ .aistudio-ascii-tree-right {
   grid-column: 3 !important;
 }
 
-${SCOPE} .aistudio-ascii-tree-plain {
+@SCOPE@ .aistudio-ascii-tree-plain {
   grid-column: 1 / -1 !important;
 }
 
 /* [설명] ──▶ "결과" 도식은 세 행 모두 같은 화살표 축에 맞춘다. */
-${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-arrow-grid {
+@SCOPE@ .aistudio-ascii-tree-visual.aistudio-ascii-arrow-grid {
   column-gap: 0.75ch !important;
   row-gap: 0.08em !important;
 }
 
 /* 좌우 표처럼 여러 축을 가진 ASCII 도식은 1ch 논리 격자에 배치한다. */
-${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-character-grid {
+@SCOPE@ .aistudio-ascii-tree-visual.aistudio-ascii-character-grid {
   display: block !important;
   width: max-content !important;
   min-width: 100% !important;
 }
 
-${SCOPE} .aistudio-ascii-character-grid .aistudio-ascii-tree-row {
+@SCOPE@ .aistudio-ascii-character-grid .aistudio-ascii-tree-row {
   display: grid !important;
   grid-template-columns: repeat(
     var(--aistudio-ascii-columns),
@@ -965,7 +1051,7 @@ ${SCOPE} .aistudio-ascii-character-grid .aistudio-ascii-tree-row {
   line-height: 1.55 !important;
 }
 
-${SCOPE} .aistudio-ascii-grid-run {
+@SCOPE@ .aistudio-ascii-grid-run {
   grid-row: 1 !important;
   align-self: baseline !important;
   min-width: 0 !important;
@@ -975,15 +1061,15 @@ ${SCOPE} .aistudio-ascii-grid-run {
   word-break: normal !important;
 }
 
-${SCOPE} .aistudio-ascii-grid-run::before {
+@SCOPE@ .aistudio-ascii-grid-run::before {
   content: attr(data-aistudio-ascii-cell) !important;
 }
 
-${SCOPE} .aistudio-ascii-grid-wide {
+@SCOPE@ .aistudio-ascii-grid-wide {
   font-family: var(--as-mono) !important;
 }
 
-${SCOPE} :where(
+@SCOPE@ :where(
   .aistudio-ascii-timeline-grid,
   .aistudio-ascii-framed-grid
 ) .aistudio-ascii-tree-row {
@@ -991,13 +1077,13 @@ ${SCOPE} :where(
 }
 
 /* 공백 패딩 대신 실제 grid 열로 pseudo-table을 정렬한다. */
-${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-delimited-grid {
+@SCOPE@ .aistudio-ascii-tree-visual.aistudio-ascii-delimited-grid {
   grid-template-columns: var(--aistudio-delimited-columns) !important;
   column-gap: 0.55ch !important;
   row-gap: 0.12em !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-cell {
+@SCOPE@ .aistudio-ascii-delimited-cell {
   min-width: 0 !important;
   white-space: pre !important;
   overflow-wrap: normal !important;
@@ -1005,29 +1091,29 @@ ${SCOPE} .aistudio-ascii-delimited-cell {
   align-self: baseline !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-cell::before {
+@SCOPE@ .aistudio-ascii-delimited-cell::before {
   content: attr(data-aistudio-ascii-cell) !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-label {
+@SCOPE@ .aistudio-ascii-delimited-label {
   justify-self: start !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-amount {
+@SCOPE@ .aistudio-ascii-delimited-amount {
   justify-self: end !important;
   font-variant-numeric: tabular-nums !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-separator {
+@SCOPE@ .aistudio-ascii-delimited-separator {
   justify-self: center !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-spanning {
+@SCOPE@ .aistudio-ascii-delimited-spanning {
   grid-column: 1 / -1 !important;
 }
 
 /* Keep horizontal account rules spanning the same columns as their amounts. */
-${SCOPE} .aistudio-ascii-delimited-rule {
+@SCOPE@ .aistudio-ascii-delimited-rule {
   display: flex !important;
   align-items: center !important;
   align-self: stretch !important;
@@ -1035,27 +1121,27 @@ ${SCOPE} .aistudio-ascii-delimited-rule {
   min-height: 1.65em !important;
 }
 
-${SCOPE} .aistudio-ascii-delimited-rule::before {
+@SCOPE@ .aistudio-ascii-delimited-rule::before {
   content: "" !important;
   display: block !important;
   width: 100% !important;
   border-top: 1px solid currentColor !important;
 }
 
-${SCOPE} .aistudio-ascii-tree-visual.aistudio-ascii-leader-grid {
+@SCOPE@ .aistudio-ascii-tree-visual.aistudio-ascii-leader-grid {
   grid-template-columns: max-content minmax(2ch, 1fr) max-content max-content !important;
   column-gap: 0.7ch !important;
   row-gap: 0.12em !important;
 }
 
-${SCOPE} .aistudio-ascii-leader-dots {
+@SCOPE@ .aistudio-ascii-leader-dots {
   align-self: center !important;
   border-bottom: 1px dotted currentColor !important;
   min-width: 2ch !important;
 }
 
 /* 들여쓰기 때문에 코드 블록으로 오인된 한국어 설명문만 원래 문단처럼 복구한다. */
-${SCOPE} pre.aistudio-prose-code-block-repaired {
+@SCOPE@ pre.aistudio-prose-code-block-repaired {
   overflow: visible !important;
   padding: 0 !important;
   border: 0 !important;
@@ -1064,7 +1150,7 @@ ${SCOPE} pre.aistudio-prose-code-block-repaired {
   white-space: normal !important;
 }
 
-${SCOPE} pre.aistudio-prose-code-block-repaired >
+@SCOPE@ pre.aistudio-prose-code-block-repaired >
 code.aistudio-prose-code-repaired {
   display: block !important;
   padding: 0 !important;
@@ -1078,7 +1164,7 @@ code.aistudio-prose-code-repaired {
   word-break: normal !important;
 }
 
-${SCOPE} :where(
+@SCOPE@ :where(
   p code,
   li code,
   dd code,
@@ -1092,7 +1178,7 @@ ${SCOPE} :where(
   word-break: normal !important;
 }
 
-${SCOPE} table {
+@SCOPE@ table {
   width: 100% !important;
   max-width: 100% !important;
 
@@ -1101,7 +1187,7 @@ ${SCOPE} table {
   box-sizing: border-box !important;
 }
 
-${SCOPE} :where(th, td) {
+@SCOPE@ :where(th, td) {
   min-width: 4.5em !important;
   box-sizing: border-box !important;
 
@@ -1113,21 +1199,21 @@ ${SCOPE} :where(th, td) {
   vertical-align: top !important;
 }
 
-${SCOPE} th {
+@SCOPE@ th {
   white-space: nowrap !important;
 }
 
-${SCOPE} :where(th, td):nth-child(1) {
+@SCOPE@ :where(th, td):nth-child(1) {
   min-width: 4.25em !important;
   white-space: nowrap !important;
 }
 
-${SCOPE} :where(th, td):nth-child(2) {
+@SCOPE@ :where(th, td):nth-child(2) {
   min-width: 3.25em !important;
   white-space: nowrap !important;
 }
 
-${SCOPE} .aistudio-table-scroll {
+@SCOPE@ .aistudio-table-scroll {
   display: block !important;
   width: 100% !important;
   max-width: 100% !important;
@@ -1140,7 +1226,7 @@ ${SCOPE} .aistudio-table-scroll {
   scrollbar-gutter: stable !important;
 }
 
-${SCOPE} .aistudio-table-scroll > table[${MOBILE_TABLE_ATTR}="1"] {
+@SCOPE@ .aistudio-table-scroll > table[${MOBILE_TABLE_ATTR}="1"] {
   width: max-content !important;
   min-width: 100% !important;
   max-width: none !important;
@@ -1148,20 +1234,20 @@ ${SCOPE} .aistudio-table-scroll > table[${MOBILE_TABLE_ATTR}="1"] {
   table-layout: auto !important;
 }
 
-${SCOPE} .aistudio-table-scroll :where(th, td) {
+@SCOPE@ .aistudio-table-scroll :where(th, td) {
   max-width: min(28em, 68vw) !important;
   line-height: 1.5 !important;
 }
 
-${SCOPE} .aistudio-table-scroll :where(th, td):nth-child(3) {
+@SCOPE@ .aistudio-table-scroll :where(th, td):nth-child(3) {
   min-width: 7em !important;
 }
 
-${SCOPE} .aistudio-table-scroll :where(th, td):nth-child(4) {
+@SCOPE@ .aistudio-table-scroll :where(th, td):nth-child(4) {
   font-variant-numeric: tabular-nums !important;
 }
 
-${SCOPE} :where(img, video, canvas) {
+@SCOPE@ :where(img, video, canvas) {
   max-width: 100% !important;
   height: auto !important;
   box-sizing: border-box !important;
@@ -1177,7 +1263,7 @@ ${SCOPE} :where(img, video, canvas) {
  * 그래서 바깥 래퍼는 위아래 보존을 우선하고 overflow: visible로 둔다.
  * 가로로 긴 KaTeX 본체는 JS에서 가용 폭에 맞춰 비례 축소한다.
  */
-${SCOPE} :where(
+@SCOPE@ :where(
   ms-katex.display,
   .katex-display,
   mjx-container[display="true"]
@@ -1200,12 +1286,10 @@ ${SCOPE} :where(
 /*
  * 수식 내부는 일반 텍스트 줄바꿈 규칙의 영향을 받지 않게 한다.
  */
-${SCOPE} :where(
+@SCOPE@ :where(
   ms-katex,
   .katex,
-  .katex *,
-  mjx-container,
-  mjx-container *
+  mjx-container
 ) {
   overflow-wrap: normal !important;
   word-break: normal !important;
@@ -1215,7 +1299,7 @@ ${SCOPE} :where(
  * 인라인 수식은 중간에서 부서지지 않게 한다.
  * .katex 전체에 nowrap을 걸면 display 수식에도 영향을 줄 수 있으므로 제외한다.
  */
-${SCOPE} :where(
+@SCOPE@ :where(
   ms-katex:not(.display),
   mjx-container:not([display="true"])
 ) {
@@ -1226,7 +1310,7 @@ ${SCOPE} :where(
  * KaTeX display의 바깥 본체도 세로 clipping을 막는다. 아래의 내부
  * stretchy/MathML 조각은 KaTeX 원래 규칙대로 overflow:hidden을 복원한다.
  */
-${SCOPE} :where(
+@SCOPE@ :where(
   .katex-display,
   .katex-display > .katex,
   ms-katex.display,
@@ -1240,7 +1324,7 @@ ${SCOPE} :where(
  * overflow:hidden이 필수다. 이를 visible로 바꾸면 underbrace 꼬리가
  * 화면 전체의 수평선처럼 새어 나온다.
  */
-${SCOPE} .katex :where(
+@SCOPE@ .katex :where(
   .katex-mathml,
   .pstrut,
   .katex-stretchy,
@@ -1258,15 +1342,15 @@ ${SCOPE} .katex :where(
 /*
  * display 수식 내부 본체가 부모 폭 안에서 가능한 한 자연스럽게 놓이도록 한다.
  */
-${SCOPE} :where(.katex-display > .katex) {
+@SCOPE@ :where(.katex-display > .katex) {
   max-width: 100% !important;
 }
 
-${SCOPE} :where(s, del).aistudio-page-range-repaired {
+@SCOPE@ :where(s, del).aistudio-page-range-repaired {
   text-decoration: none !important;
 }
 
-${SCOPE} .aistudio-fallback-math-scroll {
+@SCOPE@ .aistudio-fallback-math-scroll {
   display: block !important;
   max-width: 100% !important;
   overflow-x: auto !important;
@@ -1274,14 +1358,14 @@ ${SCOPE} .aistudio-fallback-math-scroll {
   padding-block: 0.5em !important;
 }
 
-${SCOPE} .aistudio-fallback-math-scroll > :where(.aistudio-array-repaired, .aistudio-aligned-repaired) {
+@SCOPE@ .aistudio-fallback-math-scroll > :where(.aistudio-array-repaired, .aistudio-aligned-repaired) {
   width: max-content !important;
   max-width: none !important;
 }
 
 /* Retain readable type for extreme formulas. Padding protects tall glyphs while
  * only this outer viewport scrolls horizontally; inner stretchy clipping stays. */
-${SCOPE} .aistudio-math-scroll {
+@SCOPE@ .aistudio-math-scroll {
   display: block !important;
   max-width: 100% !important;
   min-width: 0 !important;
@@ -1291,11 +1375,11 @@ ${SCOPE} .aistudio-math-scroll {
   padding-block: 0.5em !important;
 }
 
-${SCOPE} .aistudio-math-scroll .katex-display {
+@SCOPE@ .aistudio-math-scroll .katex-display {
   text-align: left !important;
 }
 
-${SCOPE} .aistudio-math-scroll .katex-display > .katex {
+@SCOPE@ .aistudio-math-scroll .katex-display > .katex {
   width: max-content !important;
   max-width: none !important;
   text-align: left !important;
@@ -1305,7 +1389,7 @@ ${SCOPE} .aistudio-math-scroll .katex-display > .katex {
  * is wider than a list item or paragraph, AI Studio clips its right edge at
  * mobile widths.  Only proven-wide atoms receive this keyboard-accessible
  * viewport; ordinary inline equations keep their native baseline behavior. */
-${SCOPE} .aistudio-inline-math-scroll {
+@SCOPE@ .aistudio-inline-math-scroll {
   display: inline-block !important;
   max-width: 100% !important;
   min-width: 0 !important;
@@ -1316,7 +1400,7 @@ ${SCOPE} .aistudio-inline-math-scroll {
   vertical-align: middle !important;
 }
 
-${SCOPE} .aistudio-inline-math-scroll > :where(
+@SCOPE@ .aistudio-inline-math-scroll > :where(
   ms-katex:not(.display),
   mjx-container:not([display="true"])
 ) {
@@ -1328,7 +1412,7 @@ ${SCOPE} .aistudio-inline-math-scroll > :where(
 /*
  * details/summary, blockquote 같은 Markdown 부가 요소도 모바일에서 폭을 넘지 않게 한다.
  */
-${SCOPE} :where(details, blockquote) {
+@SCOPE@ :where(details, blockquote) {
   max-width: 100% !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
@@ -1337,12 +1421,12 @@ ${SCOPE} :where(details, blockquote) {
 /*
  * 긴 단어가 있는 제목이 모바일에서 화면을 밀지 않게 한다.
  */
-${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
+@SCOPE@ :where(h1, h2, h3, h4, h5, h6) {
   overflow-wrap: anywhere !important;
   word-break: normal !important;
 }
 
-`;
+`, STYLE_ROOT_SELECTOR, CONTENT_ISLAND_CSS_SELECTOR);
 
   const states = new WeakMap();
   const rootEligibility = new WeakMap();
@@ -1468,6 +1552,28 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
     }
   }
 
+  // :has()-based island exclusion forced a document-wide style invalidation
+  // on every composer attribute change. This marker is recomputed only when
+  // styles are (re)installed and after repair scans - never per keystroke -
+  // and it normally writes nothing because protected islands do not live
+  // inside styled content roots on the live site.
+  function refreshIslandMarks() {
+    const marked = new Set();
+    for (const island of document.querySelectorAll(CONTENT_ISLAND_CSS_SELECTOR)) {
+      for (let node = island; node && node.nodeType === 1; node = node.parentElement) {
+        if (node.matches(STYLE_ROOT_SELECTOR)) marked.add(node);
+      }
+    }
+    for (const node of document.querySelectorAll("[" + ISLAND_MARKER_ATTRIBUTE + "]")) {
+      if (!marked.has(node)) node.removeAttribute(ISLAND_MARKER_ATTRIBUTE);
+    }
+    for (const node of marked) {
+      if (!node.hasAttribute(ISLAND_MARKER_ATTRIBUTE)) {
+        node.setAttribute(ISLAND_MARKER_ATTRIBUTE, "1");
+      }
+    }
+  }
+
   function installStyle() {
     const parent =
       document.head ||
@@ -1479,6 +1585,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
 
     cleanupLegacy();
     installKatexStylesheet(parent);
+    refreshIslandMarks();
 
     let style =
       document.getElementById(STYLE_ID);
@@ -7310,6 +7417,7 @@ ${SCOPE} :where(h1, h2, h3, h4, h5, h6) {
       handleMutations(observer.takeRecords());
       observer.disconnect();
     }
+    refreshIslandMarks();
     try {
       scanResponses();
     } finally {

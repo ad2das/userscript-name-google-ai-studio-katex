@@ -23,11 +23,17 @@ assert.match(source, /\/\/ @grant\s+none/);
 assert.match(source, /const SCAN_MS = 10000;/);
 assert.match(source, /function promptEditorFor/);
 assert.match(source, /function promptEditorActive/);
-// Live-site typing cost: the scope prefix must not walk ancestors against the
-// full protected list on every style recalc (measured 50-130 ms frames on the
-// real conversation page). Container exclusion via :has() stays.
-assert.ok(!source.includes(':not(:where(${PROTECTED_CSS_SELECTOR}) *)'));
-assert.match(source, /:not\(:has\(\$\{PROTECTED_CSS_SELECTOR\}\)\)/);
+// Live-site typing cost on very long conversations: functional pseudo-classes
+// in the scope prefix defeat Firefox incremental style invalidation (~145 ms
+// per keystroke at 60k elements, measured 2026-09). :has() was replaced by a
+// JS-maintained marker attribute; the built sheet must carry the marker guard
+// and fully expanded scope (asserted below via api.getCssText()).
+assert.match(source, /const CSS_TEXT = expandCss\(/);
+assert.match(source, /function expandCss\(raw, scopeSelector, protectedSelector\)/);
+assert.match(source, /@SCOPE@/);
+assert.match(source, /const ISLAND_MARKER_ATTRIBUTE = 'data-aistudio-island';/);
+assert.match(source, /function refreshIslandMarks\(\)/);
+assert.ok(!source.includes(':not(:has('), 'no :has() guard may remain');
 assert.match(source, /'ms-prompt-box'/);
 assert.match(
   source,
@@ -128,7 +134,8 @@ const instrumented = source.replace(
     repairTableBreakTextNode,
     simpleTexRuns,
     splitRawMathRows,
-    stripLeadingArrayRules
+    stripLeadingArrayRules,
+    getCssText: () => CSS_TEXT
   };
 }());
 `
@@ -209,6 +216,15 @@ vm.runInNewContext(instrumented, context, { filename: scriptPath });
 const api = context.__userscriptTest;
 assert.ok(api);
 assert.equal(api.availableKatex().version, '0.18.1');
+const builtCss = api.getCssText();
+assert.ok(builtCss.includes(':where('), 'compact :where() scope must remain');
+assert.ok(builtCss.includes(':not([data-aistudio-island])'), 'island marker guard must remain in the built sheet');
+assert.ok(!builtCss.includes(':has('), 'no :has() may reach the built sheet');
+assert.ok(
+  (builtCss.split(':not([data-aistudio-island])').length - 1) >= 100,
+  'every built rule must carry the scope-side island marker guard'
+);
+assert.ok(!builtCss.includes('@SCOPE@'), 'scope tokens must be fully expanded');
 assert.ok(
   api.MODEL_ACTIVITY_SELECTOR.split(',').every((selector) => (
     /(?:aria-busy|progress-spinner|mat-spinner|progressbar)/.test(selector)

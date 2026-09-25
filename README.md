@@ -12,6 +12,16 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.27 removes the remaining typing cost on heavily piled-up conversations:
+  two `:where(..., .katex *)` rules made every composer attribute change
+  invalidate the whole document (isolated at +83 s per 26-char burst, ~+3 s in
+  the live sheet on a 60k-element page); the redundant `*` branches are gone
+  because `overflow-wrap`/`word-break` inherit from `.katex` itself. The
+  `:has()` island guard became a JS-maintained `data-aistudio-island` marker
+  with the same exclusion semantics. Real-site measurements: typing parity on
+  the unmodified conversation, frame-count parity on the 792-turn stress page,
+  and the sheet's share of the 26-char burst there fell from +3.4-4.7 s to
+  +1.3 s (the same page with no userscript needs 7.5 s).
 - 1.13.26 removes the per-keystroke style-recalc cost that made long
   conversations laggy while typing: the stylesheet scope no longer walks
   ancestors against the full protected list on every recalc (measured 50-130 ms

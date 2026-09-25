@@ -1,7 +1,7 @@
 async (page) => {
   const fs = require('node:fs');
   const source = fs.readFileSync('aaa.user.js', 'utf8').replace(/\n  if \(document\.readyState === 'loading'\)/,
-    '\n  globalThis.__contract = { repairRoot, scan };\n  if (document.readyState === \'loading\')');
+    '\n  globalThis.__contract = { repairRoot, scan, refreshIslandMarks };\n  if (document.readyState === \'loading\')');
   await page.setContent('<!doctype html><html><body><main><ms-prompt-input><textarea></textarea><button class="run-button">Run</button></ms-prompt-input><article data-turn-role="model" id="response"></article></main></body></html>');
   await page.addStyleTag({ path: 'node_modules/katex/dist/katex.min.css' });
   await page.addScriptTag({ path: 'node_modules/katex/dist/katex.min.js' });
@@ -118,6 +118,8 @@ async (page) => {
       '<table><tr><td style="white-space:normal">사용자 표</td></tr></table></div>' +
       '<div contenteditable="true"><strong style="font-weight:900">편집기</strong></div>';
     response.append(protectedStyle);
+    __contract.refreshIslandMarks();
+    checks.islandGuardMarked = protectedStyle.hasAttribute('data-aistudio-island');
     checks.protectedStyles = Array.from(protectedStyle.querySelectorAll('strong')).every(el => getComputedStyle(el).fontWeight === '900') &&
       getComputedStyle(protectedStyle.querySelector('td')).whiteSpace === 'normal';
     const nativeControl = document.createElement('p');
