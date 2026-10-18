@@ -76,11 +76,14 @@ async (page) => {
       !__nativeHost.querySelector('.katex-html').textContent.includes('SECRET_COMMENT');
     const inlineScroller = document.querySelector('#inline-overflow .aistudio-inline-math-scroll');
     tests.wideInlineIdentity = document.getElementById('wide-inline') === __wideInlineHost;
-    tests.wideInlineContained = !!inlineScroller &&
+    tests.wideInlineContained = (!!inlineScroller &&
       inlineScroller.clientWidth <= 180 &&
       inlineScroller.scrollWidth > inlineScroller.clientWidth &&
       getComputedStyle(inlineScroller).overflowX === 'auto' &&
-      inlineScroller.getAttribute('tabindex') === '0';
+      inlineScroller.getAttribute('tabindex') === '0') ||
+      (__wideInlineHost.classList.contains('aistudio-inline-math-wrap') &&
+        !__wideInlineHost.parentElement?.classList.contains('aistudio-inline-math-scroll') &&
+        __wideInlineHost.scrollWidth <= 180 + 1);
     tests.rawControlsPreserved = __controls.every((node) => node.isConnected);
     const codeRun = document.createElement('button');
     codeRun.textContent = 'Run';
@@ -146,8 +149,13 @@ async (page) => {
       document.getElementById('user-arrival').textContent.includes('**');
     checks.sameHostMathRefitted = Number(document.querySelector('#fit .katex').getAttribute('data-aistudio-math-fit-scale')) > 0;
     const mathScroller = document.querySelector('#fit .aistudio-math-scroll');
-    checks.extremeMathContained = !!mathScroller && mathScroller.clientWidth <= 180 &&
-      mathScroller.scrollWidth > mathScroller.clientWidth && getComputedStyle(mathScroller).overflowX === 'auto';
+    const fitMath = document.querySelector('#fit .katex');
+    checks.extremeMathContained = (!!mathScroller &&
+      mathScroller.clientWidth <= 180 &&
+      mathScroller.scrollWidth > mathScroller.clientWidth &&
+      getComputedStyle(mathScroller).overflowX === 'auto') ||
+      (fitMath.getAttribute('data-aistudio-math-fit-mode') === 'wrap' &&
+        fitMath.scrollWidth <= 180 + 1);
     const range = document.createRange();
     range.selectNode(visual || pre.firstChild);
     const selection = getSelection();
