@@ -2,7 +2,7 @@ async (page) => {
   const fs = require('node:fs');
   const source = fs.readFileSync('aaa.user.js', 'utf8').replace(/\n  if \(document\.readyState === 'loading'\)/,
     '\n  globalThis.__note = { repairRoot, scan };\n  if (document.readyState === \'loading\')');
-  await page.setContent('<main role="main"><ms-prompt-input><textarea></textarea><button class="run-button">Run</button></ms-prompt-input><article data-turn-role="model" tabindex="-1"><ms-cmark-node id="response"></ms-cmark-node></article><article data-turn-role="user" id="user"></article></main>');
+  await page.setContent('<!doctype html><html><body><main role="main"><ms-prompt-input><textarea></textarea><button class="run-button">Run</button></ms-prompt-input><article data-turn-role="model" tabindex="-1"><ms-cmark-node id="response"></ms-cmark-node></article><article data-turn-role="user" id="user"></article></main></body></html>');
   await page.addScriptTag({ path: 'node_modules/katex/dist/katex.min.js' });
   await page.addScriptTag({ content: source });
   const result = await page.evaluate(() => {
@@ -53,6 +53,58 @@ async (page) => {
       const node = document.getElementById(id);
       return !node.querySelector('em') && node.textContent.includes('새 일반 문장');
     });
+    const noteH = '<span>*(※ 검산: 전체 리스채권 </span><span class="inline-code">435,453</span><span>에서 무보증잔존가치 현가 </span><span class="inline-code">15,026</span><span>을 뺀 금액 </span><span class="inline-code">435,453 - 15,026 = 420,427</span><span>과 정확히 일치합니다! 공정가치 500,000원보다 작으므로 매출액은 **</span><span class="inline-code">₩420,427</span><span>*</span><span style="font-style: italic;"><ms-cmark-node><span>입니다.)</span></ms-cmark-node></span>';
+    const prefixH = '<strong><ms-cmark-node><span>매출액</span></ms-cmark-node></strong><span>: 공정가치(</span><span class="inline-code">₩500,000</span><span>)와 … 중 작은 금액</span><br><ms-cmark-node></ms-cmark-node><ms-katex class="display"></ms-katex><br><ms-cmark-node></ms-cmark-node>';
+    const hostFor = (id, body) => {
+      const node = make(id, '<ms-cmark-node>' + body + '</ms-cmark-node>');
+      const katexHost = node.querySelector('ms-katex.display');
+      if (katexHost) {
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.className = 'rendered';
+        pre.append(code);
+        katexHost.append(pre);
+        katex.render('500{,}000', code, { displayMode: true, throwOnError: false });
+      }
+      return node;
+    };
+    const h = hostFor('h', prefixH + noteH);
+    const host = h.firstElementChild;
+    const prefixStrong = host.querySelector('strong');
+    const displayMath = host.querySelector('ms-katex.display');
+    const breaks = Array.from(host.children).filter(node => node.tagName === 'BR');
+    const tailH = host.lastElementChild;
+    const allH = []; const walkerH = document.createTreeWalker(h, NodeFilter.SHOW_ALL); while (walkerH.nextNode()) allH.push(walkerH.currentNode);
+    let clicksH = 0;
+    prefixStrong.addEventListener('click', () => clicksH++);
+    __note.repairRoot(h);
+    const onceH = h.innerHTML;
+    __note.repairRoot(h);
+    prefixStrong.click();
+    const emH = host.querySelector('em');
+    checks.hText = h.textContent.startsWith('매출액: 공정가치(₩500,000)와 … 중 작은 금액') &&
+      h.textContent.includes('(※ 검산: 전체 리스채권') && h.textContent.includes('₩420,427입니다.)') &&
+      !h.textContent.includes('**') && h.textContent.indexOf('(※') > h.textContent.indexOf('작은 금액');
+    checks.hBold = emH?.querySelector('strong')?.textContent === '₩420,427';
+    checks.hEmText = (emH?.textContent || '').startsWith('(※ 검산');
+    checks.hIdentity = allH.every(n => n.isConnected) && clicksH === 1 &&
+      host.querySelector('strong') === prefixStrong && host.querySelector('ms-katex.display') === displayMath &&
+      breaks.every(br => host.contains(br)) && breaks[0].compareDocumentPosition(emH) & Node.DOCUMENT_POSITION_FOLLOWING &&
+      breaks[1].compareDocumentPosition(emH) & Node.DOCUMENT_POSITION_FOLLOWING &&
+      emH.nextElementSibling === tailH;
+    checks.hIdempotent = onceH === h.innerHTML;
+    tailH.querySelector('span').textContent = '새 일반 문장';
+    __note.scan();
+    checks.hCleanup = !host.querySelector('em') &&
+      h.textContent.startsWith('매출액: 공정가치') && h.textContent.includes('새 일반 문장');
+    const noBreak = hostFor('h-no-break', '<span>: 공정가치</span>' + noteH);
+    const noBreakBefore = noBreak.innerHTML;
+    __note.repairRoot(noBreak);
+    checks.hNoBreakRejected = noBreak.innerHTML === noBreakBefore && !noBreak.querySelector('em');
+    const trailing = hostFor('h-trailing', prefixH + noteH + '<span>끝.</span>');
+    const trailingBefore = trailing.innerHTML;
+    __note.repairRoot(trailing);
+    checks.hTrailingRejected = trailing.innerHTML === trailingBefore && !trailing.querySelector('em');
     globalThis.__noteMarkup = markup;
     return { checks };
   });

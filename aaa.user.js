@@ -6637,7 +6637,6 @@ code.aistudio-prose-code-repaired {
       const parts = Array.from(host.childNodes).filter(n => n.nodeType !== 8 && (n.nodeType !== 3 || n.nodeValue.trim()));
       if (parts.length < 2) continue;
       const tail = parts[parts.length - 1];
-      const spans = parts.slice(0, -1);
       if (tail.nodeType !== 1 ||
           !((tail.tagName === 'SPAN' && tail.style.fontStyle === 'italic') || /^(EM|I)$/.test(tail.tagName)) ||
           tail.matches('[role],[tabindex],[contenteditable]')) continue;
@@ -6647,57 +6646,76 @@ code.aistudio-prose-code-repaired {
           Array.from(tail.querySelectorAll('*')).some(n =>
             !/^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) ||
             n.matches('[role],[tabindex],[contenteditable]'))) continue;
-      const info = [];
-      let valid = true;
-      for (const span of spans) {
-        if (span.nodeType !== 1 || span.tagName !== 'SPAN' ||
-            span.matches('[role],[tabindex],[contenteditable]') ||
-            Array.from(span.childNodes).some(n => n.nodeType !== 3 && n.nodeType !== 8)) {
-          valid = false;
-          break;
+      // The note may follow a prefix (display math and a line break) inside the
+      // same host. Collect the note backwards from the tail, taking the last
+      // span that still starts the note and satisfies the star rules.
+      const analyze = (startIndex) => {
+        const spans = parts.slice(startIndex, -1);
+        if (!spans.length) return null;
+        const info = [];
+        for (const span of spans) {
+          if (span.nodeType !== 1 || span.tagName !== 'SPAN' ||
+              span.matches('[role],[tabindex],[contenteditable]') ||
+              Array.from(span.childNodes).some(n => n.nodeType !== 3 && n.nodeType !== 8)) return null;
+          const text = span.textContent || '';
+          info.push({ span, code: span.classList.contains('inline-code'), text });
         }
-        const text = span.textContent || '';
-        info.push({ span, code: span.classList.contains('inline-code'), text });
-      }
-      if (!valid) continue;
-      const first = spans[0];
-      const last = spans[spans.length - 1];
-      if (!first || info[0].code || !info[0].text.startsWith('*(※')) continue;
-      if (info[info.length - 1].code || !info[info.length - 1].text.endsWith('*') ||
-          info[info.length - 1].text.endsWith('**')) continue;
-      let projected = '';
-      const offsets = [];
-      for (const item of info) {
-        offsets.push({ item, start: projected.length, end: projected.length + (item.code ? 1 : item.text.length) });
-        projected += item.code ? '\uFFFC' : item.text;
-      }
-      const boldIndex = projected.indexOf('**');
-      if (boldIndex < 0 || projected.indexOf('**', boldIndex + 1) >= 0) continue;
-      const stars = projected.split('*').length - 1;
-      if (stars !== 4 || !projected.endsWith('*')) continue;
-      const boldText = projected.slice(boldIndex + 2, projected.length - 1);
-      if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) continue;
-      const boldItem = info.find(item => !item.code && boldIndex >= offsets[info.indexOf(item)].start && boldIndex + 2 <= offsets[info.indexOf(item)].end);
-      if (!boldItem) continue;
-      const boldSpan = boldItem.span;
-      const local = boldIndex - offsets[info.indexOf(boldItem)].start;
-      let boldNode = null;
-      let boldOffset = 0;
-      let consumed = 0;
-      for (const node of boldItem.span.childNodes) {
-        if (node.nodeType !== 3) continue;
-        const value = node.nodeValue || '';
-        if (local >= consumed && local + 2 <= consumed + value.length) {
-          boldNode = node;
-          boldOffset = local - consumed;
-          break;
+        const first = spans[0];
+        const last = spans[spans.length - 1];
+        if (info[0].code || !info[0].text.startsWith('*(※')) return null;
+        if (info[info.length - 1].code || !info[info.length - 1].text.endsWith('*') ||
+            info[info.length - 1].text.endsWith('**')) return null;
+        let projected = '';
+        const offsets = [];
+        for (const item of info) {
+          offsets.push({ item, start: projected.length, end: projected.length + (item.code ? 1 : item.text.length) });
+          projected += item.code ? '\uFFFC' : item.text;
         }
-        consumed += value.length;
+        const boldIndex = projected.indexOf('**');
+        if (boldIndex < 0 || projected.indexOf('**', boldIndex + 1) >= 0) return null;
+        const stars = projected.split('*').length - 1;
+        if (stars !== 4 || !projected.endsWith('*')) return null;
+        const boldText = projected.slice(boldIndex + 2, projected.length - 1);
+        if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) return null;
+        const boldItem = info.find(item => !item.code && boldIndex >= offsets[info.indexOf(item)].start && boldIndex + 2 <= offsets[info.indexOf(item)].end);
+        if (!boldItem) return null;
+        const local = boldIndex - offsets[info.indexOf(boldItem)].start;
+        let boldNode = null;
+        let boldOffset = 0;
+        let consumed = 0;
+        for (const node of boldItem.span.childNodes) {
+          if (node.nodeType !== 3) continue;
+          const value = node.nodeValue || '';
+          if (local >= consumed && local + 2 <= consumed + value.length) {
+            boldNode = node;
+            boldOffset = local - consumed;
+            break;
+          }
+          consumed += value.length;
+        }
+        if (!boldNode || boldNode.nodeValue.slice(boldOffset, boldOffset + 2) !== '**') return null;
+        const firstText = Array.from(first.childNodes).find(n => n.nodeType === 3);
+        const lastText = Array.from(last.childNodes).reverse().find(n => n.nodeType === 3);
+        if (!firstText || !firstText.nodeValue.startsWith('*') || !lastText || !lastText.nodeValue.endsWith('*')) return null;
+        return { first, last, boldSpan: boldItem.span, boldNode, boldOffset, firstText, lastText };
+      };
+      let startIndex = -1;
+      let candidate = null;
+      for (let index = parts.length - 2; index >= 0; index -= 1) {
+        if (parts[index].nodeType !== 1 || parts[index].tagName !== 'SPAN' ||
+            parts[index].classList.contains('inline-code')) continue;
+        candidate = analyze(index);
+        if (candidate) { startIndex = index; break; }
       }
-      if (!boldNode || boldNode.nodeValue.slice(boldOffset, boldOffset + 2) !== '**') continue;
-      const firstText = Array.from(first.childNodes).find(n => n.nodeType === 3);
-      const lastText = Array.from(last.childNodes).reverse().find(n => n.nodeType === 3);
-      if (!firstText || !firstText.nodeValue.startsWith('*') || !lastText || !lastText.nodeValue.endsWith('*')) continue;
+      if (!candidate) continue;
+      // A prefix before the note is allowed only after a real line break.
+      if (startIndex > 0) {
+        let prefix = startIndex - 1;
+        while (prefix >= 0 && parts[prefix].nodeType === 1 &&
+               parts[prefix].tagName === 'MS-CMARK-NODE' && !parts[prefix].textContent) prefix -= 1;
+        if (prefix < 0 || parts[prefix].tagName !== 'BR') continue;
+      }
+      const { first, last, boldSpan, boldNode, boldOffset, firstText, lastText } = candidate;
       const em = createRepairedEmphasis('', '*');
       const strong = createRepairedEmphasis('', '**');
       const right = boldNode.splitText(boldOffset);
