@@ -68,6 +68,8 @@
   const MAX_INLINE_CONTAINERS_PER_PASS = 32;
   const MAX_FALLBACK_NODES_PER_SLICE = 400;
   const SCAN_BUDGET_MS = 6;
+  const MUTATION_SYNC_LIMIT = 300;
+  const MUTATION_CHUNK = 300;
   // Math is an opaque DOM atom in the Markdown projection, never empty text.
   const INLINE_MATH_ATOM = '\uFFFC';
   const MAX_RAW_MATH_LENGTH = 12000;
@@ -1505,10 +1507,16 @@ code.aistudio-prose-code-repaired {
   let rootsGeneration = 0;
   let rootsCache = null;
   let rootsCacheGeneration = -1;
+  // A phase yield must not repeat forever when a slice always overruns its
+  // budget; after this many consecutive phase yields the loop still runs.
+  let scanYieldStreak = 0;
   let lastPromptActivity = -Infinity;
   let promptComposing = false;
   const deferredMutationBatches = [];
   let deferredMutationOffset = 0;
+  const mutationQueue = [];
+  let mutationDrainTimer = 0;
+  let mathFitIncomplete = false;
   let mathFitResizeDirty = true;
   let fallbackDirty = true;
   const mathFitCache = new WeakMap();
@@ -7080,10 +7088,15 @@ code.aistudio-prose-code-repaired {
       return true;
     });
     let fitted = 0;
+    const started = schedulerNow();
 
     for (const display of displays) {
       if (fitDisplayMath(display, force)) {
         fitted += 1;
+      }
+      if (!force && schedulerNow() - started >= SCAN_BUDGET_MS) {
+        mathFitIncomplete = true;
+        return fitted;
       }
     }
 
@@ -7094,35 +7107,38 @@ code.aistudio-prose-code-repaired {
 
   function containWideInlineMath(force = false) {
     const candidates = Array.from(document.querySelectorAll(
-      'ms-katex:not(.display), mjx-container:not([display="true"])'
+      force
+        ? 'ms-katex:not(.display), mjx-container:not([display="true"])'
+        : `ms-katex:not(.display):not([${INLINE_MATH_CHECKED_ATTR}="1"]), ` +
+          `mjx-container:not([display="true"]):not([${INLINE_MATH_CHECKED_ATTR}="1"])`
     ));
     let contained = 0;
+    const eligible = (host) => (
+      host.isConnected &&
+      !closest(host, USER_SELECTOR) &&
+      closest(host, STYLE_ROOT_SELECTOR) &&
+      !closest(host, '.katex-display, ms-katex.display')
+    );
 
-    for (const host of candidates) {
-      if (
-        !host.isConnected ||
-        closest(host, USER_SELECTOR) ||
-        !closest(host, STYLE_ROOT_SELECTOR) ||
-        closest(host, '.katex-display, ms-katex.display')
-      ) {
-        continue;
-      }
-
-      if (!force && host.getAttribute(INLINE_MATH_CHECKED_ATTR) === '1') {
-        continue;
-      }
-
-      if (force) {
+    // Phase A: writes only. Undo previous wrapping before measuring again.
+    if (force) {
+      for (const host of candidates) {
+        if (!eligible(host)) continue;
         const wrapper = host.parentElement;
         if (wrapper?.classList.contains('aistudio-inline-math-scroll')) {
           wrapper.replaceWith(host);
         }
         host.classList.remove('aistudio-inline-math-wrap');
-      } else if (
-        host.parentElement?.classList.contains('aistudio-inline-math-scroll')
-      ) {
-        continue;
       }
+    }
+
+    // Phase B: reads only. Measuring after writes avoids layout thrash.
+    const measured = [];
+    const started = schedulerNow();
+    for (const host of candidates) {
+      if (!eligible(host)) continue;
+      if (!force && host.getAttribute(INLINE_MATH_CHECKED_ATTR) === '1') continue;
+      if (!force && host.parentElement?.classList.contains('aistudio-inline-math-scroll')) continue;
 
       let container = host.parentElement;
       let remainingAscents = 6;
@@ -7148,34 +7164,54 @@ code.aistudio-prose-code-repaired {
         continue;
       }
 
-      host.setAttribute(INLINE_MATH_CHECKED_ATTR, '1');
+      measured.push({
+        host,
+        availableWidth,
+        overflowing: naturalWidth > availableWidth + 1
+      });
 
-      if (naturalWidth <= availableWidth + 1) {
-        continue;
+      if (!force && schedulerNow() - started >= SCAN_BUDGET_MS) {
+        mathFitIncomplete = true;
+        break;
       }
+    }
 
-      const html = host.querySelector('.katex-html');
+    // Phase C: writes. Mark measured hosts; wrap overflowing ones that can
+    // break at a relation so their widest base can be measured.
+    const wrapped = [];
+    for (const entry of measured) {
+      entry.host.setAttribute(INLINE_MATH_CHECKED_ATTR, '1');
+      if (!entry.overflowing) continue;
+      const html = entry.host.querySelector('.katex-html');
       const bases = html
         ? Array.from(html.children).filter(
             (child) => child.classList.contains('katex-base')
           )
         : [];
-
+      entry.bases = bases;
       if (bases.length >= 2) {
-        host.classList.add('aistudio-inline-math-wrap');
-        let widest = 0;
-        for (const base of bases) {
-          widest = Math.max(
-            widest,
-            base.getBoundingClientRect().width || 0
-          );
-        }
+        entry.host.classList.add('aistudio-inline-math-wrap');
+        wrapped.push(entry);
+      }
+    }
 
-        if (Math.ceil(widest) <= availableWidth + 1) {
-          continue;
-        }
+    // Phase D: reads only. Widest base per wrapped host.
+    for (const entry of wrapped) {
+      let widest = 0;
+      for (const base of entry.bases) {
+        widest = Math.max(widest, base.getBoundingClientRect().width || 0);
+      }
+      entry.widest = widest;
+    }
 
-        host.classList.remove('aistudio-inline-math-wrap');
+    // Phase E: writes. Immediate for each wrapped host, then the scroller.
+    for (const entry of measured) {
+      if (!entry.overflowing) continue;
+      if (entry.bases && entry.bases.length >= 2) {
+        // Bases fit the container: keep the wrap class and let the formula
+        // break at a relation instead of scrolling.
+        if (Math.ceil(entry.widest) <= entry.availableWidth + 1) continue;
+        entry.host.classList.remove('aistudio-inline-math-wrap');
       }
 
       const scroller = document.createElement('span');
@@ -7183,8 +7219,8 @@ code.aistudio-prose-code-repaired {
       scroller.setAttribute('role', 'region');
       scroller.setAttribute('aria-label', '긴 인라인 수식 가로 스크롤');
       scroller.setAttribute('tabindex', '0');
-      host.before(scroller);
-      scroller.appendChild(host);
+      entry.host.before(scroller);
+      scroller.appendChild(entry.host);
       contained += 1;
     }
 
@@ -7747,6 +7783,10 @@ code.aistudio-prose-code-repaired {
       schedule(SCROLL_IDLE_MS - sinceScroll + 16, true);
       return;
     }
+    if (mutationQueue.length) {
+      schedule(16, true);
+      return;
+    }
     if (promptEditorActive()) {
       schedule(promptComposing ? PROMPT_IDLE_MS : Math.max(50, PROMPT_IDLE_MS - (Date.now() - lastPromptActivity) + 50));
       return;
@@ -7767,7 +7807,8 @@ code.aistudio-prose-code-repaired {
       return;
     }
     if (observer) {
-      handleMutations(observer.takeRecords());
+      const pendingRecords = observer.takeRecords();
+      if (pendingRecords.length) processMutationRecords(pendingRecords);
       observer.disconnect();
     }
     refreshIslandMarks();
@@ -7842,12 +7883,18 @@ code.aistudio-prose-code-repaired {
       return;
     }
 
+    const scanStarted = schedulerNow();
     refreshVisibleInlinePriority();
-    flushPendingCleanup();
+    if (!flushPendingCleanup()) {
+      schedule(16, true);
+      return;
+    }
     const now = Date.now();
+    mathFitIncomplete = false;
     const fittedMathCount = (mathFitDirty || mathFitResizeDirty)
       ? fitWideDisplayMath(mathFitResizeDirty) : 0;
-    mathFitDirty = false;
+    mathFitDirty = mathFitIncomplete;
+    mathFitIncomplete = false;
     mathFitResizeDirty = false;
 
     if (html) {
@@ -7857,7 +7904,30 @@ code.aistudio-prose-code-repaired {
       );
     }
 
+    if (mathFitDirty) schedule(16, true);
+
+    const phaseOverBudget = () => {
+      if (schedulerNow() - scanStarted < SCAN_BUDGET_MS) return false;
+      if (scanYieldStreak < 2) return true;
+      return false;
+    };
+    const yieldPhase = () => {
+      scanYieldStreak += 1;
+      schedule(16, true);
+    };
+
+    if (phaseOverBudget()) {
+      yieldPhase();
+      return;
+    }
+
     const roots = collectRoots();
+
+    if (phaseOverBudget()) {
+      yieldPhase();
+      return;
+    }
+    scanYieldStreak = 0;
     const lastTurn = lastModelTurn(roots);
     // Visible priority only affects ordering. Roots that already finished are
     // skipped by the backoff checks below, so reordering cannot re-repair them.
@@ -8094,7 +8164,8 @@ code.aistudio-prose-code-repaired {
       // budget. Do not add up to 900ms idle starvation to every small slice.
       // scan() still rechecks generation, visibility and prompt activity.
       if (runUrgently && typeof window.requestAnimationFrame === 'function') {
-        window.requestAnimationFrame(run);
+        // Yield to paint: work queued from the frame callback would delay it.
+        window.requestAnimationFrame(() => window.setTimeout(run, 0));
       } else if (
         typeof window.requestIdleCallback === 'function'
       ) {
@@ -8187,6 +8258,35 @@ code.aistudio-prose-code-repaired {
       schedule(PROMPT_IDLE_MS + 50);
       return;
     }
+    if (mutationQueue.length === 0 && mutations.length <= MUTATION_SYNC_LIMIT) {
+      processMutationRecords(mutations);
+      return;
+    }
+    for (let i = 0; i < mutations.length; i += MUTATION_CHUNK) {
+      mutationQueue.push(mutations.slice(i, i + MUTATION_CHUNK));
+    }
+    if (!mutationDrainTimer) {
+      mutationDrainTimer = window.setTimeout(drainMutationQueue, 0);
+    }
+  }
+
+  function drainMutationQueue() {
+    mutationDrainTimer = 0;
+    if (promptEditorActive()) {
+      while (mutationQueue.length) deferredMutationBatches.push(mutationQueue.shift());
+      schedule(PROMPT_IDLE_MS + 50);
+      return;
+    }
+    const started = schedulerNow();
+    while (mutationQueue.length && schedulerNow() - started < SCAN_BUDGET_MS) {
+      processMutationRecords(mutationQueue.shift());
+    }
+    if (mutationQueue.length) {
+      mutationDrainTimer = window.setTimeout(drainMutationQueue, 0);
+    }
+  }
+
+  function processMutationRecords(mutations) {
     let changed = false;
     let controlChanged = false;
     const invalidated = new Set();
@@ -8335,7 +8435,9 @@ code.aistudio-prose-code-repaired {
 
   function flushPendingCleanup() {
     let cleaned = 0;
+    const started = schedulerNow();
     for (const element of pendingCleanup) {
+      pendingCleanup.delete(element);
       if (!element.isConnected || promptEditorFor(element)) continue;
       cleaned += 1;
       clearFallbackRootsInsideUser(element);
@@ -8375,15 +8477,17 @@ code.aistudio-prose-code-repaired {
         pre.classList.remove('aistudio-ascii-tree-block-repaired');
         pre.removeAttribute('data-aistudio-ascii-tree-block-repaired');
       }
+      if (schedulerNow() - started >= SCAN_BUDGET_MS) break;
     }
-    pendingCleanup.clear();
     if (cleaned) rootsGeneration += 1;
+    if (pendingCleanup.size) return false;
     for (const display of pendingMathInvalidation) {
       if (display.isConnected && !closest(display, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR)) {
         display.removeAttribute(MATH_FIT_CHECKED_ATTR);
       }
     }
     pendingMathInvalidation.clear();
+    return true;
   }
 
   function installObserver() {
