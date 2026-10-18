@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.27
+// @version      1.13.28
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.27';
+  const VERSION = '1.13.28';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';

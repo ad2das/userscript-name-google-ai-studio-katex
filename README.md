@@ -12,6 +12,26 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.28 fixes the remaining rendering glitches seen on long accounting
+  conversations and removes most of the script's scroll jank:
+  wide display math now wraps at relations/operators instead of shrinking to
+  a tiny clipped font (single-block arrays scale to at least 0.75 and scroll),
+  stacked display margins and the blank line after display math are gone,
+  wide inline math wraps too; numeric ranges that native Markdown turned into
+  strikethrough (`639~643쪽`, `[예제 16-7]~[예제 16-10]`, two ranges sharing
+  one `<s>`) get their tildes back and their bold clause repaired;
+  `*(※ … **₩32,891*` italic notes with inline-code atoms, also after a line
+  break inside a paragraph, become italic with the bold part bold; raw pipe
+  tables with inline code and cells that wrap onto continuation lines are
+  projected as tables. Performance: MutationObserver records are coalesced
+  and large lazy-render batches are processed in 6 ms slices, the generation
+  probe is composer-scoped and cached, finished roots are no longer
+  re-repaired because they are visible, rendered KaTeX annotations no longer
+  trigger the raw-math pass, scans wait for scrolling to stop, cleanup and
+  math fitting are budgeted (inline math measured in batched read/write
+  phases), and urgent scans run after paint. Live fast-scroll on a 198k-token
+  conversation: frames over 50 ms 220 → 6-7 (no script: 5), longest freeze
+  2.3 s → ~215 ms. See `AUDIT-1.13.28.md`.
 - 1.13.27 removes the remaining typing cost on heavily piled-up conversations:
   two `:where(..., .katex *)` rules made every composer attribute change
   invalidate the whole document (isolated at +83 s per 26-char burst, ~+3 s in
