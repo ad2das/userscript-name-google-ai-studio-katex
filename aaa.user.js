@@ -6765,11 +6765,18 @@ code.aistudio-prose-code-repaired {
         const UNIT = '(?:p|쪽|페이지|번|장|절|년|월|일|원|%|개|명|회|차|권|항|조|호)?';
         const leftRange = new RegExp('\\d' + UNIT + '$').test(before) && /^\d/.test(middleText);
         const rightRange = new RegExp('(?:\\d' + UNIT + '|\\])$').test(middleText) && /^(?:\d|\[)/.test(after);
+        // Two complete ranges can share one native <s>, with the Markdown
+        // markers of two separate bold clauses between them (…637<s>638쪽)]**
+        // … **제3절 […] 639</s>641쪽). Only that two-clause shape relaxes the
+        // connector whitelist and the `*` exclusion; code fences and newlines
+        // still disqualify, and the range order must still read naturally.
+        const paired = leftRange && rightRange;
+        const twoClauses = paired && (middleText.match(/\*/g) || []).length >= 4;
         if (!(leftRange || rightRange) || middleText.length > 300 || middleText.includes('\n') ||
-            /[*:`\\]/.test(middleText)) continue;
+            (twoClauses ? /[`\\]/.test(middleText) : /[*:`\\]/.test(middleText))) continue;
         // The interval is a range only while its middle reads as page/book
         // coordinates: digits, units, separators and a few connectors.
-        const connector = middleText
+        const connector = twoClauses ? '' : middleText
           .replace(/\d+/g, '')
           .replace(/pdf/gi, '')
           .replace(/[p쪽페이지번장절년월일원%개명회차권항조호]/g, '')

@@ -40,7 +40,8 @@ async (page) => {
     const bad = [
       ['neg-amount', '<ms-cmark-node><span>가격은 </span><s><ms-cmark-node><span>10,000원</span></ms-cmark-node></s><span> 8,000원입니다</span></ms-cmark-node>'],
       ['neg-deleted', '<ms-cmark-node><span>다음 문장은 </span><s><ms-cmark-node><span>삭제된 문장</span></ms-cmark-node></s><span> 입니다</span></ms-cmark-node>'],
-      ['neg-version', '<ms-cmark-node><span>버전 </span><s><ms-cmark-node><span>3</span></ms-cmark-node></s><span>은 폐기되었습니다</span></ms-cmark-node>']
+      ['neg-version', '<ms-cmark-node><span>버전 </span><s><ms-cmark-node><span>3</span></ms-cmark-node></s><span>은 폐기되었습니다</span></ms-cmark-node>'],
+      ['neg-decreasing', '<ms-cmark-node><span>A 12</span><s><ms-cmark-node><span>10 삭제</span></ms-cmark-node></s><span>5 끝</span></ms-cmark-node>']
     ];
     checks.negatives = bad.every(([id, html]) => {
       const p = make(id, html);
@@ -48,6 +49,19 @@ async (page) => {
       __range.repairRoot(p);
       return p.innerHTML === before && !p.querySelector('.aistudio-page-range-repaired');
     });
+    const paired = make('g',
+      '<ms-cmark-node><!--anchor--><span>좋습니다! 리스제공자의 금융리스에 이어, 오늘은 제2절의 마지막 퍼즐인 **[리스제공자의 운용리스(교재 637</span><s><ms-cmark-node><span>638쪽)]**를 마무리하고, 시험에서 가장 출제 비중이 높은 **제3절 [리스이용자의 회계처리(교재 639</span></ms-cmark-node></s><span>641쪽)]**로 힘차게 넘어가겠습니다.</span></ms-cmark-node>');
+    __range.repairRoot(paired);
+    const pairedStrike = paired.querySelector('s');
+    const pairedBold = Array.from(paired.querySelectorAll('strong.aistudio-md-repaired'))
+      .map(strong => strong.textContent).join('');
+    checks.gText = paired.textContent.includes('637~638쪽') &&
+      paired.textContent.includes('639~641쪽') && !paired.textContent.includes('**');
+    checks.gNoLine = !!pairedStrike &&
+      pairedStrike.classList.contains('aistudio-page-range-repaired') &&
+      getComputedStyle(pairedStrike).textDecorationLine === 'none';
+    checks.gBold = pairedBold.includes('[리스제공자의 운용리스(교재 637~638쪽)]') &&
+      pairedBold.includes('제3절 [리스이용자의 회계처리(교재 639~641쪽)]');
     return { checks };
   });
   if (Object.values(result.checks).some(ok => !ok)) throw new Error(JSON.stringify(result));
