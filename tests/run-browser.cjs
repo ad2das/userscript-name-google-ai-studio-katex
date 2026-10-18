@@ -26,6 +26,8 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('amount-token-browser.test.js');
     if (process.argv.includes('--italic-note')) suites.splice(0, suites.length, 'italic-note-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('italic-note-browser.test.js');
+    if (process.argv.includes('--range-strike')) suites.splice(0, suites.length, 'range-strike-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('range-strike-browser.test.js');
     if (process.argv.includes('--won')) suites.splice(0, suites.length, 'won-symbol-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('won-symbol-browser.test.js');
     if (process.argv.includes('--completion-latency')) suites.splice(0, suites.length, 'completion-latency-browser.test.js');

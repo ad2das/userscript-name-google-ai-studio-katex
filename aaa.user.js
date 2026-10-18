@@ -984,7 +984,8 @@ code.aistudio-ascii-tree-repaired {
 @SCOPE@ .aistudio-raw-table-scroll { display: block !important; max-width: 100% !important; overflow-x: auto !important; }
 @SCOPE@ .aistudio-raw-table-grid { display: table !important; width: max-content !important; min-width: 100% !important; border-collapse: collapse !important; }
 @SCOPE@ .aistudio-raw-table-row { display: table-row !important; }
-@SCOPE@ .aistudio-raw-table-cell { display: table-cell !important; padding: 8px 12px !important; vertical-align: top !important; white-space: pre !important; }
+@SCOPE@ .aistudio-raw-table-cell { display: table-cell !important; padding: 8px 12px !important; vertical-align: top !important; white-space: pre-line !important; }
+@SCOPE@ .aistudio-raw-table-code { font-family: monospace !important; font-size: 0.92em !important; }
 @SCOPE@ [data-aistudio-raw-table-text]::before { content: attr(data-aistudio-raw-table-text) !important; }
 
 @SCOPE@ .aistudio-ascii-tree-row {
@@ -5328,7 +5329,7 @@ code.aistudio-prose-code-repaired {
   function projectRawTable(source) {
     const lines = [[]];
     let nodes = 0, visited = 0, characters = 0;
-    const visit = (node, bold = false, italic = false, depth = 0) => {
+    const visit = (node, bold = false, italic = false, code = false, depth = 0) => {
       if (++visited > 10000 || depth > 16) return false;
       if (node.nodeType === 8) return true;
       if (++nodes > 1200) return false;
@@ -5337,14 +5338,23 @@ code.aistudio-prose-code-repaired {
         if ((characters += value.length) > 12000 || /[`\\]/.test(value)) return false;
         for (const char of value) {
           if (char === '\n') lines.push([]);
-          else lines[lines.length - 1].push({ char, bold, italic });
+          else lines[lines.length - 1].push({ char, bold, italic, code });
         }
         return true;
       }
-      if (node.nodeType !== 1 || node.matches('[contenteditable], [role], [tabindex], .inline-code') ||
+      if (node.nodeType !== 1) return false;
+      if (node.classList.contains('inline-code')) {
+        const text = node.textContent || '';
+        if ((characters += text.length) > 12000 || /[`\\]/.test(text) ||
+            node.matches('[contenteditable], [role], [tabindex]') ||
+            Array.from(node.childNodes).some(child => child.nodeType !== 3)) return false;
+        for (const char of text) lines[lines.length - 1].push({ char, bold, italic, code: true });
+        return true;
+      }
+      if (node.matches('[contenteditable], [role], [tabindex]') ||
           !/^(MS-CMARK-NODE|SPAN|STRONG|B|EM|I|BR)$/.test(node.tagName)) return false;
       if (node.tagName === 'BR') { lines.push([]); return true; }
-      for (const child of node.childNodes) if (!visit(child, bold || /^(STRONG|B)$/.test(node.tagName), italic || /^(EM|I)$/.test(node.tagName), depth + 1)) return false;
+      for (const child of node.childNodes) if (!visit(child, bold || /^(STRONG|B)$/.test(node.tagName), italic || /^(EM|I)$/.test(node.tagName), code, depth + 1)) return false;
       return true;
     };
     if (!visit(source)) return null;
@@ -5353,6 +5363,21 @@ code.aistudio-prose-code-repaired {
     if (start < 0 || start > 1 || (start && texts[0].length > 240)) return null;
     while (texts.length && !texts[texts.length - 1].trim()) { texts.pop(); lines.pop(); }
     if (texts.length - start < 3 || texts.length - start > 52) return null;
+    const merged = [];
+    for (let index = start; index < lines.length; index += 1) {
+      const line = lines[index];
+      const text = line.map(item => item.char).join('');
+      const previous = merged[merged.length - 1];
+      const previousText = previous ? previous.line.map(item => item.char).join('') : '';
+      if (!/^\s*\|/.test(text) && previous && !/\s*\|\s*$/.test(previousText) &&
+          previous.continuations < 4) {
+        previous.line.push({ char: '\n' });
+        previous.line.push(...line);
+        previous.continuations += 1;
+        continue;
+      }
+      merged.push({ line, continuations: 0 });
+    }
     const split = (line) => {
       let first = 0, last = line.length - 1;
       while (first <= last && /\s/.test(line[first].char)) first++;
@@ -5369,7 +5394,7 @@ code.aistudio-prose-code-repaired {
         return cell;
       });
     };
-    const rows = lines.slice(start).map(split);
+    const rows = merged.map(entry => split(entry.line));
     const columns = rows[0]?.length;
     if (!columns || columns < 2 || columns > 16 || rows.some(row => !row || row.length !== columns)) return null;
     const separators = rows[1].map(cell => cell.map(item => item.char).join(''));
@@ -5402,15 +5427,16 @@ code.aistudio-prose-code-repaired {
       const visual = document.createElement('span');
       visual.className = 'aistudio-raw-table-visual';
       const appendRuns = (parent, items, header = false) => {
-        let run = null, weight = null, italic = null;
+        let run = null, weight = null, italic = null, code = null;
         for (const item of items) {
           const bold = header || item.bold;
-          if (!run || weight !== bold || italic !== item.italic) {
+          if (!run || weight !== bold || italic !== item.italic || code !== item.code) {
             run = document.createElement('span');
             run.setAttribute('data-aistudio-raw-table-text', '');
+            if (item.code) run.className = 'aistudio-raw-table-code';
             run.style.fontWeight = bold ? '700' : '400';
             run.style.fontStyle = item.italic ? 'italic' : 'normal';
-            parent.append(run); weight = bold; italic = item.italic;
+            parent.append(run); weight = bold; italic = item.italic; code = item.code;
           }
           run.setAttribute('data-aistudio-raw-table-text', run.getAttribute('data-aistudio-raw-table-text') + item.char);
         }
@@ -6579,7 +6605,8 @@ code.aistudio-prose-code-repaired {
   function repairMisparsedItalicNotes(root) {
     // Native Markdown can consume the second closing bold star as the opener
     // of the outer italic note's tail. Only recover the observed parenthetical
-    // note + quoted bold clause + native italic tail, never arbitrary stars.
+    // note + bold clause (code atoms included) + native italic tail, never
+    // arbitrary stars.
     const paragraphs = new Set(root.querySelectorAll('p'));
     const parent = closest(root, 'p');
     if (parent) paragraphs.add(parent);
@@ -6588,24 +6615,110 @@ code.aistudio-prose-code-repaired {
       if (closest(p, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',pre,code,a')) continue;
       const host = p.children.length === 1 && p.firstElementChild;
       if (!host || host.tagName !== 'MS-CMARK-NODE') continue;
+      // A native rewrite of the trailing note leaves the repaired wrapper
+      // stale; restore the original order and let a later scan re-evaluate.
+      const existing = Array.from(host.children)
+        .find(node => node.matches('em[data-aistudio-note-tail]'));
+      if (existing) {
+        const tailNow = existing.nextElementSibling;
+        if ((tailNow?.textContent || '') !== existing.getAttribute('data-aistudio-note-tail')) {
+          existing.replaceWith(...existing.childNodes);
+        }
+        continue;
+      }
       const parts = Array.from(host.childNodes).filter(n => n.nodeType !== 8 && (n.nodeType !== 3 || n.nodeValue.trim()));
-      if (parts.length !== 2) continue;
-      const [lead, tail] = parts;
-      if (lead.nodeType !== 1 || tail.nodeType !== 1 || lead.tagName !== 'SPAN' ||
-          lead.children.length || lead.matches('[role],[tabindex],[contenteditable]') ||
-          !((tail.tagName === 'SPAN' && tail.style.fontStyle === 'italic') || /^(EM|I)$/.test(tail.tagName))) continue;
-      const textNodes = Array.from(lead.childNodes).filter(n => n.nodeType !== 8);
-      if (textNodes.length !== 1 || textNodes[0].nodeType !== 3) continue;
-      const match = textNodes[0].nodeValue.match(/^\*(\(※[^*`\n]{1,200}?)\*\*("[^*`\n]{1,240}")\*$/);
+      if (parts.length < 2) continue;
+      const tail = parts[parts.length - 1];
+      const spans = parts.slice(0, -1);
+      if (tail.nodeType !== 1 ||
+          !((tail.tagName === 'SPAN' && tail.style.fontStyle === 'italic') || /^(EM|I)$/.test(tail.tagName)) ||
+          tail.matches('[role],[tabindex],[contenteditable]')) continue;
       const tailText = tail.textContent || '';
-      if (!match || !/^[^*`\n]{1,300}\)$/.test(tailText) ||
-          tail.matches('[role],[tabindex],[contenteditable]') || tail.querySelectorAll('*').length > 32 ||
-          Array.from(tail.querySelectorAll('*')).some(n => !/^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) || n.matches('[role],[tabindex],[contenteditable],.inline-code'))) continue;
-      const italic = createRepairedEmphasis('', '*');
-      const bold = createRepairedEmphasis(match[2], '**');
-      textNodes[0].nodeValue = match[1];
-      italic.append(textNodes[0], bold);
-      lead.append(italic);
+      if (tailText.includes('*') || tailText.length > 600 || !tailText.trimEnd().endsWith(')') ||
+          tail.querySelectorAll('*').length > 64 ||
+          Array.from(tail.querySelectorAll('*')).some(n =>
+            !/^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) ||
+            n.matches('[role],[tabindex],[contenteditable]'))) continue;
+      const info = [];
+      let valid = true;
+      for (const span of spans) {
+        if (span.nodeType !== 1 || span.tagName !== 'SPAN' ||
+            span.matches('[role],[tabindex],[contenteditable]') ||
+            Array.from(span.childNodes).some(n => n.nodeType !== 3 && n.nodeType !== 8)) {
+          valid = false;
+          break;
+        }
+        const text = span.textContent || '';
+        info.push({ span, code: span.classList.contains('inline-code'), text });
+      }
+      if (!valid) continue;
+      const first = spans[0];
+      const last = spans[spans.length - 1];
+      if (!first || info[0].code || !info[0].text.startsWith('*(※')) continue;
+      if (info[info.length - 1].code || !info[info.length - 1].text.endsWith('*') ||
+          info[info.length - 1].text.endsWith('**')) continue;
+      let projected = '';
+      const offsets = [];
+      for (const item of info) {
+        offsets.push({ item, start: projected.length, end: projected.length + (item.code ? 1 : item.text.length) });
+        projected += item.code ? '\uFFFC' : item.text;
+      }
+      const boldIndex = projected.indexOf('**');
+      if (boldIndex < 0 || projected.indexOf('**', boldIndex + 1) >= 0) continue;
+      const stars = projected.split('*').length - 1;
+      if (stars !== 4 || !projected.endsWith('*')) continue;
+      const boldText = projected.slice(boldIndex + 2, projected.length - 1);
+      if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) continue;
+      const boldItem = info.find(item => !item.code && boldIndex >= offsets[info.indexOf(item)].start && boldIndex + 2 <= offsets[info.indexOf(item)].end);
+      if (!boldItem) continue;
+      const boldSpan = boldItem.span;
+      const local = boldIndex - offsets[info.indexOf(boldItem)].start;
+      let boldNode = null;
+      let boldOffset = 0;
+      let consumed = 0;
+      for (const node of boldItem.span.childNodes) {
+        if (node.nodeType !== 3) continue;
+        const value = node.nodeValue || '';
+        if (local >= consumed && local + 2 <= consumed + value.length) {
+          boldNode = node;
+          boldOffset = local - consumed;
+          break;
+        }
+        consumed += value.length;
+      }
+      if (!boldNode || boldNode.nodeValue.slice(boldOffset, boldOffset + 2) !== '**') continue;
+      const firstText = Array.from(first.childNodes).find(n => n.nodeType === 3);
+      const lastText = Array.from(last.childNodes).reverse().find(n => n.nodeType === 3);
+      if (!firstText || !firstText.nodeValue.startsWith('*') || !lastText || !lastText.nodeValue.endsWith('*')) continue;
+      const em = createRepairedEmphasis('', '*');
+      const strong = createRepairedEmphasis('', '**');
+      const right = boldNode.splitText(boldOffset);
+      right.nodeValue = right.nodeValue.slice(2);
+      const endNode = lastText === boldNode ? right : lastText;
+      firstText.nodeValue = firstText.nodeValue.slice(1);
+      endNode.nodeValue = endNode.nodeValue.slice(0, -1);
+      const afterBold = boldSpan.nextSibling;
+      host.insertBefore(em, first);
+      let node = first;
+      while (node && node !== boldSpan) {
+        const next = node.nextSibling;
+        em.append(node);
+        node = next;
+      }
+      em.append(boldSpan);
+      if (right.nodeValue) strong.append(right);
+      else right.remove();
+      if (last !== boldSpan) {
+        node = afterBold;
+        while (node) {
+          const next = node.nextSibling;
+          strong.append(node);
+          if (node === last) break;
+          node = next;
+        }
+      }
+      em.append(strong);
+      em.setAttribute('data-aistudio-note-tail', tailText);
       repaired++;
     }
     return repaired;
@@ -6714,16 +6827,56 @@ code.aistudio-prose-code-repaired {
       const outline = !pdf && middleText.match(/^\s*(\d{1,5}):[^\n]{1,240}?(\bp\.|\bLevel)\s*(\d{1,5})\s*$/i);
       const middle = problems || suffix || pdf || (outline && [outline[0], outline[1], outline[3]]);
       const right = problems ? after.match(/^\s*(\d{1,5})번\s*(?:문제|풀이)/) : suffix ? after.match(/^\s*(\d{1,5})p(?=\s|[),.:]|$)/i) : after.match(/^\s*(\d{1,5})(?=\s*(?:페이지|쪽|\)|:))/);
-      if (!left || !middle || !right) continue;
-      const bookSpan = Number(middle[1]) - Number(left[1]);
-      const pdfSpan = Number(right[1]) - Number(middle[2]);
-      // Parallel book/PDF ranges must have equal lengths. Separate outlined
-      // ranges need not, but must still be ordered and bounded.
-      if (bookSpan < 0 || bookSpan > 100 || pdfSpan < 0 || pdfSpan > 100 ||
-          (pdf && bookSpan !== pdfSpan) ||
-          (problems && Number(middle[2]) <= Number(middle[1])) ||
-          (outline && /Level/i.test(outline[2]) &&
-            (Number(middle[2]) < 1 || Number(right[1]) > 3))) continue;
+      let generic = false;
+      if (!left || !middle || !right) {
+        // Generic numeric range: no whitespace may touch the tilde, otherwise
+        // it is a deliberate strikethrough between separate tokens.
+        const UNIT = '(?:p|쪽|페이지|번|장|절|년|월|일|원|%|개|명|회|차|권|항|조|호)?';
+        const leftRange = new RegExp('\\d' + UNIT + '$').test(before) && /^\d/.test(middleText);
+        const rightRange = new RegExp('(?:\\d' + UNIT + '|\\])$').test(middleText) && /^(?:\d|\[)/.test(after);
+        // Two complete ranges can share one native <s>, with the Markdown
+        // markers of two separate bold clauses between them (…637<s>638쪽)]**
+        // … **제3절 […] 639</s>641쪽). Only that two-clause shape relaxes the
+        // connector whitelist and the `*` exclusion; code fences and newlines
+        // still disqualify, and the range order must still read naturally.
+        const paired = leftRange && rightRange;
+        const twoClauses = paired && (middleText.match(/\*/g) || []).length >= 4;
+        if (!(leftRange || rightRange) || middleText.length > 300 || middleText.includes('\n') ||
+            (twoClauses ? /[`\\]/.test(middleText) : /[*:`\\]/.test(middleText))) continue;
+        // The interval is a range only while its middle reads as page/book
+        // coordinates: digits, units, separators and a few connectors.
+        const connector = twoClauses ? '' : middleText
+          .replace(/\d+/g, '')
+          .replace(/pdf/gi, '')
+          .replace(/[p쪽페이지번장절년월일원%개명회차권항조호]/g, '')
+          .replace(/[교재상단예제문제참고및등]/g, '')
+          .replace(/[\s,./[\]()~:-]/g, '');
+        if (connector) continue;
+        // Endpoints must still read as an increasing, bounded range. This keeps
+        // intentional deletions between unrelated numbers struck.
+        const numbers = (text) => (text.match(/\d{1,5}/g) || []).map(Number);
+        const beforeNumbers = numbers(before);
+        const middleNumbers = numbers(middleText);
+        const rightNumber = numbers(after)[0];
+        const leftNumber = beforeNumbers[beforeNumbers.length - 1];
+        if (middleNumbers.length && leftNumber !== undefined &&
+            (middleNumbers[0] < leftNumber || middleNumbers[0] - leftNumber > 100)) continue;
+        if (middleNumbers.length && rightNumber !== undefined && /^\d/.test(after) &&
+            (rightNumber < middleNumbers[middleNumbers.length - 1] ||
+              rightNumber - middleNumbers[middleNumbers.length - 1] > 100)) continue;
+        generic = true;
+      }
+      if (!generic) {
+        const bookSpan = Number(middle[1]) - Number(left[1]);
+        const pdfSpan = Number(right[1]) - Number(middle[2]);
+        // Parallel book/PDF ranges must have equal lengths. Separate outlined
+        // ranges need not, but must still be ordered and bounded.
+        if (bookSpan < 0 || bookSpan > 100 || pdfSpan < 0 || pdfSpan > 100 ||
+            (pdf && bookSpan !== pdfSpan) ||
+            (problems && Number(middle[2]) <= Number(middle[1])) ||
+            (outline && /Level/i.test(outline[2]) &&
+              (Number(middle[2]) < 1 || Number(right[1]) > 3))) continue;
+      }
       strike.before(document.createTextNode('~'));
       strike.after(document.createTextNode('~'));
       strike.classList.add('aistudio-page-range-repaired');
