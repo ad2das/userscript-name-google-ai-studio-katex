@@ -80,8 +80,10 @@
   const MAX_ASCII_TREE_LINES = 120;
   const MAX_ASCII_GRID_COLUMNS = 320;
   const MAX_ASCII_GRID_RUNS = 1200;
-  const MIN_DISPLAY_MATH_SCALE = 0.58;
+  const MIN_DISPLAY_MATH_SCALE = 0.75;
+  const MIN_WRAP_MATH_SCALE = 0.85;
   const MATH_FIT_CHECKED_ATTR = 'data-aistudio-math-fit-checked';
+  const INLINE_MATH_CHECKED_ATTR = 'data-aistudio-inline-math-checked';
   const MOBILE_TABLE_ATTR = 'data-aistudio-mobile-table';
 
   const RAW_MATH_ENVIRONMENTS = new Set([
@@ -1283,6 +1285,11 @@ code.aistudio-prose-code-repaired {
   margin-bottom: 0.65em !important;
 }
 
+@SCOPE@ :where(ms-katex.display) :where(.katex-display, pre, code) {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
 /*
  * 수식 내부는 일반 텍스트 줄바꿈 규칙의 영향을 받지 않게 한다.
  */
@@ -1372,7 +1379,30 @@ code.aistudio-prose-code-repaired {
   box-sizing: border-box !important;
   overflow-x: auto !important;
   overflow-y: hidden !important;
-  padding-block: 0.5em !important;
+  padding-block: 0.15em !important;
+}
+
+@SCOPE@ .aistudio-math-wrap > .katex {
+  white-space: normal !important;
+  text-align: left !important;
+  max-width: 100% !important;
+}
+
+@SCOPE@ .aistudio-math-wrap > .katex > .katex-html {
+  white-space: normal !important;
+  padding-left: 1.2em !important;
+  text-indent: -1.2em !important;
+}
+
+@SCOPE@ .aistudio-math-wrap > .katex > .katex-html > .katex-base {
+  text-indent: 0 !important;
+  margin-block: 0.12em !important;
+}
+
+@SCOPE@ :where(ms-katex:not(.display), mjx-container:not([display="true"])).aistudio-inline-math-wrap,
+@SCOPE@ .aistudio-inline-math-wrap .katex,
+@SCOPE@ .aistudio-inline-math-wrap .katex-html {
+  white-space: normal !important;
 }
 
 @SCOPE@ .aistudio-math-scroll .katex-display {
@@ -3509,6 +3539,10 @@ code.aistudio-prose-code-repaired {
         mathFitCache.delete(display);
         display.removeAttribute(MATH_FIT_CHECKED_ATTR);
       }
+      const inlineHost = host.matches('ms-katex:not(.display)')
+        ? host
+        : closest(host, 'ms-katex:not(.display)');
+      inlineHost?.removeAttribute(INLINE_MATH_CHECKED_ATTR);
       repaired += 1;
     }
 
@@ -6711,6 +6745,11 @@ code.aistudio-prose-code-repaired {
     restoreOriginalMathFontSize(katexRoot);
     katexRoot.removeAttribute('data-aistudio-math-fit-scale');
     katexRoot.removeAttribute('data-aistudio-math-natural-width');
+    katexRoot.removeAttribute('data-aistudio-math-fit-mode');
+    display.classList.remove('aistudio-math-wrap');
+    if (display.parentElement?.classList.contains('aistudio-math-scroll')) {
+      display.parentElement.replaceWith(display);
+    }
 
     const availableWidth = Math.floor(display.clientWidth || 0);
     const naturalWidth = Math.ceil(katexRoot.scrollWidth || 0);
@@ -6744,37 +6783,79 @@ code.aistudio-prose-code-repaired {
       return false;
     }
 
+    const finish = (scale, mode) => {
+      if (scale < 1) {
+        katexRoot.style.setProperty(
+          'font-size',
+          (baseFontSize * scale).toFixed(3) + 'px',
+          'important'
+        );
+      }
+      katexRoot.setAttribute(
+        'data-aistudio-math-fit-scale',
+        scale.toFixed(4)
+      );
+      katexRoot.setAttribute(
+        'data-aistudio-math-natural-width',
+        String(naturalWidth)
+      );
+      katexRoot.setAttribute('data-aistudio-math-fit-mode', mode);
+      return true;
+    };
+
+    const bases = katexRoot.querySelectorAll(
+      ':scope > .katex-html > .katex-base'
+    );
+
+    if (bases.length >= 2 && !katexRoot.querySelector('.tag')) {
+      display.classList.add('aistudio-math-wrap');
+      let widest = 0;
+      for (const base of bases) {
+        widest = Math.max(widest, base.getBoundingClientRect().width || 0);
+      }
+      widest = Math.ceil(widest);
+
+      if (widest <= availableWidth + 1) {
+        return finish(1, 'wrap');
+      }
+
+      const scale = Math.max(
+        MIN_WRAP_MATH_SCALE,
+        (availableWidth - 2) / widest
+      );
+      finish(scale, 'wrap-scale');
+
+      if (widest * scale > availableWidth + 1 &&
+          !display.parentElement?.classList.contains('aistudio-math-scroll')) {
+        createDisplayMathScroller(display);
+      }
+
+      return true;
+    }
+
     const scale = Math.max(
       MIN_DISPLAY_MATH_SCALE,
       Math.min(1, (availableWidth - 2) / naturalWidth)
     );
+    finish(scale, 'scale');
 
-    katexRoot.style.setProperty(
-      'font-size',
-      (baseFontSize * scale).toFixed(3) + 'px',
-      'important'
-    );
-    katexRoot.setAttribute(
-      'data-aistudio-math-fit-scale',
-      scale.toFixed(4)
-    );
-    katexRoot.setAttribute(
-      'data-aistudio-math-natural-width',
-      String(naturalWidth)
-    );
-
-    if (naturalWidth * scale > availableWidth + 1 &&
+    if (scale < 1 &&
+        naturalWidth * scale > availableWidth + 1 &&
         !display.parentElement?.classList.contains('aistudio-math-scroll')) {
-      const scroller = document.createElement('span');
-      scroller.className = 'aistudio-math-scroll';
-      scroller.setAttribute('role', 'region');
-      scroller.setAttribute('aria-label', '긴 수식 가로 스크롤');
-      scroller.setAttribute('tabindex', '0');
-      display.before(scroller);
-      scroller.appendChild(display);
+      createDisplayMathScroller(display);
     }
 
     return true;
+  }
+
+  function createDisplayMathScroller(display) {
+    const scroller = document.createElement('span');
+    scroller.className = 'aistudio-math-scroll';
+    scroller.setAttribute('role', 'region');
+    scroller.setAttribute('aria-label', '긴 수식 가로 스크롤');
+    scroller.setAttribute('tabindex', '0');
+    display.before(scroller);
+    scroller.appendChild(display);
   }
 
   function fitWideDisplayMath(force = false) {
@@ -6818,12 +6899,12 @@ code.aistudio-prose-code-repaired {
       }
     }
 
-    fitted += containWideInlineMath();
+    fitted += containWideInlineMath(force);
 
     return fitted;
   }
 
-  function containWideInlineMath() {
+  function containWideInlineMath(force = false) {
     const candidates = Array.from(document.querySelectorAll(
       'ms-katex:not(.display), mjx-container:not([display="true"])'
     ));
@@ -6834,11 +6915,28 @@ code.aistudio-prose-code-repaired {
         !host.isConnected ||
         closest(host, USER_SELECTOR) ||
         !closest(host, STYLE_ROOT_SELECTOR) ||
-        host.parentElement?.classList.contains('aistudio-inline-math-scroll') ||
         closest(host, '.katex-display, ms-katex.display')
       ) {
         continue;
       }
+
+      if (!force && host.getAttribute(INLINE_MATH_CHECKED_ATTR) === '1') {
+        continue;
+      }
+
+      if (force) {
+        const wrapper = host.parentElement;
+        if (wrapper?.classList.contains('aistudio-inline-math-scroll')) {
+          wrapper.replaceWith(host);
+        }
+        host.classList.remove('aistudio-inline-math-wrap');
+      } else if (
+        host.parentElement?.classList.contains('aistudio-inline-math-scroll')
+      ) {
+        continue;
+      }
+
+      host.setAttribute(INLINE_MATH_CHECKED_ATTR, '1');
 
       let container = host.parentElement;
       let remainingAscents = 6;
@@ -6860,6 +6958,30 @@ code.aistudio-prose-code-repaired {
 
       if (!availableWidth || naturalWidth <= availableWidth + 1) {
         continue;
+      }
+
+      const html = host.querySelector('.katex-html');
+      const bases = html
+        ? Array.from(html.children).filter(
+            (child) => child.classList.contains('katex-base')
+          )
+        : [];
+
+      if (bases.length >= 2) {
+        host.classList.add('aistudio-inline-math-wrap');
+        let widest = 0;
+        for (const base of bases) {
+          widest = Math.max(
+            widest,
+            base.getBoundingClientRect().width || 0
+          );
+        }
+
+        if (Math.ceil(widest) <= availableWidth + 1) {
+          continue;
+        }
+
+        host.classList.remove('aistudio-inline-math-wrap');
       }
 
       const scroller = document.createElement('span');

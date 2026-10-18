@@ -325,6 +325,10 @@ async (page) => {
     window.__plainReuse = { retained, anchor };
     const math = document.getElementById('container-resize');
     window.__oldFitFont = math.querySelector('.katex').style.fontSize;
+    window.__oldFitMode = math.querySelector('.katex')
+      .getAttribute('data-aistudio-math-fit-mode');
+    window.__oldFitScale = math.querySelector('.katex')
+      .getAttribute('data-aistudio-math-fit-scale');
     math.style.width = '650px';
   });
   await page.waitForTimeout(3000);
@@ -335,7 +339,15 @@ async (page) => {
         getComputedStyle(document.getElementById('reuse-plain')).fontWeight,
     reusedPlainNodesPreserved: __plainReuse.anchor.parentNode === document.getElementById('reuse-plain') &&
       __plainReuse.anchor.nextSibling === __plainReuse.retained && __plainReuse.retained.nodeValue === '이제 일반 문장',
-    containerResizeRefit: document.querySelector('#container-resize .katex').style.fontSize !== __oldFitFont,
+    containerResizeRefit: (() => {
+      const katex = document.querySelector('#container-resize .katex');
+      // A wrapped formula keeps no inline font-size, so the refit has to be
+      // proven by the recomputed fit mode/scale and the removed wrap class.
+      return katex.style.fontSize !== __oldFitFont ||
+        katex.getAttribute('data-aistudio-math-fit-mode') !== __oldFitMode ||
+        katex.getAttribute('data-aistudio-math-fit-scale') !== __oldFitScale ||
+        document.querySelector('#container-resize .aistudio-math-wrap') === null;
+    })(),
     reinsertedRoot: document.getElementById('reinserted-article').textContent === '분리 후 재사용',
     tableRewrapped: !!document.querySelector('#rewrap-table')?.parentElement.classList.contains('aistudio-table-scroll'),
     coldWorkCompletes: document.querySelectorAll('#cold-marked-root strong').length === 600,

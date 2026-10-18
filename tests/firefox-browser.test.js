@@ -731,6 +731,12 @@ async (page) => {
       stretchyFitScale: Number(
         stretchyKatex.getAttribute('data-aistudio-math-fit-scale') || 1
       ),
+      stretchyFitMode: stretchyKatex.getAttribute(
+        'data-aistudio-math-fit-mode'
+      ),
+      stretchyWrap: Boolean(stretchyDisplay.classList.contains(
+        'aistudio-math-wrap'
+      )),
       boldWithMathText: visibleTextOf(boldWithMathStrong),
       boldWithMathWeight: boldWithMathStrong
         ? Number(getComputedStyle(boldWithMathStrong).fontWeight)
@@ -1350,8 +1356,10 @@ async (page) => {
       (overflow) => overflow !== 'hidden'
     ) ||
     rendering.stretchyNaturalWidth <= rendering.stretchyDisplayWidth ||
-    rendering.stretchyFitScale >= 1 ||
-    rendering.stretchyFitScale < 0.58 ||
+    (rendering.stretchyFitMode === 'wrap'
+      ? !rendering.stretchyWrap || rendering.stretchyFitScale !== 1
+      : rendering.stretchyFitScale >= 1 ||
+        rendering.stretchyFitScale < 0.75) ||
     (rendering.stretchyScrollWidth > rendering.stretchyDisplayWidth + 2 &&
       !rendering.stretchyOverflowContained) ||
     rendering.boldWithMathText !==
