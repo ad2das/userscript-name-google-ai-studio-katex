@@ -1458,6 +1458,11 @@ code.aistudio-prose-code-repaired {
   let generationObserved = false;
   let generatingCache = { at: -Infinity, value: false };
   let generatingDirty = true;
+  let lastScrollAt = -Infinity;
+  const SCROLL_IDLE_MS = 140;
+  let rootsGeneration = 0;
+  let rootsCache = null;
+  let rootsCacheGeneration = -1;
   let lastPromptActivity = -Infinity;
   let promptComposing = false;
   const deferredMutationBatches = [];
@@ -7121,79 +7126,92 @@ code.aistudio-prose-code-repaired {
       return [];
     }
 
-    /*
-     * 안정화 대기 중에는 비싼 body fallback 스캔을 반복하지 않는다.
-     * 최초에 찾은 작은 후보만 명시적 root로 승격해 다음 예약 스캔에서도
-     * 유지한다. 기존 10초 fallback 게이트와 수식 폭 캐시는 그대로 둔다.
-     */
-    for (const root of fallbackList) {
-      if (
-        root.setAttribute &&
-        !root.matches(REPAIRED_ROOT_SELECTOR)
-      ) {
-        root.setAttribute('data-aistudio-repair-root', '1');
-        explicitRootCache.push(root);
-      }
+    let roots = null;
+
+    if (fallbackList.length === 0 && rootsCache && rootsCacheGeneration === rootsGeneration) {
+      // Nothing changed since the last pass: the filtered, ancestor-deduped and
+      // sorted list is still valid. Only connectivity can change unseen.
+      roots = rootsCache.filter((root) => root.isConnected);
     }
 
-    const candidates = Array.from(new Set([
-      ...explicitRoots,
-      ...fallbackList
-    ])).filter((root) => (
-      root.isConnected &&
-      closest(root, MODEL_TURN_SELECTOR) &&
-      !closest(root, USER_SELECTOR)
-    ));
-
-    /*
-     * 일반 fallback 문단은 가장 바깥 turn으로 합치되, 완전한 수식 환경을
-     * 검증한 작은 scope는 유지한다. 상위 turn은 임의 div/custom host를
-     * 순회하지 않으므로 이 예외가 없으면 검증된 수식이 누락된다.
-     */
-    const candidateSet = new Set(candidates);
-    if (promptEditorActive()) {
-      return [];
-    }
-
-    const roots = candidates.filter((root) => {
-      if (rawMathScopeRoots.has(root)) return rootIsEligible(root);
-      for (let parent = root.parentElement; parent; parent = parent.parentElement) {
-        if (candidateSet.has(parent) && rootIsEligible(parent)) return false;
+    if (!roots) {
+      /*
+       * 안정화 대기 중에는 비싼 body fallback 스캔을 반복하지 않는다.
+       * 최초에 찾은 작은 후보만 명시적 root로 승격해 다음 예약 스캔에서도
+       * 유지한다. 기존 10초 fallback 게이트와 수식 폭 캐시는 그대로 둔다.
+       */
+      for (const root of fallbackList) {
+        if (
+          root.setAttribute &&
+          !root.matches(REPAIRED_ROOT_SELECTOR)
+        ) {
+          root.setAttribute('data-aistudio-repair-root', '1');
+          explicitRootCache.push(root);
+        }
       }
-      return rootIsEligible(root);
-    });
 
-    roots.sort((left, right) => {
-      if (
-        left === right ||
-        typeof left.compareDocumentPosition !== 'function'
-      ) {
+      const candidates = Array.from(new Set([
+        ...explicitRoots,
+        ...fallbackList
+      ])).filter((root) => (
+        root.isConnected &&
+        closest(root, MODEL_TURN_SELECTOR) &&
+        !closest(root, USER_SELECTOR)
+      ));
+
+      /*
+       * 일반 fallback 문단은 가장 바깥 turn으로 합치되, 완전한 수식 환경을
+       * 검증한 작은 scope는 유지한다. 상위 turn은 임의 div/custom host를
+       * 순회하지 않으므로 이 예외가 없으면 검증된 수식이 누락된다.
+       */
+      const candidateSet = new Set(candidates);
+      if (promptEditorActive()) {
+        return [];
+      }
+
+      roots = candidates.filter((root) => {
+        if (rawMathScopeRoots.has(root)) return rootIsEligible(root);
+        for (let parent = root.parentElement; parent; parent = parent.parentElement) {
+          if (candidateSet.has(parent) && rootIsEligible(parent)) return false;
+        }
+        return rootIsEligible(root);
+      });
+
+      roots.sort((left, right) => {
+        if (
+          left === right ||
+          typeof left.compareDocumentPosition !== 'function'
+        ) {
+          return 0;
+        }
+
+        if (left.contains && left.contains(right)) {
+          return rawMathScopeRoots.has(right) ? 1 : -1;
+        }
+
+        if (right.contains && right.contains(left)) {
+          return rawMathScopeRoots.has(left) ? -1 : 1;
+        }
+
+        const position = left.compareDocumentPosition(right);
+
+        if (position & 4) {
+          return -1;
+        }
+
+        if (position & 2) {
+          return 1;
+        }
+
         return 0;
+      });
+
+      if (promptEditorActive()) {
+        return [];
       }
 
-      if (left.contains && left.contains(right)) {
-        return rawMathScopeRoots.has(right) ? 1 : -1;
-      }
-
-      if (right.contains && right.contains(left)) {
-        return rawMathScopeRoots.has(left) ? -1 : 1;
-      }
-
-      const position = left.compareDocumentPosition(right);
-
-      if (position & 4) {
-        return -1;
-      }
-
-      if (position & 2) {
-        return 1;
-      }
-
-      return 0;
-    });
-
-    if (promptEditorActive()) {
-      return [];
+      rootsCache = roots.slice();
+      rootsCacheGeneration = rootsGeneration;
     }
 
     const selected = roots.filter(nearViewport);
@@ -7430,6 +7448,13 @@ code.aistudio-prose-code-repaired {
   function scan() {
     // Requests queued before focus changed must yield too, not just new events.
     if (document.hidden) return;
+    // Repairs must not fight the compositor during a fast scroll. Mutation
+    // bookkeeping already ran; only the expensive scan waits.
+    const sinceScroll = schedulerNow() - lastScrollAt;
+    if (sinceScroll < SCROLL_IDLE_MS) {
+      schedule(SCROLL_IDLE_MS - sinceScroll + 16, true);
+      return;
+    }
     if (promptEditorActive()) {
       schedule(promptComposing ? PROMPT_IDLE_MS : Math.max(50, PROMPT_IDLE_MS - (Date.now() - lastPromptActivity) + 50));
       return;
@@ -7976,7 +8001,10 @@ code.aistudio-prose-code-repaired {
         }
         changed = true;
       }
-      if (mutation.type !== 'characterData') explicitRootsDirty = true;
+      if (mutation.type !== 'characterData') {
+        explicitRootsDirty = true;
+        rootsGeneration += 1;
+      }
       // A new generic paragraph or same-text structural rewrite must be
       // discovered even when another record in this batch had a known root.
       let scopes;
@@ -8005,6 +8033,7 @@ code.aistudio-prose-code-repaired {
     }
     if (controlChanged) generatingDirty = true;
     if (changed) {
+      rootsGeneration += 1;
       mathFitDirty = true;
       // Stop -> Run should not wait behind an idle callback. Keep token-stream
       // polling coalesced; every urgent scan still rechecks generation/typing.
@@ -8013,8 +8042,10 @@ code.aistudio-prose-code-repaired {
   }
 
   function flushPendingCleanup() {
+    let cleaned = 0;
     for (const element of pendingCleanup) {
       if (!element.isConnected || promptEditorFor(element)) continue;
+      cleaned += 1;
       clearFallbackRootsInsideUser(element);
       if (closest(element, USER_SELECTOR)) continue;
       const wonBlock = closest(element, 'p,td,th') || element;
@@ -8054,6 +8085,7 @@ code.aistudio-prose-code-repaired {
       }
     }
     pendingCleanup.clear();
+    if (cleaned) rootsGeneration += 1;
     for (const display of pendingMathInvalidation) {
       if (display.isConnected && !closest(display, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR)) {
         display.removeAttribute(MATH_FIT_CHECKED_ATTR);
@@ -8602,6 +8634,13 @@ code.aistudio-prose-code-repaired {
       },
       { passive: true, capture: true }
     );
+
+    // One passive capture listener per channel: scrolling defers scans so the
+    // repair pipeline never competes with the compositor for frames.
+    const noteScroll = () => { lastScrollAt = schedulerNow(); };
+    document.addEventListener('scroll', noteScroll, { capture: true, passive: true });
+    document.addEventListener('wheel', noteScroll, { capture: true, passive: true });
+    document.addEventListener('touchmove', noteScroll, { capture: true, passive: true });
 
     window.addEventListener(
       'resize',
