@@ -135,6 +135,7 @@ const instrumented = source.replace(
     simpleTexRuns,
     splitRawMathRows,
     stripLeadingArrayRules,
+    resetGeneratingCache: () => { generatingDirty = true; },
     getCssText: () => CSS_TEXT
   };
 }());
@@ -1420,12 +1421,14 @@ context.document.querySelectorAll = (selector) => {
   if (selector === 'button') return [makeVisibleButton('Stop')];
   return [];
 };
+api.resetGeneratingCache();
 assert.equal(api.generating(), true);
 
 context.document.querySelectorAll = (selector) => {
   if (selector === 'button') return [makeVisibleButton('Run')];
   return [];
 };
+api.resetGeneratingCache();
 assert.equal(api.generating(), false);
 
 context.document.querySelectorAll = (selector) => {
@@ -1439,6 +1442,7 @@ context.document.querySelectorAll = (selector) => {
   }
   return [];
 };
+api.resetGeneratingCache();
 assert.equal(
   api.generating(),
   false,

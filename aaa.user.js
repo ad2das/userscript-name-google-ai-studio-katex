@@ -1456,6 +1456,8 @@ code.aistudio-prose-code-repaired {
   let observer = null;
   let repairedTotal = 0;
   let generationObserved = false;
+  let generatingCache = { at: -Infinity, value: false };
+  let generatingDirty = true;
   let lastPromptActivity = -Infinity;
   let promptComposing = false;
   const deferredMutationBatches = [];
@@ -6559,6 +6561,19 @@ code.aistudio-prose-code-repaired {
     return repaired;
   }
 
+  function textOutsideRenderedMath(root, text) {
+    if (!text || !text.includes('\\') && !text.includes('$')) return text;
+    let out = text;
+    for (const node of root.querySelectorAll('.katex-mathml, mjx-assistive-mml, annotation, script[type^="math/tex"]')) {
+      if (node.parentElement?.closest('.katex-mathml, mjx-assistive-mml')) continue; // count each source once
+      const source = node.textContent || '';
+      if (!source) continue;
+      const index = out.indexOf(source);
+      if (index >= 0) out = out.slice(0, index) + out.slice(index + source.length);
+    }
+    return out;
+  }
+
   function repairRoot(root) {
     if (
       !root ||
@@ -6575,7 +6590,11 @@ code.aistudio-prose-code-repaired {
       return 0;
     }
 
-    let repaired = hasRawMathFallbackHint(rootText) || rootText.includes('\\text') ? repairRawMath(root, rootText) : 0;
+    // Rendered KaTeX keeps its TeX source in annotation/assistive nodes. Those
+    // must not make a finished response look like it still contains raw TeX.
+    const rawText = textOutsideRenderedMath(root, rootText);
+
+    let repaired = hasRawMathFallbackHint(rawText) || rawText.includes('\\text') ? repairRawMath(root, rawText) : 0;
     repaired += repairPageRanges(root);
     repaired += repairRenderedMathBold(root);
     if (hasLiteralTableBreak(rootText)) repaired += repairSplitTableBreaks(root);
@@ -6586,7 +6605,7 @@ code.aistudio-prose-code-repaired {
     repaired += repairMisparsedItalicNotes(root);
     repaired += repairInlineEmphasis(root);
     if (/\d원/.test(rootText)) repaired += repairAmountTokens(root);
-    if (/\\\d/.test(rootText)) repaired += repairWonSymbols(root);
+    if (/\\\d/.test(rawText)) repaired += repairWonSymbols(root);
     if (/\|\s*:?-{3,}:?\s*\|/.test(rootText)) repaired += repairRawTables(root);
     // Do not retry individual text nodes after context-aware repair: a code
     // span/fence can start in a sibling node, so per-node fallback loses safety.
@@ -7307,8 +7326,9 @@ code.aistudio-prose-code-repaired {
   }
 
   function findRunButton() {
+    const scoped = document.querySelectorAll(COMPOSER_BUTTON_SELECTOR);
     const buttons = Array.from(
-      document.querySelectorAll(RUN_BUTTON_SELECTOR)
+      scoped.length ? scoped : document.querySelectorAll(RUN_BUTTON_SELECTOR)
     );
 
     return buttons.find((button) => {
@@ -7354,41 +7374,57 @@ code.aistudio-prose-code-repaired {
     return false;
   }
 
+  const COMPOSER_BUTTON_SELECTOR =
+    'ms-prompt-box button, ms-prompt-input button, ms-chat-input button, form button';
+
+  function composerButtons() {
+    const scoped = document.querySelectorAll(COMPOSER_BUTTON_SELECTOR);
+    return scoped.length ? scoped : document.querySelectorAll('button');
+  }
+
   function generating() {
-    const activeStopButton = Array.from(
-      document.querySelectorAll('button')
-    ).some((button) => (
-      stopLabelHint(button) && isStopActionLabel(buttonLabel(button)) && isPromptRunButton(button) &&
-      visible(button)
-    ));
-
-    if (activeStopButton) {
-      return true;
+    if (!generatingDirty && schedulerNow() - generatingCache.at < 200) {
+      return generatingCache.value;
     }
 
-    // Explicit busy state outranks a Run button left visible during submission.
-    if (Array.from(document.querySelectorAll('[aria-busy="true"]')).some((indicator) =>
-      closest(indicator, MODEL_TURN_SELECTOR + ', ms-chat-turn, ms-prompt-input, ms-chat-input') &&
-      visible(indicator))) return true;
+    const value = (() => {
+      const activeStopButton = Array.from(composerButtons()).some((button) => (
+        stopLabelHint(button) && isStopActionLabel(buttonLabel(button)) && isPromptRunButton(button) &&
+        visible(button)
+      ));
 
-    if (findRunButton()) {
-      return false;
-    }
+      if (activeStopButton) {
+        return true;
+      }
 
-    const indicators = document.querySelectorAll(MODEL_ACTIVITY_SELECTOR);
+      // Explicit busy state outranks a Run button left visible during submission.
+      if (Array.from(document.querySelectorAll('[aria-busy="true"]')).some((indicator) =>
+        closest(indicator, MODEL_TURN_SELECTOR + ', ms-chat-turn, ms-prompt-input, ms-chat-input') &&
+        visible(indicator))) return true;
 
-    if (Array.from(indicators).some(visible)) {
-      return true;
-    }
+      if (findRunButton()) {
+        return false;
+      }
 
-    const fallbackIndicators = document.querySelectorAll(
-      FALLBACK_ACTIVITY_SELECTOR
-    );
+      const indicators = document.querySelectorAll(MODEL_ACTIVITY_SELECTOR);
 
-    return Array.from(fallbackIndicators).some((indicator) => (
-      visible(indicator) &&
-      fallbackActivityHasRepairHint(indicator)
-    ));
+      if (Array.from(indicators).some(visible)) {
+        return true;
+      }
+
+      const fallbackIndicators = document.querySelectorAll(
+        FALLBACK_ACTIVITY_SELECTOR
+      );
+
+      return Array.from(fallbackIndicators).some((indicator) => (
+        visible(indicator) &&
+        fallbackActivityHasRepairHint(indicator)
+      ));
+    })();
+
+    generatingCache = { at: schedulerNow(), value };
+    generatingDirty = false;
+    return value;
   }
 
   function scan() {
@@ -7506,6 +7542,15 @@ code.aistudio-prose-code-repaired {
 
     const roots = collectRoots();
     const lastTurn = lastModelTurn(roots);
+    // Visible priority only affects ordering. Roots that already finished are
+    // skipped by the backoff checks below, so reordering cannot re-repair them.
+    const visibleRoots = roots.filter((root) =>
+      Array.from(visibleInlinePriority).some(container => root.contains(container)));
+    if (visibleRoots.length && visibleRoots.length < roots.length) {
+      const visibleSet = new Set(visibleRoots);
+      roots.splice(0, roots.length, ...visibleRoots,
+        ...roots.filter((root) => !visibleSet.has(root)));
+    }
 
     const fallbackCount = roots.filter((root) => (
       fallbackRoots.has(root)
@@ -7540,8 +7585,7 @@ code.aistudio-prose-code-repaired {
       }
       scanCursor = (index + 1) % roots.length;
       const previous = states.get(root);
-      const visiblePriority = Array.from(visibleInlinePriority).some(container => root.contains(container));
-      if (!visiblePriority && !inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
+      if (!inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
           now - previous.lastAttemptAt < retryDelay(previous.attempts)) continue;
       const text = root.textContent || '';
 
@@ -7599,7 +7643,7 @@ code.aistudio-prose-code-repaired {
       }
 
       if (
-        !visiblePriority && !inlineCursors.has(root) && state.attempted === text &&
+        !inlineCursors.has(root) && state.attempted === text &&
         now - (state.lastAttemptAt || 0) < retryWait
       ) {
         continue;
@@ -7829,28 +7873,74 @@ code.aistudio-prose-code-repaired {
     let changed = false;
     let controlChanged = false;
     const invalidated = new Set();
+    const promptEditorMemo = new Map();
+    const userMemo = new Map();
+    const livePreviewMemo = new Map();
+    const buttonMemo = new Map();
+    const knownRootMemo = new Map();
+    const displayMemo = new Map();
+    const promptEditorForElement = (element) => {
+      if (!promptEditorMemo.has(element)) {
+        promptEditorMemo.set(element, promptEditorFor(element));
+      }
+      return promptEditorMemo.get(element);
+    };
+    const closestMemo = (memo, element, selector) => {
+      if (!memo.has(element)) memo.set(element, closest(element, selector));
+      return memo.get(element);
+    };
+    const groups = new Map();
+    const ordered = [];
     for (const mutation of mutations) {
-      const element = elementOf(mutation.target);
-      if (!element) continue;
-      if (promptEditorFor(element)) {
-        // The official Run/Stop control can live inside the prompt container.
-        // Observe its signal without walking or repairing any editor content.
-        if (closest(element, 'button')) { changed = true; controlChanged = true; }
+      if (mutation.type === 'attributes') {
+        ordered.push(mutation);
         continue;
       }
-      if (closest(element, '.aistudio-live-preview-layer')) continue;
-      const changedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
-      if (closest(element, 'button') || changedNodes.some(node => node.nodeType === 1 && node.matches('button'))) controlChanged = true;
+      const element = elementOf(mutation.target);
+      if (!element) continue;
+      let elementGroups = groups.get(element);
+      if (!elementGroups) {
+        elementGroups = new Map();
+        groups.set(element, elementGroups);
+      }
+      const type = mutation.type;
+      let group = elementGroups.get(type);
+      if (!group) {
+        group = { isGroup: true, element, type, addedNodes: [], removedNodes: [] };
+        elementGroups.set(type, group);
+        ordered.push(group);
+      }
+      if (type === 'childList') {
+        if (mutation.addedNodes) group.addedNodes.push(...mutation.addedNodes);
+        if (mutation.removedNodes) group.removedNodes.push(...mutation.removedNodes);
+      }
+    }
+    for (const mutation of ordered) {
+      const isGroup = mutation.isGroup === true;
+      const element = isGroup ? mutation.element : elementOf(mutation.target);
+      if (!element) continue;
+      if (promptEditorForElement(element)) {
+        // The official Run/Stop control can live inside the prompt container.
+        // Observe its signal without walking or repairing any editor content.
+        if (closestMemo(buttonMemo, element, 'button')) { changed = true; controlChanged = true; }
+        continue;
+      }
+      if (closestMemo(livePreviewMemo, element, '.aistudio-live-preview-layer')) continue;
+      const addedNodes = isGroup ? mutation.addedNodes : (mutation.addedNodes || []);
+      const removedNodes = isGroup ? mutation.removedNodes : (mutation.removedNodes || []);
+      const changedNodes = [...addedNodes, ...removedNodes];
+      const inButton = closestMemo(buttonMemo, element, 'button');
+      if (inButton || changedNodes.some(node => node.nodeType === 1 && node.matches('button'))) controlChanged = true;
       if (changedNodes.length && changedNodes.every(node =>
           node.nodeType === 1 && node.matches('.aistudio-live-preview-layer'))) continue;
-      if (mutation.attributeName === 'class' &&
+      if (!isGroup && mutation.attributeName === 'class' &&
           !element.matches(MODEL_TURN_SELECTOR + ',' + USER_SELECTOR) &&
           !/(?:^|\s)(?:model|user|model-prompt-container|user-prompt-container|user-message|human-message)(?:\s|$)/.test(mutation.oldValue || '')) continue;
-      if (mutation.type === 'attributes') {
+      if (!isGroup && mutation.type === 'attributes') {
         pendingCleanup.add(element);
         changed = true;
       }
-      if (closest(element, USER_SELECTOR)) {
+      if (closestMemo(userMemo, element, USER_SELECTOR)) {
         // A framework may move a previously repaired model block into a user
         // turn. Defer cleanup through the same generation/editor guard.
         pendingCleanup.add(element);
@@ -7858,22 +7948,29 @@ code.aistudio-prose-code-repaired {
         continue;
       }
       // Cheap bookkeeping only. Never scan entire descendants in this callback.
-      const knownRoot = knownRepairRootForMutation(element);
-      if (knownRoot && mutation.type !== 'attributes') {
+      if (!knownRootMemo.has(element)) {
+        knownRootMemo.set(element, knownRepairRootForMutation(element));
+      }
+      const knownRoot = knownRootMemo.get(element);
+      if (knownRoot && (isGroup || mutation.type !== 'attributes')) {
         pendingCleanup.add(element);
       }
-      const display = closest(element, '.katex-display, ms-katex.display');
+      if (!displayMemo.has(element)) {
+        displayMemo.set(element, closest(element, '.katex-display, ms-katex.display'));
+      }
+      const display = displayMemo.get(element);
       if (display) {
         mathFitCache.delete(display);
         pendingMathInvalidation.add(display);
       }
       if (knownRoot) {
         for (let parent = element; parent; parent = parent.parentElement) {
+          if (invalidated.has(parent)) break;
+          invalidated.add(parent);
           if (rootEligibility.has(parent)) rootEligibility.delete(parent);
           inlineCursors.delete(parent);
-          if (states.has(parent) && !invalidated.has(parent)) {
+          if (states.has(parent)) {
             states.delete(parent);
-            invalidated.add(parent);
           }
           if (parent === knownRoot) break;
         }
@@ -7882,20 +7979,31 @@ code.aistudio-prose-code-repaired {
       if (mutation.type !== 'characterData') explicitRootsDirty = true;
       // A new generic paragraph or same-text structural rewrite must be
       // discovered even when another record in this batch had a known root.
-      const scopes = mutation.type === 'childList'
-        ? Array.from(mutation.addedNodes || []).map(elementOf)
-        : [element];
+      let scopes;
+      if (isGroup) {
+        const addedElements = mutation.type === 'childList'
+          ? addedNodes.map(elementOf).filter(Boolean)
+          : [];
+        scopes = addedElements.length > 8
+          ? [element]
+          : (mutation.type === 'childList' ? addedElements : [element]);
+      } else {
+        scopes = mutation.type === 'childList'
+          ? Array.from(mutation.addedNodes || []).map(elementOf)
+          : [element];
+      }
       for (const scope of scopes) {
         if (scope && scope.isConnected && !fallbackBlocked(scope) &&
-            !promptEditorFor(scope)) {
+            !promptEditorForElement(scope)) {
           rootEligibility.delete(scope);
           states.delete(scope);
           fallbackScanScopes.add(scope.nodeType === 1 ? scope : element);
           changed = true;
         }
       }
-      if (element.matches?.('button') || closest(element, 'button')) changed = true;
+      if (element.matches?.('button') || inButton) changed = true;
     }
+    if (controlChanged) generatingDirty = true;
     if (changed) {
       mathFitDirty = true;
       // Stop -> Run should not wait behind an idle callback. Keep token-stream
