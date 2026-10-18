@@ -13,6 +13,7 @@ async (page) => {
         <ms-katex class="display" id="scale-display"><pre><code class="rendered" id="scale-code"></code></pre></ms-katex>
         <ul style="width:300px;max-width:100%"><li id="inline-li"><ms-katex id="inline-host"></ms-katex></li></ul>
         <div id="collapsed" style="display:none"><ul style="width:300px;max-width:100%"><li><ms-katex id="hidden-host"></ms-katex></li></ul></div>
+        <div id="stacked-math"><span>text</span><br><ms-cmark-node></ms-cmark-node><ms-katex class="display" id="stack-first"><pre><code class="rendered" id="stack-first-code"></code></pre></ms-katex><br><ms-cmark-node></ms-cmark-node><ms-katex class="display" id="stack-second"><pre><code class="rendered" id="stack-second-code"></code></pre></ms-katex><br><ms-cmark-node></ms-cmark-node><span id="stack-tail">next text</span></div>
       </ms-cmark-node>
     </article>
   </main></body></html>`);
@@ -46,6 +47,8 @@ async (page) => {
       '\\text{당기 인식할 수익} = (\\text{총 계약금액} \\times \\text{누적진행률}) - \\text{전기 인식 수익}',
       false
     );
+    render(document.getElementById('stack-first-code'), 'a = b + c', true);
+    render(document.getElementById('stack-second-code'), 'd = e + f', true);
     const wrapMath = document.querySelector('#wrap-display .katex');
     return {
       wrapFontSize: getComputedStyle(wrapMath).fontSize,
@@ -96,7 +99,21 @@ async (page) => {
         const li = document.getElementById('inline-li');
         const host = document.getElementById('inline-host');
         return host.scrollWidth > li.clientWidth + 1;
-      })()
+      })(),
+      stackedGap: (() => {
+        const first = document.querySelector('#stack-first .katex-html');
+        const second = document.querySelector('#stack-second .katex-html');
+        return second.getBoundingClientRect().top -
+          first.getBoundingClientRect().bottom;
+      })(),
+      tailGap: (() => {
+        const second = document.querySelector('#stack-second .katex-html');
+        return document.getElementById('stack-tail').getBoundingClientRect().top -
+          second.getBoundingClientRect().bottom;
+      })(),
+      trailingBreaks: Array.from(
+        document.querySelectorAll('#stacked-math > ms-katex.display + br')
+      ).filter((br) => getComputedStyle(br).display !== 'none').length
     };
   }, natural.wrapFontSize);
   const wrapOk = result.wrapMode === 'wrap' &&
@@ -106,6 +123,9 @@ async (page) => {
     result.basesWithin &&
     result.noScroller;
   const gapOk = result.displayHeight - result.htmlHeight < 30;
+  const stackOk = result.stackedGap < 32 &&
+    result.tailGap < 32 &&
+    result.trailingBreaks === 0;
   const scaleOk = result.scaleMode === 'scale' &&
     result.scale >= 0.75 &&
     (!result.scaleOverflow || result.scaleScroller);
@@ -149,14 +169,14 @@ async (page) => {
     !result.refit.fontReset;
 
   if (!wrapOk || !gapOk || !scaleOk || !inlineOk || !refitOk ||
-      !hiddenUnchecked || !hiddenReevaluated) {
+      !hiddenUnchecked || !hiddenReevaluated || !stackOk) {
     throw new Error(JSON.stringify({
       result, wrapOk, gapOk, scaleOk, inlineOk, refitOk,
-      hiddenUnchecked, hiddenReevaluated
+      hiddenUnchecked, hiddenReevaluated, stackOk
     }));
   }
   return {
     result, wrapOk, gapOk, scaleOk, inlineOk, refitOk,
-    hiddenUnchecked, hiddenReevaluated
+    hiddenUnchecked, hiddenReevaluated, stackOk
   };
 }

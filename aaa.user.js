@@ -1279,10 +1279,21 @@ code.aistudio-prose-code-repaired {
 
   box-sizing: border-box !important;
 
-  padding-top: 0.35em !important;
-  padding-bottom: 0.35em !important;
-  margin-top: 0.65em !important;
-  margin-bottom: 0.65em !important;
+  padding-top: 0.2em !important;
+  padding-bottom: 0.2em !important;
+  margin-top: 0.45em !important;
+  margin-bottom: 0.45em !important;
+}
+
+/* AI Studio inserts a <br> after every block-level display host (sometimes
+ * behind an empty ms-cmark-node). That empty line box adds ~21 px on top of
+ * the host margins; suppress it so consecutive formulas stay tight. */
+@SCOPE@ :where(ms-katex.display, .katex-display, mjx-container[display="true"]) + br {
+  display: none !important;
+}
+
+@SCOPE@ :where(ms-katex.display) + :where(ms-cmark-node:empty) + br {
+  display: none !important;
 }
 
 @SCOPE@ :where(ms-katex.display) :where(.katex-display, pre, code) {
