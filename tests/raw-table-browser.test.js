@@ -85,6 +85,37 @@ async (page) => {
     checks.reachable = Math.abs(scroller.scrollLeft - (scroller.scrollWidth - scroller.clientWidth)) < 2;
     window.__rawSource = p.firstElementChild;
     window.__rawMarkup = markup;
+    const codeMarkup = '<ms-cmark-node><span>기계를 사용할 권리(</span><span class="inline-code">사용권자산 ₩110,000</span><span>)가 생겼고(자산 증가 → 차변), 미래 리스료 지급의무(</span><span class="inline-code">리스부채 ₩100,000</span><span>)가 생겼으며(부채 증가 → 대변), 리스개설직접원가로 현금 </span><span class="inline-code">₩10,000</span><span>이 나갔습니다(자산 감소 → 대변).</span><br><ms-cmark-node></ms-cmark-node><span>| 일자 | 차변 (계정·금액) | 대변 (계정·금액) |</span><br><ms-cmark-node></ms-cmark-node><span>| :---: | :--- | :--- |</span><br><ms-cmark-node></ms-cmark-node><span>| 20X1. 1. 1. | 사용권자산 110,000 | 리스부채 100,000</span><br><ms-cmark-node></ms-cmark-node><span>현금 10,000 |</span></ms-cmark-node>';
+    const codeParagraph = make('raw-table-code', codeMarkup);
+    const codeText = codeParagraph.textContent;
+    const codeNodes = [];
+    const codeWalker = document.createTreeWalker(codeParagraph, NodeFilter.SHOW_ALL);
+    while (codeWalker.nextNode()) codeNodes.push(codeWalker.currentNode);
+    __rawTable.repairRoot(codeParagraph);
+    const codeVisual = codeParagraph.querySelector('.aistudio-raw-table-visual');
+    const codeRead = cell => Array.from(cell.querySelectorAll('[data-aistudio-raw-table-text]')).map(n => n.getAttribute('data-aistudio-raw-table-text')).join('');
+    const codeRows = Array.from(codeVisual?.querySelectorAll('.aistudio-raw-table-row') || []);
+    checks.codeTable = !!codeVisual && codeRows.length === 2 &&
+      codeRows.every(row => row.children.length === 3) &&
+      codeRead(codeRows[1].children[2]) === '리스부채 100,000\n현금 10,000' &&
+      getComputedStyle(codeRows[1].children[2]).whiteSpace === 'pre-line' &&
+      getComputedStyle(codeRows[0].children[0]).textAlign === 'center';
+    checks.codeCaption = Array.from(codeVisual?.querySelectorAll('.aistudio-raw-table-caption .aistudio-raw-table-code') || [])
+      .map(node => node.getAttribute('data-aistudio-raw-table-text')).join('') === '사용권자산 ₩110,000리스부채 ₩100,000₩10,000';
+    checks.codePreserved = codeNodes.every(node => node.isConnected) && codeParagraph.textContent === codeText;
+    const codeCopy = (() => {
+      const selection = getSelection(), range = document.createRange();
+      range.selectNode(codeVisual); selection.removeAllRanges(); selection.addRange(range);
+      const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: new DataTransfer() });
+      codeParagraph.dispatchEvent(event);
+      selection.removeAllRanges();
+      return event.clipboardData.getData('text/plain');
+    })();
+    checks.codeCopy = codeCopy.replace(/\n/g, '') === codeText.replace(/\n/g, '') &&
+      codeCopy.includes('리스부채 100,000\n현금 10,000');
+    const mismatched = make('reject-wrapped', codeMarkup.replace('현금 10,000 |', '현금 10,000 | extra |'));
+    __rawTable.repairRoot(mismatched);
+    checks.codeMismatchRejected = !mismatched.querySelector('.aistudio-raw-table-visual');
     return { checks, copied: copied.getData('text/plain'), rows: rows.map(row => Array.from(row.children).map(read)) };
   });
   if (!result.checks.visual) throw new Error(JSON.stringify(result));
