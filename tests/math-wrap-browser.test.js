@@ -1,6 +1,9 @@
 async (page) => {
   const fs = require('node:fs');
-  const source = fs.readFileSync('aaa.user.js', 'utf8');
+  const source = fs.readFileSync('aaa.user.js', 'utf8').replace(
+    /\n  if \(document\.readyState === 'loading'\)/,
+    '\n  globalThis.__mathWrap = { containWideInlineMath };\n  if (document.readyState === \'loading\')'
+  );
   await page.setViewportSize({ width: 412, height: 915 });
   await page.setContent(`<!doctype html><html><body><main role="main">
     <ms-prompt-input><textarea></textarea><button class="run-button">Run</button></ms-prompt-input>
@@ -9,6 +12,7 @@ async (page) => {
         <ms-katex class="display" id="wrap-display"><pre><code class="rendered" id="wrap-code"></code></pre></ms-katex>
         <ms-katex class="display" id="scale-display"><pre><code class="rendered" id="scale-code"></code></pre></ms-katex>
         <ul style="width:300px;max-width:100%"><li id="inline-li"><ms-katex id="inline-host"></ms-katex></li></ul>
+        <div id="collapsed" style="display:none"><ul style="width:300px;max-width:100%"><li><ms-katex id="hidden-host"></ms-katex></li></ul></div>
       </ms-cmark-node>
     </article>
   </main></body></html>`);
@@ -34,6 +38,11 @@ async (page) => {
     );
     render(
       document.getElementById('inline-host'),
+      '\\text{당기 인식할 수익} = (\\text{총 계약금액} \\times \\text{누적진행률}) - \\text{전기 인식 수익}',
+      false
+    );
+    render(
+      document.getElementById('hidden-host'),
       '\\text{당기 인식할 수익} = (\\text{총 계약금액} \\times \\text{누적진행률}) - \\text{전기 인식 수익}',
       false
     );
@@ -102,6 +111,27 @@ async (page) => {
     (!result.scaleOverflow || result.scaleScroller);
   const inlineOk = result.inlineWrap && !result.inlineOverflow;
 
+  result.hidden = await page.evaluate(() => {
+    const host = document.getElementById('hidden-host');
+    return {
+      checked: host.getAttribute('data-aistudio-inline-math-checked'),
+      wrapped: host.classList.contains('aistudio-inline-math-wrap')
+    };
+  });
+  const hiddenUnchecked = result.hidden.checked === null &&
+    !result.hidden.wrapped;
+  result.hiddenAfterShow = await page.evaluate(() => {
+    document.getElementById('collapsed').style.display = '';
+    __mathWrap.containWideInlineMath(false);
+    const host = document.getElementById('hidden-host');
+    return {
+      checked: host.getAttribute('data-aistudio-inline-math-checked'),
+      wrapped: host.classList.contains('aistudio-inline-math-wrap')
+    };
+  });
+  const hiddenReevaluated = result.hiddenAfterShow.checked === '1' &&
+    result.hiddenAfterShow.wrapped;
+
   await page.setViewportSize({ width: 1280, height: 915 });
   await page.waitForTimeout(2000);
   result.refit = await page.evaluate(() => {
@@ -118,8 +148,15 @@ async (page) => {
     (!result.refit.scale || Number(result.refit.scale) === 1) &&
     !result.refit.fontReset;
 
-  if (!wrapOk || !gapOk || !scaleOk || !inlineOk || !refitOk) {
-    throw new Error(JSON.stringify({ result, wrapOk, gapOk, scaleOk, inlineOk, refitOk }));
+  if (!wrapOk || !gapOk || !scaleOk || !inlineOk || !refitOk ||
+      !hiddenUnchecked || !hiddenReevaluated) {
+    throw new Error(JSON.stringify({
+      result, wrapOk, gapOk, scaleOk, inlineOk, refitOk,
+      hiddenUnchecked, hiddenReevaluated
+    }));
   }
-  return { result, wrapOk, gapOk, scaleOk, inlineOk, refitOk };
+  return {
+    result, wrapOk, gapOk, scaleOk, inlineOk, refitOk,
+    hiddenUnchecked, hiddenReevaluated
+  };
 }

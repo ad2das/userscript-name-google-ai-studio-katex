@@ -6936,8 +6936,6 @@ code.aistudio-prose-code-repaired {
         continue;
       }
 
-      host.setAttribute(INLINE_MATH_CHECKED_ATTR, '1');
-
       let container = host.parentElement;
       let remainingAscents = 6;
       while (
@@ -6956,7 +6954,15 @@ code.aistudio-prose-code-repaired {
         host.getBoundingClientRect().width || 0
       ));
 
-      if (!availableWidth || naturalWidth <= availableWidth + 1) {
+      // A collapsed/hidden host has no measurable width; leave it unchecked so
+      // it is re-evaluated once it becomes visible.
+      if (!availableWidth || !host.getClientRects().length) {
+        continue;
+      }
+
+      host.setAttribute(INLINE_MATH_CHECKED_ATTR, '1');
+
+      if (naturalWidth <= availableWidth + 1) {
         continue;
       }
 
