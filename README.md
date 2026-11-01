@@ -12,6 +12,15 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.30 cuts the script's work after a scroll: when AI Studio re-renders
+  the visible turns, every nested element was queued as its own fallback scan
+  scope although an ancestor scope was already queued, so the same nodes were
+  walked many times. A scope is now skipped while an ancestor is still queued
+  (same coverage: the ancestor walk visits it). Live on four long
+  conversations (desktop Firefox, 20 scroll windows): fallback walker nodes
+  163k → 17k, root collection 8.5 s → 1.7 s, total scan time 16.2 s → 8.6 s;
+  repair latency, final repaired state and scroll jank unchanged. See
+  `AUDIT-1.13.30.md`.
 - 1.13.29 makes repairs appear sooner without bringing back scroll jank:
   sliced repair work resumes in the next task instead of waiting a 16 ms
   timer plus a frame per 6 ms slice, a root's settle wait is measured from

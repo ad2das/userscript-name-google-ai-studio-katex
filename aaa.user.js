@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.29
+// @version      1.13.30
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.29';
+  const VERSION = '1.13.30';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -7413,6 +7413,13 @@ code.aistudio-prose-code-repaired {
     return null;
   }
 
+  function fallbackScopeQueuedAbove(element) {
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      if (fallbackScanScopes.has(parent)) return true;
+    }
+    return false;
+  }
+
   function collectFallbackRoots() {
     if (!document.body) return [];
     if (fallbackDirty) {
@@ -7428,6 +7435,8 @@ code.aistudio-prose-code-repaired {
         if (!scope) break;
         fallbackScanScopes.delete(scope);
         if (!scope.isConnected) continue;
+        // Queued before its ancestor: the ancestor walk visits it anyway.
+        if (fallbackScopeQueuedAbove(scope)) continue;
         fallbackWalker = document.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
           acceptNode(node) {
             // Reject native math and editor subtrees before reading their text.
@@ -8483,7 +8492,9 @@ code.aistudio-prose-code-repaired {
             !promptEditorForElement(scope)) {
           rootEligibility.delete(scope);
           states.delete(scope);
-          fallbackScanScopes.add(scope.nodeType === 1 ? scope : element);
+          const target = scope.nodeType === 1 ? scope : element;
+          // A queued ancestor walk covers this subtree.
+          if (!fallbackScopeQueuedAbove(target)) fallbackScanScopes.add(target);
           outputMutationAt = Date.now();
           changed = true;
         }
