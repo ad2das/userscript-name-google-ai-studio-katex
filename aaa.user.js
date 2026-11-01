@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.28
+// @version      1.13.29
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.28';
+  const VERSION = '1.13.29';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1478,7 +1478,7 @@ code.aistudio-prose-code-repaired {
   const visibleInlinePriority = new Set();
   let expandedVisibleRoots = new WeakSet();
   let scrollViewportTarget = null;
-  let scrollViewportDirty = false;
+  let scrollViewportDirty = true;
   const fallbackRoots = new WeakSet();
   const rawMathScopeRoots = new WeakSet();
   const mathFitOriginalStyles = new WeakMap();
@@ -1503,6 +1503,10 @@ code.aistudio-prose-code-repaired {
   let generatingCache = { at: -Infinity, value: false };
   let generatingDirty = true;
   let lastScrollAt = -Infinity;
+  // Last time a mutation touched model output (stability anchor for new root
+  // states). A root present when the script starts is already quiet, so the
+  // clock starts at load rather than at the first scan that notices it.
+  let outputMutationAt = Date.now();
   const SCROLL_IDLE_MS = 140;
   let rootsGeneration = 0;
   let rootsCache = null;
@@ -6582,7 +6586,7 @@ code.aistudio-prose-code-repaired {
     for (const container of visibleInlinePriority) {
       if (!root.contains(container)) continue;
       if (schedulerNow() - priorityStarted >= SCAN_BUDGET_MS) {
-        schedule(16, true);
+        continueScan();
         return repaired;
       }
       visibleInlinePriority.delete(container);
@@ -6595,7 +6599,7 @@ code.aistudio-prose-code-repaired {
     for (let index = start; index < containers.length; index++) {
       if (index > start && (index - start >= MAX_INLINE_CONTAINERS_PER_PASS || schedulerNow() - started >= SCAN_BUDGET_MS)) {
         inlineCursors.set(root, index);
-        schedule(16, true);
+        continueScan();
         break;
       }
       const container = containers[index];
@@ -7448,7 +7452,7 @@ code.aistudio-prose-code-repaired {
       }
       if (schedulerNow() - started >= SCAN_BUDGET_MS) break;
     }
-    if (fallbackWalker || fallbackScanScopes.size) schedule(50);
+    if (fallbackWalker || fallbackScanScopes.size) continueScan();
     return Array.from(roots);
   }
 
@@ -7904,7 +7908,7 @@ code.aistudio-prose-code-repaired {
     const scanStarted = schedulerNow();
     refreshVisibleInlinePriority();
     if (!flushPendingCleanup()) {
-      schedule(16, true);
+      continueScan();
       return;
     }
     const now = Date.now();
@@ -7922,7 +7926,7 @@ code.aistudio-prose-code-repaired {
       );
     }
 
-    if (mathFitDirty) schedule(16, true);
+    if (mathFitDirty) continueScan();
 
     const phaseOverBudget = () => {
       if (schedulerNow() - scanStarted < SCAN_BUDGET_MS) return false;
@@ -7931,7 +7935,7 @@ code.aistudio-prose-code-repaired {
     };
     const yieldPhase = () => {
       scanYieldStreak += 1;
-      schedule(16, true);
+      continueScan();
     };
 
     if (phaseOverBudget()) {
@@ -7947,15 +7951,21 @@ code.aistudio-prose-code-repaired {
     }
     scanYieldStreak = 0;
     const lastTurn = lastModelTurn(roots);
-    // Visible priority only affects ordering. Roots that already finished are
-    // skipped by the backoff checks below, so reordering cannot re-repair them.
+    /*
+     * Priority roots (visible, then newest turn) are visited first in every
+     * scan. Finished ones are skipped by the backoff checks below, so this
+     * cannot re-repair them; the cursor only rotates the remaining roots.
+     */
     const visibleRoots = roots.filter((root) =>
       Array.from(visibleInlinePriority).some(container => root.contains(container)));
-    if (visibleRoots.length && visibleRoots.length < roots.length) {
-      const visibleSet = new Set(visibleRoots);
-      roots.splice(0, roots.length, ...visibleRoots,
-        ...roots.filter((root) => !visibleSet.has(root)));
-    }
+    const visibleSet = new Set(visibleRoots);
+    const latestRoots = lastTurn ? roots.filter((root) => !visibleSet.has(root) && sameTurnOrInside(
+      closest(root, 'ms-chat-turn') || closest(root, MODEL_TURN_SELECTOR) || root, lastTurn)) : [];
+    const front = visibleRoots.concat(latestRoots);
+    const frontSet = new Set(front);
+    const rest = roots.filter((root) => !frontSet.has(root));
+    const restStart = rest.length ? scanCursor % rest.length : 0;
+    const order = front.concat(rest.slice(restStart), rest.slice(0, restStart));
 
     const fallbackCount = roots.filter((root) => (
       fallbackRoots.has(root)
@@ -7974,21 +7984,20 @@ code.aistudio-prose-code-repaired {
     }
 
     const sliceStarted = schedulerNow();
-    const firstRoot = scanCursor % (roots.length || 1);
-    for (let offset = 0; offset < roots.length; offset++) {
-      const index = (firstRoot + offset) % roots.length;
-      const root = roots[index];
+    for (let offset = 0; offset < order.length; offset++) {
+      const root = order[offset];
+      const restIndex = offset - front.length;
       if (offset && promptEditorActive()) {
-        scanCursor = index;
+        if (restIndex >= 0) scanCursor = (restStart + restIndex) % rest.length;
         schedule(PROMPT_IDLE_MS + 50);
         break;
       }
       if (offset && schedulerNow() - sliceStarted >= SCAN_BUDGET_MS) {
-        scanCursor = index;
-        schedule(16, true);
+        if (restIndex >= 0) scanCursor = (restStart + restIndex) % rest.length;
+        continueScan();
         break;
       }
-      scanCursor = (index + 1) % roots.length;
+      if (restIndex >= 0) scanCursor = (restStart + restIndex + 1) % rest.length;
       const previous = states.get(root);
       if (!inlineCursors.has(root) && previous?.attempted === previous?.text && previous?.lastAttemptAt &&
           now - previous.lastAttemptAt < retryDelay(previous.attempts)) continue;
@@ -8009,6 +8018,7 @@ code.aistudio-prose-code-repaired {
 
       /*
        * 텍스트가 바뀌었다면 아직 생성/렌더링 중일 수 있으므로 대기 시간을 다시 잰다.
+       * 이미 DOM이 조용했다면, 늦게 알아챈 스캔이 대기를 지금부터 다시 세면 안 된다.
        */
       if (
         !state ||
@@ -8016,18 +8026,13 @@ code.aistudio-prose-code-repaired {
       ) {
         state = {
           text,
-          since: now,
+          since: Math.min(now, outputMutationAt),
           attempted: null,
           attempts: 0,
           lastAttemptAt: null
         };
 
         states.set(root, state);
-        schedule(
-          (isLastTurn ? LAST_TURN_WAIT_MS : OLD_TURN_WAIT_MS) + 16,
-          true
-        );
-        continue;
       }
 
       /*
@@ -8044,6 +8049,14 @@ code.aistudio-prose-code-repaired {
 
       if (stabilityRemaining > 0) {
         schedule(stabilityRemaining + 16, true);
+        /*
+         * A priority root that is still settling must not let the round-robin
+         * behind it run: hold the scan, then come back to the same order.
+         */
+        if (restIndex < 0) {
+          if (rest.length) scanCursor = restStart % rest.length;
+          break;
+        }
         continue;
       }
 
@@ -8080,7 +8093,7 @@ code.aistudio-prose-code-repaired {
         });
 
         /* 새 KaTeX의 실제 폭은 DOM 삽입 다음 프레임에서 계산한다. */
-        schedule(16, true);
+        continueScan();
 
         continue;
       }
@@ -8192,6 +8205,39 @@ code.aistudio-prose-code-repaired {
         run();
       }
     }, Math.max(0, dueAt - schedulerNow()));
+  }
+
+  /*
+   * Budget continuations: the work is ready now and only yielded so input and
+   * paint can run. Resume in the next task instead of a 16 ms timer plus an
+   * animation frame (~30 ms of idle per 6 ms slice).
+   */
+  let continuationQueued = false;
+  let continuationPort = null;
+  try {
+    if (typeof MessageChannel === 'function') {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        continuationQueued = false;
+        scan();
+      };
+      continuationPort = channel.port2;
+    }
+  } catch (error) {
+    continuationPort = null;
+  }
+
+  function continueScan() {
+    if (!ENABLE_SAFE_OUTPUT_REPAIR || continuationQueued) return;
+    continuationQueued = true;
+    if (continuationPort) {
+      continuationPort.postMessage(0);
+    } else {
+      window.setTimeout(() => {
+        continuationQueued = false;
+        scan();
+      }, 0);
+    }
   }
 
   function clearFallbackRootsInsideUser(element) {
@@ -8373,6 +8419,7 @@ code.aistudio-prose-code-repaired {
           !/(?:^|\s)(?:model|user|model-prompt-container|user-prompt-container|user-message|human-message)(?:\s|$)/.test(mutation.oldValue || '')) continue;
       if (!isGroup && mutation.type === 'attributes') {
         pendingCleanup.add(element);
+        outputMutationAt = Date.now();
         changed = true;
       }
       if (closestMemo(userMemo, element, USER_SELECTOR)) {
@@ -8409,6 +8456,7 @@ code.aistudio-prose-code-repaired {
           }
           if (parent === knownRoot) break;
         }
+        outputMutationAt = Date.now();
         changed = true;
       }
       if (mutation.type !== 'characterData') {
@@ -8436,6 +8484,7 @@ code.aistudio-prose-code-repaired {
           rootEligibility.delete(scope);
           states.delete(scope);
           fallbackScanScopes.add(scope.nodeType === 1 ? scope : element);
+          outputMutationAt = Date.now();
           changed = true;
         }
       }
@@ -8445,6 +8494,7 @@ code.aistudio-prose-code-repaired {
     if (changed) {
       rootsGeneration += 1;
       mathFitDirty = true;
+      scrollViewportDirty = true;
       // Stop -> Run should not wait behind an idle callback. Keep token-stream
       // polling coalesced; every urgent scan still rechecks generation/typing.
       schedule(controlChanged ? 0 : generationObserved ? MUTATION_SCAN_DELAY_MS : 120, true);
@@ -9020,6 +9070,7 @@ code.aistudio-prose-code-repaired {
       () => {
         installStyle();
         mathFitResizeDirty = true;
+        scrollViewportDirty = true;
         schedule(150);
       },
       { passive: true }
@@ -9060,6 +9111,7 @@ code.aistudio-prose-code-repaired {
       'resize',
       () => {
         mathFitResizeDirty = true;
+        scrollViewportDirty = true;
 
         if (!promptEditorActive()) {
           schedule(150);
@@ -9072,6 +9124,7 @@ code.aistudio-prose-code-repaired {
       'orientationchange',
       () => {
         mathFitResizeDirty = true;
+        scrollViewportDirty = true;
 
         if (!promptEditorActive()) {
           schedule(150);
@@ -9086,6 +9139,7 @@ code.aistudio-prose-code-repaired {
         if (!document.hidden) {
           installStyle();
           mathFitResizeDirty = true;
+          scrollViewportDirty = true;
           schedule(150);
         }
       },

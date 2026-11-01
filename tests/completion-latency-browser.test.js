@@ -37,6 +37,6 @@ async (page) => {
   await page.waitForFunction(()=>document.querySelector('#p47 strong')?.textContent==='지연 도착 문장');
   result.tailMs=await page.evaluate(()=>Math.round(performance.now()-__tailStart));
   if(!streamingSafe)throw new Error(JSON.stringify(result));
-  if(!process.env.AISTUDIO_LATENCY_BASELINE && (result.all48Ms>1600||result.tailMs>1600))throw new Error(JSON.stringify(result));
+  if(!process.env.AISTUDIO_LATENCY_BASELINE && (result.all48Ms>200||result.tailMs>450))throw new Error(JSON.stringify(result));
   return result;
 }

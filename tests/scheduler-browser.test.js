@@ -26,10 +26,16 @@ async (page) => {
   await page.waitForFunction((n) => __scanCalls > n, before, { timeout: 700 });
   const preemption = await page.evaluate(() => __cancelledIdle > 0);
   await page.focus('textarea');
+  await page.evaluate(() => {
+    const turn = document.createElement('article');
+    turn.setAttribute('data-turn-role', 'model');
+    turn.innerHTML = '<p id="typing-p">**untouched while typing**</p>';
+    document.querySelector('main').append(turn);
+  });
   const typingBefore = await page.evaluate(() => __scanCalls);
   await page.evaluate(() => __scheduler.schedule(0, true));
   await page.waitForFunction((n) => __scanCalls > n, typingBefore, { timeout: 700 });
-  const typingSafe = await page.evaluate(() => !document.querySelector('article strong'));
+  const typingSafe = await page.evaluate(() => !document.querySelector('#typing-p strong'));
   await page.evaluate(() => {
     document.querySelector('textarea').blur();
     document.querySelector('button').textContent = 'Stop';
@@ -39,7 +45,7 @@ async (page) => {
   await page.evaluate(() => __scheduler.schedule(0, true));
   await page.waitForFunction((n) => __scanCalls > n, streamingBefore, { timeout: 700 });
   const streamingSafe = await page.evaluate(() =>
-    !document.querySelector('article strong') &&
+    !document.querySelector('#typing-p strong') &&
     document.documentElement.getAttribute('data-aistudio-mobile-fix-generating') === 'true');
   const ordering = await page.evaluate(() => {
     const oldTurn = document.querySelector('article');

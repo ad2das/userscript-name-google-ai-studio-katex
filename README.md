@@ -12,6 +12,16 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.29 makes repairs appear sooner without bringing back scroll jank:
+  sliced repair work resumes in the next task instead of waiting a 16 ms
+  timer plus a frame per 6 ms slice, a root's settle wait is measured from
+  the last output mutation instead of restarting when a scan notices it,
+  visible roots get priority on open (not only after a scroll) and each scan
+  visits visible and newest-turn roots before the round-robin. Live on four
+  long conversations (desktop Firefox): defects visible after opening
+  1.7 s → 0.64 s median (max 2.4 s → 0.81 s), after scrolling 1.0 s → 0.62 s
+  median (max 3.5 s → 2.2 s); fixture completion-to-repair 364 → 28 ms; scroll
+  jank unchanged. See `AUDIT-1.13.29.md`.
 - 1.13.28 fixes the remaining rendering glitches seen on long accounting
   conversations and removes most of the script's scroll jank:
   wide display math now wraps at relations/operators instead of shrinking to

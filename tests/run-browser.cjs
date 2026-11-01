@@ -32,6 +32,10 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('won-symbol-browser.test.js');
     if (process.argv.includes('--completion-latency')) suites.splice(0, suites.length, 'completion-latency-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('completion-latency-browser.test.js');
+    if (process.argv.includes('--insert-latency')) suites.splice(0, suites.length, 'insert-latency-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('insert-latency-browser.test.js');
+    if (process.argv.includes('--visible-first')) suites.splice(0, suites.length, 'visible-first-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('visible-first-browser.test.js');
     if (process.argv.includes('--math-wrap')) suites.splice(0, suites.length, 'math-wrap-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('math-wrap-browser.test.js');
     for (const suite of suites) {
