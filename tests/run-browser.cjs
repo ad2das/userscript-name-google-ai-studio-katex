@@ -42,6 +42,8 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('rerender-walker-browser.test.js');
     if (process.argv.includes('--italic-quote-note')) suites.splice(0, suites.length, 'italic-quote-note-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('italic-quote-note-browser.test.js');
+    if (process.argv.includes('--scroll-intent')) suites.splice(0, suites.length, 'scroll-intent-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('scroll-intent-browser.test.js');
     if (process.argv.includes('--diag')) suites.splice(0, suites.length, 'diag-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('diag-browser.test.js');
     for (const suite of suites) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.31
+// @version      1.13.32
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.31';
+  const VERSION = '1.13.32';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1504,6 +1504,10 @@ code.aistudio-prose-code-repaired {
   let generatingDirty = true;
   let generatingReason = 'none';
   let lastScrollAt = -Infinity;
+  // A user's gesture keeps its scroll events counted this long (fling momentum).
+  const USER_SCROLL_HOLD_MS = 1500;
+  let userScrollUntil = -Infinity;
+  let pointerHeld = false;
   // Last time a mutation touched model output (stability anchor for new root
   // states). A root present when the script starts is already quiet, so the
   // clock starts at load rather than at the first scan that notices it.
@@ -7830,6 +7834,7 @@ code.aistudio-prose-code-repaired {
   let diagEpisodeCount = 0;
   // Since boot, so a generation whose scans never got past a gate still shows.
   const diagGatesAll = { h: 0, s: 0, m: 0, p: 0, d: 0 };
+  let diagScrollIgnoredAll = 0;
   let diagLastPassAt = null;
   let diagStatusTimer = null;
 
@@ -7911,6 +7916,8 @@ code.aistudio-prose-code-repaired {
       focusEditor: false,
       composing: 0,
       gates: { h: 0, s: 0, m: 0, p: 0, d: 0 },
+      scrollIgnored: 0,
+      cleanAt: null,
       scan1At: null,
       waitHits: 0,
       retrySkips: 0,
@@ -7996,6 +8003,13 @@ code.aistudio-prose-code-repaired {
     diagGatesAll[key] += 1;
     const episode = diagCounterEpisode();
     if (episode) episode.gates[key] += 1;
+  }
+
+  function diagScrollIgnored() {
+    if (!diagOn) return;
+    diagScrollIgnoredAll += 1;
+    const episode = diagCounterEpisode();
+    if (episode) episode.scrollIgnored += 1;
   }
 
   function diagWaitHit(isLastTurn) {
@@ -8112,6 +8126,8 @@ code.aistudio-prose-code-repaired {
       if (live === 'n/a') episode.liveNA = true;
       else if (live === 'ended') episode.liveEndAt = now;
     }
+    // First tick with no raw bold left in the newest turn.
+    if (episode.cleanAt === null && diagCountRaw(diagTurnText(diagLastTurnEl())).star === 0) episode.cleanAt = now;
     if (now - episode.genFalseAt > DIAG_WINDOW_MS) {
       diagArchive(episode);
       diagEpisode = null;
@@ -8152,13 +8168,13 @@ code.aistudio-prose-code-repaired {
         ' gen=' + (episode.endAt === null ? '-' : String(Math.round(episode.endAt - episode.startAt))),
       'scan1 ' + diagRel(episode, episode.scan1At) + ' gates h/s/m/p/d=' +
         gates.h + '/' + gates.s + '/' + gates.m + '/' + gates.p + '/' + gates.d +
-        ' focus=' + focus + ' comp=' + episode.composing,
+        ' ps=' + episode.scrollIgnored + ' focus=' + focus + ' comp=' + episode.composing,
       'wait=' + episode.waitHits + ' retry=' + episode.retrySkips +
         ' att=' + episode.attemptsMax + ' repair1 ' + diagRel(episode, episode.repair1At) +
         ' n=' + (episode.repair1At === null ? '-' : String(episode.repair1Count)) +
         ' tot=' + episode.repairTotal,
       'mutLast ' + diagRel(episode, episode.mutLastAt) + ' live-end ' +
-        (episode.liveNA ? 'n/a' : diagRel(episode, episode.liveEndAt)),
+        (episode.liveNA ? 'n/a' : diagRel(episode, episode.liveEndAt)) + ' clean ' + diagRel(episode, episode.cleanAt),
       'raw ' + raw
     ].join('\n');
   }
@@ -8175,7 +8191,8 @@ code.aistudio-prose-code-repaired {
       ' focus=' + (active && active.tagName ? String(active.tagName).toUpperCase() : '-') +
       (promptEditorFor(active) ? ' [editor]' : '') +
       ' pass=' + (diagLastPassAt === null ? '-' : '-' + Math.round((Date.now() - diagLastPassAt) / 1000) + 's') +
-      ' gates=' + gates.h + '/' + gates.s + '/' + gates.m + '/' + gates.p + '/' + gates.d;
+      ' gates=' + gates.h + '/' + gates.s + '/' + gates.m + '/' + gates.p + '/' + gates.d +
+      ' ps=' + diagScrollIgnoredAll;
     if (!episodes.length) {
       badge.body.textContent = 'aisfix ' + VERSION + ' diag (armed, no generation yet)\n' + status;
       return;
@@ -9575,10 +9592,28 @@ code.aistudio-prose-code-repaired {
 
     // One passive capture listener per channel: scrolling defers scans so the
     // repair pipeline never competes with the compositor for frames.
-    const noteScroll = () => { lastScrollAt = schedulerNow(); };
-    document.addEventListener('scroll', noteScroll, { capture: true, passive: true });
+    // Only a user's scroll defers scans. Scroll events with no touch, pointer,
+    // wheel or key nearby come from scroll anchoring after our own repairs or
+    // from AI Studio's autoscroll; gating on them stalled every repair slice.
+    const noteScroll = () => {
+      const now = schedulerNow();
+      lastScrollAt = now;
+      userScrollUntil = now + USER_SCROLL_HOLD_MS;
+    };
+    const noteIntent = (event) => {
+      if (event.type === 'touchstart' || event.type === 'pointerdown') pointerHeld = true;
+      if (/^(?:touchend|touchcancel|pointerup|pointercancel)$/.test(event.type)) pointerHeld = false;
+      userScrollUntil = schedulerNow() + USER_SCROLL_HOLD_MS;
+    };
+    document.addEventListener('scroll', () => {
+      if (pointerHeld || schedulerNow() < userScrollUntil) lastScrollAt = schedulerNow();
+      else diagScrollIgnored();
+    }, { capture: true, passive: true });
     document.addEventListener('wheel', noteScroll, { capture: true, passive: true });
     document.addEventListener('touchmove', noteScroll, { capture: true, passive: true });
+    for (const type of ['touchstart', 'touchend', 'touchcancel', 'pointerdown', 'pointerup', 'pointercancel', 'keydown']) {
+      document.addEventListener(type, noteIntent, { capture: true, passive: true });
+    }
 
     window.addEventListener(
       'resize',

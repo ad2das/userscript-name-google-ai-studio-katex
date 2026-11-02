@@ -12,6 +12,15 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.32 stops repairs from stalling after a generation. Repairs pause for
+  140 ms after every scroll so they never fight a user's scroll, but scroll
+  events nobody made (scroll anchoring after the script's own repairs,
+  AI Studio's autoscroll) re-armed that pause after each repair slice. On a
+  phone that held raw `**` for several seconds (diagnostic badge: 50 pauses,
+  14 raw `**` still at 3 s). Now only a scroll with a touch, pointer, wheel or
+  key within 1.5 s pauses repairs. Fixture with script-only scrolling: repair
+  after 2,628 ms → 327 ms; a user's scroll still pauses them. See
+  `AUDIT-1.13.32.md`.
 - 1.13.31 repairs an italic quote with a bold clause, as in
   `*"20×2년도에 인식할 **손상차손(당기비용)**은 얼마인가?"*`: AI Studio cannot
   close `)**은`, so the closing `*` was taken from the bold run and the raw

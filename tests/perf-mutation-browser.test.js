@@ -78,6 +78,8 @@ async (page) => {
   // (a) Fast scrolling must defer scans until the user stops.
   await page.waitForTimeout(800);
   await page.evaluate(() => {
+    // A user's gesture: scroll events with no input nearby do not defer scans.
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
     document.dispatchEvent(new Event('scroll'));
     __perf.schedule(0, true);
     globalThis.__scanResponseCalls = 0;
@@ -89,6 +91,7 @@ async (page) => {
   await page.waitForTimeout(600);
   result.scansDuringScroll = await page.evaluate(() => {
     clearInterval(globalThis.__scrollTimer);
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
     return globalThis.__scanResponseCalls;
   });
   const scansBeforeStop = result.scansDuringScroll;
