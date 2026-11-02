@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.30
+// @version      1.13.31
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.30';
+  const VERSION = '1.13.31';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1502,6 +1502,7 @@ code.aistudio-prose-code-repaired {
   let generationObserved = false;
   let generatingCache = { at: -Infinity, value: false };
   let generatingDirty = true;
+  let generatingReason = 'none';
   let lastScrollAt = -Infinity;
   // Last time a mutation touched model output (stability anchor for new root
   // states). A root present when the script starts is already quiet, so the
@@ -5334,7 +5335,11 @@ code.aistudio-prose-code-repaired {
         /\d{1,5}p\s*\d{1,5}p\s*\([^\n()]{1,240}\)\s*(?:와|과)\s*\d{1,5}p\s*\d{1,5}p/i.test(rootText) ||
         /\d{2,10}번[\s\S]{1,500}(?:이어서|다음)\s*(?:\*\*)?\d{2,10}번/.test(rootText)) && root?.querySelector('s, del')) ||
       hasUnrepairedAsciiBoxTree(root, rootText) ||
-      hasUnwrappedMobileTable(root)
+      hasUnwrappedMobileTable(root) ||
+      // A repaired note wrapper goes stale when its tail is rewritten; only
+      // then must the host stay reachable without raw markers left to match.
+      Array.from(root?.querySelectorAll?.('em[data-aistudio-note-tail]') || []).some(em =>
+        (em.nextElementSibling?.textContent || '') !== em.getAttribute('data-aistudio-note-tail'))
     );
   }
 
@@ -6614,11 +6619,34 @@ code.aistudio-prose-code-repaired {
     return repaired;
   }
 
+  // A note ends at a native italic part whose closer marks its shape:
+  // *(※ … ) for a parenthetical note, *" … " or *“ … ” for a quoted one.
+  function noteOpener(tailText) {
+    const trimmed = tailText.trimEnd();
+    if (trimmed.endsWith(')')) return '*(※';
+    if (trimmed.endsWith('"')) return '*"';
+    if (trimmed.endsWith('”')) return '*“';
+    return null;
+  }
+
+  // A native italic part that may carry the closing half of a note.
+  function isItalicNoteTail(node) {
+    if (node.nodeType !== 1 ||
+        node.classList.contains('aistudio-md-repaired') ||
+        node.matches('[role],[tabindex],[contenteditable]')) return false;
+    if (!((node.tagName === 'SPAN' && node.style.fontStyle === 'italic') || /^(EM|I)$/.test(node.tagName))) return false;
+    const text = node.textContent || '';
+    if (!text || text.includes('*') || text.length > 600 || !noteOpener(text)) return false;
+    const inner = Array.from(node.querySelectorAll('*'));
+    return inner.length <= 64 &&
+      inner.every(n => /^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) && !n.matches('[role],[tabindex],[contenteditable]'));
+  }
+
   function repairMisparsedItalicNotes(root) {
     // Native Markdown can consume the second closing bold star as the opener
-    // of the outer italic note's tail. Only recover the observed parenthetical
-    // note + bold clause (code atoms included) + native italic tail, never
-    // arbitrary stars.
+    // of the outer italic note's tail. Only recover the observed note
+    // (parenthetical or quoted) + bold clause (code atoms included) + native
+    // italic tail, never arbitrary stars.
     const paragraphs = new Set(root.querySelectorAll('p'));
     const parent = closest(root, 'p');
     if (parent) paragraphs.add(parent);
@@ -6627,131 +6655,156 @@ code.aistudio-prose-code-repaired {
       if (closest(p, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',pre,code,a')) continue;
       const host = p.children.length === 1 && p.firstElementChild;
       if (!host || host.tagName !== 'MS-CMARK-NODE') continue;
-      // A native rewrite of the trailing note leaves the repaired wrapper
-      // stale; restore the original order and let a later scan re-evaluate.
-      const existing = Array.from(host.children)
-        .find(node => node.matches('em[data-aistudio-note-tail]'));
-      if (existing) {
-        const tailNow = existing.nextElementSibling;
-        if ((tailNow?.textContent || '') !== existing.getAttribute('data-aistudio-note-tail')) {
-          existing.replaceWith(...existing.childNodes);
-        }
-        continue;
-      }
-      const parts = Array.from(host.childNodes).filter(n => n.nodeType !== 8 && (n.nodeType !== 3 || n.nodeValue.trim()));
-      if (parts.length < 2) continue;
-      const tail = parts[parts.length - 1];
-      if (tail.nodeType !== 1 ||
-          !((tail.tagName === 'SPAN' && tail.style.fontStyle === 'italic') || /^(EM|I)$/.test(tail.tagName)) ||
-          tail.matches('[role],[tabindex],[contenteditable]')) continue;
-      const tailText = tail.textContent || '';
-      if (tailText.includes('*') || tailText.length > 600 || !tailText.trimEnd().endsWith(')') ||
-          tail.querySelectorAll('*').length > 64 ||
-          Array.from(tail.querySelectorAll('*')).some(n =>
-            !/^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) ||
-            n.matches('[role],[tabindex],[contenteditable]'))) continue;
-      // The note may follow a prefix (display math and a line break) inside the
-      // same host. Collect the note backwards from the tail, taking the last
-      // span that still starts the note and satisfies the star rules.
-      const analyze = (startIndex) => {
-        const spans = parts.slice(startIndex, -1);
-        if (!spans.length) return null;
-        const info = [];
-        for (const span of spans) {
-          if (span.nodeType !== 1 || span.tagName !== 'SPAN' ||
-              span.matches('[role],[tabindex],[contenteditable]') ||
-              Array.from(span.childNodes).some(n => n.nodeType !== 3 && n.nodeType !== 8)) return null;
-          const text = span.textContent || '';
-          info.push({ span, code: span.classList.contains('inline-code'), text });
-        }
-        const first = spans[0];
-        const last = spans[spans.length - 1];
-        if (info[0].code || !info[0].text.startsWith('*(※')) return null;
-        if (info[info.length - 1].code || !info[info.length - 1].text.endsWith('*') ||
-            info[info.length - 1].text.endsWith('**')) return null;
-        let projected = '';
-        const offsets = [];
-        for (const item of info) {
-          offsets.push({ item, start: projected.length, end: projected.length + (item.code ? 1 : item.text.length) });
-          projected += item.code ? '\uFFFC' : item.text;
-        }
-        const boldIndex = projected.indexOf('**');
-        if (boldIndex < 0 || projected.indexOf('**', boldIndex + 1) >= 0) return null;
-        const stars = projected.split('*').length - 1;
-        if (stars !== 4 || !projected.endsWith('*')) return null;
-        const boldText = projected.slice(boldIndex + 2, projected.length - 1);
-        if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) return null;
-        const boldItem = info.find(item => !item.code && boldIndex >= offsets[info.indexOf(item)].start && boldIndex + 2 <= offsets[info.indexOf(item)].end);
-        if (!boldItem) return null;
-        const local = boldIndex - offsets[info.indexOf(boldItem)].start;
-        let boldNode = null;
-        let boldOffset = 0;
-        let consumed = 0;
-        for (const node of boldItem.span.childNodes) {
-          if (node.nodeType !== 3) continue;
-          const value = node.nodeValue || '';
-          if (local >= consumed && local + 2 <= consumed + value.length) {
-            boldNode = node;
-            boldOffset = local - consumed;
-            break;
-          }
-          consumed += value.length;
-        }
-        if (!boldNode || boldNode.nodeValue.slice(boldOffset, boldOffset + 2) !== '**') return null;
-        const firstText = Array.from(first.childNodes).find(n => n.nodeType === 3);
-        const lastText = Array.from(last.childNodes).reverse().find(n => n.nodeType === 3);
-        if (!firstText || !firstText.nodeValue.startsWith('*') || !lastText || !lastText.nodeValue.endsWith('*')) return null;
-        return { first, last, boldSpan: boldItem.span, boldNode, boldOffset, firstText, lastText };
-      };
-      let startIndex = -1;
-      let candidate = null;
-      for (let index = parts.length - 2; index >= 0; index -= 1) {
-        if (parts[index].nodeType !== 1 || parts[index].tagName !== 'SPAN' ||
-            parts[index].classList.contains('inline-code')) continue;
-        candidate = analyze(index);
-        if (candidate) { startIndex = index; break; }
-      }
-      if (!candidate) continue;
-      // A prefix before the note is allowed only after a real line break.
-      if (startIndex > 0) {
-        let prefix = startIndex - 1;
-        while (prefix >= 0 && parts[prefix].nodeType === 1 &&
-               parts[prefix].tagName === 'MS-CMARK-NODE' && !parts[prefix].textContent) prefix -= 1;
-        if (prefix < 0 || parts[prefix].tagName !== 'BR') continue;
-      }
-      const { first, last, boldSpan, boldNode, boldOffset, firstText, lastText } = candidate;
-      const em = createRepairedEmphasis('', '*');
-      const strong = createRepairedEmphasis('', '**');
-      const right = boldNode.splitText(boldOffset);
-      right.nodeValue = right.nodeValue.slice(2);
-      const endNode = lastText === boldNode ? right : lastText;
-      firstText.nodeValue = firstText.nodeValue.slice(1);
-      endNode.nodeValue = endNode.nodeValue.slice(0, -1);
-      const afterBold = boldSpan.nextSibling;
-      host.insertBefore(em, first);
-      let node = first;
-      while (node && node !== boldSpan) {
-        const next = node.nextSibling;
-        em.append(node);
-        node = next;
-      }
-      em.append(boldSpan);
-      if (right.nodeValue) strong.append(right);
-      else right.remove();
-      if (last !== boldSpan) {
-        node = afterBold;
-        while (node) {
-          const next = node.nextSibling;
-          strong.append(node);
-          if (node === last) break;
-          node = next;
+      // A native rewrite of a repaired tail leaves the wrapper stale; restore
+      // the original order and let a later scan re-evaluate.
+      let stale = false;
+      for (const node of Array.from(host.children)) {
+        if (!node.matches('em[data-aistudio-note-tail]')) continue;
+        const tailNow = node.nextElementSibling;
+        if ((tailNow?.textContent || '') !== node.getAttribute('data-aistudio-note-tail')) {
+          node.replaceWith(...node.childNodes);
+          stale = true;
         }
       }
-      em.append(strong);
-      em.setAttribute('data-aistudio-note-tail', tailText);
-      repaired++;
+      if (stale) continue;
+      for (let round = 0; round < 8; round += 1) {
+        if (!repairOneItalicNote(host)) break;
+        repaired += 1;
+      }
     }
     return repaired;
+  }
+
+  // Repairs at most one note; true when the host changed. A host may hold
+  // several notes separated by line breaks, so every native italic part is a
+  // candidate tail.
+  function repairOneItalicNote(host) {
+    const parts = Array.from(host.childNodes).filter(n => n.nodeType !== 8 && (n.nodeType !== 3 || n.nodeValue.trim()));
+    if (parts.length < 2) return false;
+    const filler = node => node.nodeType === 1 && node.tagName === 'MS-CMARK-NODE' && !node.textContent;
+    const tails = [];
+    for (let index = 1; index < parts.length; index += 1) {
+      if (!isItalicNoteTail(parts[index])) continue;
+      // After the tail only fillers may stand before the line break (or the end).
+      let next = index + 1;
+      while (next < parts.length && filler(parts[next])) next += 1;
+      if (next < parts.length && parts[next].tagName !== 'BR') continue;
+      // A tail that already sits behind its own wrapper is done.
+      let prev = index - 1;
+      while (prev >= 0 && filler(parts[prev])) prev -= 1;
+      if (prev >= 0 && parts[prev].nodeType === 1 && parts[prev].matches('em[data-aistudio-note-tail]')) continue;
+      tails.push(index);
+    }
+    for (let at = tails.length - 1; at >= 0; at -= 1) {
+      if (repairItalicNoteAt(host, parts, tails[at])) return true;
+    }
+    return false;
+  }
+
+  // Rebuilds the note that ends at the tail part; true when it changed.
+  function repairItalicNoteAt(host, parts, tailIndex) {
+    const tailText = parts[tailIndex].textContent || '';
+    const opener = noteOpener(tailText);
+    if (!opener) return false;
+    // The note starts at the last span before the tail that still carries a
+    // matching opener and a single bold run.
+    const analyze = (startIndex) => {
+      const spans = parts.slice(startIndex, tailIndex);
+      if (!spans.length) return null;
+      const info = [];
+      for (const span of spans) {
+        if (span.nodeType !== 1 || span.tagName !== 'SPAN' ||
+            span.matches('[role],[tabindex],[contenteditable]') ||
+            Array.from(span.childNodes).some(n => n.nodeType !== 3 && n.nodeType !== 8)) return null;
+        const text = span.textContent || '';
+        info.push({ span, code: span.classList.contains('inline-code'), text });
+      }
+      const first = spans[0];
+      const last = spans[spans.length - 1];
+      if (info[0].code || !info[0].text.startsWith(opener)) return null;
+      if (info[info.length - 1].code || !info[info.length - 1].text.endsWith('*') ||
+          info[info.length - 1].text.endsWith('**')) return null;
+      let projected = '';
+      const offsets = [];
+      for (const item of info) {
+        offsets.push({ item, start: projected.length, end: projected.length + (item.code ? 1 : item.text.length) });
+        projected += item.code ? '\uFFFC' : item.text;
+      }
+      const boldIndex = projected.indexOf('**');
+      if (boldIndex < 0 || projected.indexOf('**', boldIndex + 1) >= 0) return null;
+      const stars = projected.split('*').length - 1;
+      if (stars !== 4 || !projected.endsWith('*')) return null;
+      const boldText = projected.slice(boldIndex + 2, projected.length - 1);
+      if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) return null;
+      const boldItem = info.find(item => !item.code && boldIndex >= offsets[info.indexOf(item)].start && boldIndex + 2 <= offsets[info.indexOf(item)].end);
+      if (!boldItem) return null;
+      const local = boldIndex - offsets[info.indexOf(boldItem)].start;
+      let boldNode = null;
+      let boldOffset = 0;
+      let consumed = 0;
+      for (const node of boldItem.span.childNodes) {
+        if (node.nodeType !== 3) continue;
+        const value = node.nodeValue || '';
+        if (local >= consumed && local + 2 <= consumed + value.length) {
+          boldNode = node;
+          boldOffset = local - consumed;
+          break;
+        }
+        consumed += value.length;
+      }
+      if (!boldNode || boldNode.nodeValue.slice(boldOffset, boldOffset + 2) !== '**') return null;
+      const firstText = Array.from(first.childNodes).find(n => n.nodeType === 3);
+      const lastText = Array.from(last.childNodes).reverse().find(n => n.nodeType === 3);
+      if (!firstText || !firstText.nodeValue.startsWith('*') || !lastText || !lastText.nodeValue.endsWith('*')) return null;
+      return { first, last, boldSpan: boldItem.span, boldNode, boldOffset, firstText, lastText };
+    };
+    let candidate = null;
+    let startIndex = -1;
+    for (let index = tailIndex - 1; index >= 0; index -= 1) {
+      if (parts[index].nodeType !== 1 || parts[index].tagName !== 'SPAN' ||
+          parts[index].classList.contains('inline-code')) continue;
+      candidate = analyze(index);
+      if (candidate) { startIndex = index; break; }
+    }
+    if (!candidate) return false;
+    // A prefix before the note is allowed only after a real line break.
+    if (startIndex > 0) {
+      let prefix = startIndex - 1;
+      while (prefix >= 0 && parts[prefix].nodeType === 1 &&
+             parts[prefix].tagName === 'MS-CMARK-NODE' && !parts[prefix].textContent) prefix -= 1;
+      if (prefix < 0 || parts[prefix].tagName !== 'BR') return false;
+    }
+    const { first, last, boldSpan, boldNode, boldOffset, firstText, lastText } = candidate;
+    const em = createRepairedEmphasis('', '*');
+    const strong = createRepairedEmphasis('', '**');
+    const right = boldNode.splitText(boldOffset);
+    right.nodeValue = right.nodeValue.slice(2);
+    const endNode = lastText === boldNode ? right : lastText;
+    firstText.nodeValue = firstText.nodeValue.slice(1);
+    endNode.nodeValue = endNode.nodeValue.slice(0, -1);
+    const afterBold = boldSpan.nextSibling;
+    host.insertBefore(em, first);
+    let node = first;
+    while (node && node !== boldSpan) {
+      const next = node.nextSibling;
+      em.append(node);
+      node = next;
+    }
+    em.append(boldSpan);
+    if (right.nodeValue) strong.append(right);
+    else right.remove();
+    if (last !== boldSpan) {
+      node = afterBold;
+      while (node) {
+        const next = node.nextSibling;
+        strong.append(node);
+        if (node === last) break;
+        node = next;
+      }
+    }
+    em.append(strong);
+    em.setAttribute('data-aistudio-note-tail', tailText);
+    return true;
   }
 
   function textOutsideRenderedMath(root, text) {
@@ -7759,33 +7812,418 @@ code.aistudio-prose-code-repaired {
     return scoped.length ? scoped : document.querySelectorAll('button');
   }
 
+  /*
+   * Opt-in on-device diagnostic timeline (W-AS9). Completely inert unless the
+   * user visits the page with #aisfix-diag once; every hook below starts with a
+   * single boolean check so the production path is unchanged.
+   */
+  const DIAG_STORAGE_KEY = 'aistudio-fix-diag';
+  const DIAG_WINDOW_MS = 30000;
+  const DIAG_TICK_MS = 500;
+  const DIAG_RAW_AT = [1000, 3000, 10000];
+  let diagOn = false;
+  let diagEpisode = null;
+  const diagEpisodes = [];
+  let diagTickTimer = null;
+  let diagRawTimers = [];
+  let diagBadge = null;
+  let diagEpisodeCount = 0;
+  // Since boot, so a generation whose scans never got past a gate still shows.
+  const diagGatesAll = { h: 0, s: 0, m: 0, p: 0, d: 0 };
+  let diagLastPassAt = null;
+  let diagStatusTimer = null;
+
+  function diagStore(action) {
+    try {
+      if (action === 'off') localStorage.removeItem(DIAG_STORAGE_KEY);
+      else if (action === 'on') localStorage.setItem(DIAG_STORAGE_KEY, '1');
+      return localStorage.getItem(DIAG_STORAGE_KEY) === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function diagApplyHash() {
+    const hash = String(location.hash || '');
+    if (hash.indexOf('aisfix-diag-off') !== -1) {
+      diagStore('off');
+    } else if (hash.indexOf('aisfix-diag') !== -1) {
+      diagStore('on');
+    }
+    const next = diagStore('read');
+    if (next === diagOn) {
+      if (next) diagRender();
+      return;
+    }
+    diagOn = next;
+    if (diagOn) {
+      diagRender();
+      diagStatusTick();
+    } else {
+      diagTeardown();
+    }
+  }
+
+  function diagTeardown() {
+    for (const id of diagRawTimers) clearTimeout(id);
+    diagRawTimers = [];
+    if (diagTickTimer !== null) clearTimeout(diagTickTimer);
+    diagTickTimer = null;
+    if (diagStatusTimer !== null) clearTimeout(diagStatusTimer);
+    diagStatusTimer = null;
+    diagEpisode = null;
+    diagEpisodes.length = 0;
+    if (diagBadge) {
+      if (diagBadge.host.parentNode) diagBadge.host.parentNode.removeChild(diagBadge.host);
+      diagBadge = null;
+    }
+  }
+
+  function diagEnsureBadge() {
+    if (!diagOn) return null;
+    if (diagBadge && diagBadge.host.isConnected) return diagBadge;
+    const host = document.createElement('div');
+    host.id = 'aisfix-diag';
+    host.setAttribute('aria-hidden', 'true');
+    host.style.cssText = 'position:fixed;top:4px;left:4px;z-index:2147483647;' +
+      'pointer-events:none;font:10px/1.35 ui-monospace,Menlo,Consolas,monospace;' +
+      'white-space:pre;color:#fff;background:rgba(0,0,0,.78);padding:2px 4px;' +
+      'border-radius:3px;max-width:96vw;overflow:hidden';
+    const root = host.attachShadow({ mode: 'open' });
+    const body = document.createElement('div');
+    body.style.cssText = 'white-space:pre;font:inherit;color:inherit';
+    root.appendChild(body);
+    document.documentElement.appendChild(host);
+    diagBadge = { host, root, body };
+    return diagBadge;
+  }
+
+  function diagOpenEpisode(startAt) {
+    diagEpisodeCount += 1;
+    return {
+      n: diagEpisodeCount,
+      startAt,
+      endAt: null,
+      stopSeen: false,
+      held: [],
+      genFalseAt: null,
+      focusTag: null,
+      focusEditor: false,
+      composing: 0,
+      gates: { h: 0, s: 0, m: 0, p: 0, d: 0 },
+      scan1At: null,
+      waitHits: 0,
+      retrySkips: 0,
+      attemptsMax: 0,
+      repair1At: null,
+      repair1Count: 0,
+      repairTotal: 0,
+      mutLastAt: null,
+      liveEndAt: null,
+      liveNA: false,
+      raw: {}
+    };
+  }
+
+  function diagArchive(episode) {
+    diagEpisodes.push(episode);
+    if (diagEpisodes.length > 2) diagEpisodes.shift();
+    for (const id of diagRawTimers) clearTimeout(id);
+    diagRawTimers = [];
+  }
+
+  // Re-renders once a second so the current gate state is visible even when
+  // no episode opened. Shadow content: no mutation records for the observers.
+  function diagStatusTick() {
+    if (diagStatusTimer !== null) clearTimeout(diagStatusTimer);
+    diagStatusTimer = null;
+    if (!diagOn) return;
+    diagRender();
+    diagStatusTimer = setTimeout(diagStatusTick, 1000);
+  }
+
+  /* The episode that may still accrue counters: open and inside its window. */
+  function diagCounterEpisode() {
+    const episode = diagEpisode;
+    if (!episode || episode.genFalseAt === null) return null;
+    if (Date.now() - episode.genFalseAt > DIAG_WINDOW_MS) return null;
+    return episode;
+  }
+
+  function diagGeneration(pageGenerating) {
+    if (!diagOn) return;
+    const now = Date.now();
+    let episode = diagEpisode;
+    if (pageGenerating) {
+      // A new request after a finished one starts its own episode.
+      if (episode && episode.genFalseAt !== null) {
+        diagArchive(episode);
+        episode = null;
+      }
+      if (!episode) episode = diagEpisode = diagOpenEpisode(now);
+      const reason = generatingReason;
+      if (reason === 'stop') {
+        episode.stopSeen = true;
+        return;
+      }
+      if (episode.stopSeen && episode.endAt === null) episode.endAt = now;
+      // Every non-stop reason that kept the page "generating" (Stop or not).
+      if (episode.held.indexOf(reason) === -1 && episode.held.length < 4) episode.held.push(reason);
+      return;
+    }
+    if (!episode || episode.genFalseAt !== null) return;
+    episode.genFalseAt = now;
+    if (episode.endAt === null) episode.endAt = now;
+    const active = document.activeElement;
+    episode.focusTag = active && active.tagName ? String(active.tagName).toUpperCase() : null;
+    episode.focusEditor = !!promptEditorFor(active);
+    episode.composing = promptComposing ? 1 : 0;
+    for (let index = 0; index < DIAG_RAW_AT.length; index++) {
+      diagRawTimer(episode, DIAG_RAW_AT[index]);
+    }
+    diagScheduleTick();
+  }
+
+  function diagScanPassed() {
+    if (!diagOn) return;
+    diagLastPassAt = Date.now();
+    const episode = diagCounterEpisode();
+    if (episode && episode.scan1At === null) episode.scan1At = Date.now();
+  }
+
+  function diagGate(key) {
+    if (!diagOn) return;
+    diagGatesAll[key] += 1;
+    const episode = diagCounterEpisode();
+    if (episode) episode.gates[key] += 1;
+  }
+
+  function diagWaitHit(isLastTurn) {
+    if (!diagOn || !isLastTurn) return;
+    const episode = diagCounterEpisode();
+    if (episode) episode.waitHits += 1;
+  }
+
+  function diagRetrySkip(isLastTurn) {
+    if (!diagOn || !isLastTurn) return;
+    const episode = diagCounterEpisode();
+    if (episode) episode.retrySkips += 1;
+  }
+
+  function diagAttempt(isLastTurn, attempts) {
+    if (!diagOn || !isLastTurn) return;
+    const episode = diagCounterEpisode();
+    if (episode && attempts > episode.attemptsMax) episode.attemptsMax = attempts;
+  }
+
+  function diagRepair(isLastTurn, repaired) {
+    if (!diagOn || repaired <= 0) return;
+    const episode = diagCounterEpisode();
+    if (!episode) return;
+    if (episode.repair1At === null) {
+      episode.repair1At = Date.now();
+      episode.repair1Count = repaired;
+    }
+    episode.repairTotal += repaired;
+  }
+
+  function diagLastTurnEl() {
+    return Array.from(document.querySelectorAll(MODEL_TURN_SELECTOR)).reverse()
+      .find((root) => !closest(root,
+        USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',.thought-activity-host')) || null;
+  }
+
+  function diagTurnText(turn) {
+    if (!turn) return '';
+    const skip = 'pre, code, .katex, annotation, script, style';
+    let text = '';
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        text += node.nodeValue || '';
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node !== turn && typeof node.matches === 'function') {
+        try {
+          if (node.matches(skip)) return;
+        } catch (_) {}
+      }
+      for (let child = node.firstChild; child; child = child.nextSibling) walk(child);
+    };
+    walk(turn);
+    return text;
+  }
+
+  function diagCountRaw(text) {
+    const countOf = (needle) => {
+      let total = 0;
+      let index = 0;
+      while ((index = text.indexOf(needle, index)) !== -1) {
+        total += 1;
+        index += needle.length;
+      }
+      return total;
+    };
+    return {
+      star: countOf('**'),
+      dollar: countOf('$'),
+      tex: countOf('\\begin') + countOf('\\frac')
+    };
+  }
+
+  function diagRawTimer(episode, delayMs) {
+    const id = setTimeout(() => {
+      if (!diagOn || diagEpisode !== episode) return;
+      episode.raw[String(delayMs)] = diagCountRaw(diagTurnText(diagLastTurnEl()));
+      diagRender();
+    }, delayMs);
+    diagRawTimers.push(id);
+  }
+
+  // 'n/a' when the browser has no Highlight API (no live layer at all).
+  function diagLiveState() {
+    const controller = liveEmphasisController;
+    if (!controller || typeof controller.stats !== 'function') return 'n/a';
+    try {
+      const stats = controller.stats();
+      if (!stats || stats.supported === false) return 'n/a';
+      return stats.draining === false && stats.layerConnected === false ? 'ended' : 'live';
+    } catch (_) {
+      return 'n/a';
+    }
+  }
+
+  function diagScheduleTick() {
+    if (!diagOn || diagTickTimer !== null) return;
+    diagTickTimer = setTimeout(diagTick, DIAG_TICK_MS);
+  }
+
+  function diagTick() {
+    diagTickTimer = null;
+    if (!diagOn) return;
+    const episode = diagEpisode;
+    if (!episode || episode.genFalseAt === null) return;
+    const now = Date.now();
+    if (outputMutationAt > episode.genFalseAt && outputMutationAt > (episode.mutLastAt || 0)) {
+      episode.mutLastAt = outputMutationAt;
+    }
+    if (episode.liveEndAt === null && !episode.liveNA) {
+      const live = diagLiveState();
+      if (live === 'n/a') episode.liveNA = true;
+      else if (live === 'ended') episode.liveEndAt = now;
+    }
+    if (now - episode.genFalseAt > DIAG_WINDOW_MS) {
+      diagArchive(episode);
+      diagEpisode = null;
+      diagRender();
+      return;
+    }
+    diagRender();
+    diagScheduleTick();
+  }
+
+  function diagRel(episode, at) {
+    if (at === null || at === undefined || episode.endAt === null) return '-';
+    return '+' + String(Math.max(0, Math.round(at - episode.endAt)));
+  }
+
+  function diagClock(at) {
+    if (at === null) return '--:--:--';
+    const date = new Date(at);
+    const pad = (value) => (value < 10 ? '0' + value : String(value));
+    return pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+  }
+
+  function diagEpisodeLines(episode) {
+    const gates = episode.gates;
+    const focus = episode.focusTag
+      ? episode.focusTag + (episode.focusEditor ? ' [editor]' : '')
+      : '-';
+    const raw = ['1000', '3000', '10000'].map((key) => {
+      const sample = episode.raw[key];
+      const label = String(Number(key) / 1000) + 's ';
+      if (!sample) return label + '-';
+      return label + '**' + sample.star + ' $' + sample.dollar + ' tex' + sample.tex;
+    }).join(' | ');
+    return [
+      'aisfix ' + VERSION + ' diag #' + episode.n + ' ' + diagClock(episode.endAt),
+      'end->genFalse ' + diagRel(episode, episode.genFalseAt) + ' held=' +
+        (episode.held.length ? episode.held.join(',') : '-') + ' stop=' + (episode.stopSeen ? 1 : 0) +
+        ' gen=' + (episode.endAt === null ? '-' : String(Math.round(episode.endAt - episode.startAt))),
+      'scan1 ' + diagRel(episode, episode.scan1At) + ' gates h/s/m/p/d=' +
+        gates.h + '/' + gates.s + '/' + gates.m + '/' + gates.p + '/' + gates.d +
+        ' focus=' + focus + ' comp=' + episode.composing,
+      'wait=' + episode.waitHits + ' retry=' + episode.retrySkips +
+        ' att=' + episode.attemptsMax + ' repair1 ' + diagRel(episode, episode.repair1At) +
+        ' n=' + (episode.repair1At === null ? '-' : String(episode.repair1Count)) +
+        ' tot=' + episode.repairTotal,
+      'mutLast ' + diagRel(episode, episode.mutLastAt) + ' live-end ' +
+        (episode.liveNA ? 'n/a' : diagRel(episode, episode.liveEndAt)),
+      'raw ' + raw
+    ].join('\n');
+  }
+
+  function diagRender() {
+    if (!diagOn) return;
+    const badge = diagEnsureBadge();
+    if (!badge) return;
+    const episodes = diagEpisodes.slice();
+    if (diagEpisode) episodes.push(diagEpisode);
+    const active = document.activeElement;
+    const gates = diagGatesAll;
+    const status = 'now gen=' + generatingReason + ' comp=' + (promptComposing ? 1 : 0) +
+      ' focus=' + (active && active.tagName ? String(active.tagName).toUpperCase() : '-') +
+      (promptEditorFor(active) ? ' [editor]' : '') +
+      ' pass=' + (diagLastPassAt === null ? '-' : '-' + Math.round((Date.now() - diagLastPassAt) / 1000) + 's') +
+      ' gates=' + gates.h + '/' + gates.s + '/' + gates.m + '/' + gates.p + '/' + gates.d;
+    if (!episodes.length) {
+      badge.body.textContent = 'aisfix ' + VERSION + ' diag (armed, no generation yet)\n' + status;
+      return;
+    }
+    badge.body.textContent = episodes.slice(-2).map(diagEpisodeLines).join('\n') + '\n' + status;
+  }
+
   function generating() {
     if (!generatingDirty && schedulerNow() - generatingCache.at < 200) {
       return generatingCache.value;
     }
 
     const value = (() => {
-      const activeStopButton = Array.from(composerButtons()).some((button) => (
+      const stopButton = Array.from(composerButtons()).find((button) => (
         stopLabelHint(button) && isStopActionLabel(buttonLabel(button)) && isPromptRunButton(button) &&
         visible(button)
       ));
 
-      if (activeStopButton) {
+      if (stopButton) {
+        generatingReason = 'stop';
         return true;
       }
 
       // Explicit busy state outranks a Run button left visible during submission.
-      if (Array.from(document.querySelectorAll('[aria-busy="true"]')).some((indicator) =>
+      const busyIndicator = Array.from(document.querySelectorAll('[aria-busy="true"]')).find((indicator) => (
         closest(indicator, MODEL_TURN_SELECTOR + ', ms-chat-turn, ms-prompt-input, ms-chat-input') &&
-        visible(indicator))) return true;
+        visible(indicator)));
+
+      if (busyIndicator) {
+        const scope = closest(busyIndicator, 'ms-prompt-input, ms-chat-input') ? 'composer' : 'turn';
+        generatingReason = 'busy:' + String(busyIndicator.tagName || '?').toLowerCase() +
+          '@' + scope;
+        return true;
+      }
+
+      // Reaching this point means any truthy Run answer already returned false;
+      // the branches below overwrite the reason when they match instead.
+      generatingReason = 'run';
 
       if (findRunButton()) {
         return false;
       }
 
       const indicators = document.querySelectorAll(MODEL_ACTIVITY_SELECTOR);
+      const activeIndicator = Array.from(indicators).find(visible);
 
-      if (Array.from(indicators).some(visible)) {
+      if (activeIndicator) {
+        generatingReason = 'indicator:' + String(activeIndicator.tagName || '?').toLowerCase();
         return true;
       }
 
@@ -7793,10 +8231,18 @@ code.aistudio-prose-code-repaired {
         FALLBACK_ACTIVITY_SELECTOR
       );
 
-      return Array.from(fallbackIndicators).some((indicator) => (
+      const fallbackIndicator = Array.from(fallbackIndicators).find((indicator) => (
         visible(indicator) &&
         fallbackActivityHasRepairHint(indicator)
       ));
+
+      if (fallbackIndicator) {
+        generatingReason = 'fallback:' + String(fallbackIndicator.tagName || '?').toLowerCase();
+        return true;
+      }
+
+      generatingReason = 'none';
+      return false;
     })();
 
     generatingCache = { at: schedulerNow(), value };
@@ -7806,20 +8252,26 @@ code.aistudio-prose-code-repaired {
 
   function scan() {
     // Requests queued before focus changed must yield too, not just new events.
-    if (document.hidden) return;
+    if (document.hidden) {
+      diagGate('h');
+      return;
+    }
     // Repairs must not fight the compositor during a fast scroll. Mutation
     // bookkeeping already ran; only the expensive scan waits.
     const sinceScroll = schedulerNow() - lastScrollAt;
     if (sinceScroll < SCROLL_IDLE_MS) {
       schedule(SCROLL_IDLE_MS - sinceScroll + 16, true);
+      diagGate('s');
       return;
     }
     if (mutationQueue.length) {
       schedule(16, true);
+      diagGate('m');
       return;
     }
     if (promptEditorActive()) {
       schedule(promptComposing ? PROMPT_IDLE_MS : Math.max(50, PROMPT_IDLE_MS - (Date.now() - lastPromptActivity) + 50));
+      diagGate('p');
       return;
     }
     // Keep native editor mutation storms off the keystroke's microtask path.
@@ -7835,6 +8287,7 @@ code.aistudio-prose-code-repaired {
         deferredMutationOffset = 0;
       }
       schedule(16, true);
+      diagGate('d');
       return;
     }
     if (observer) {
@@ -7889,6 +8342,7 @@ code.aistudio-prose-code-repaired {
     const html = document.documentElement;
     const pageGenerating = generating();
     generationObserved = pageGenerating;
+    diagGeneration(pageGenerating);
 
     if (html) {
       html.setAttribute(
@@ -7913,6 +8367,8 @@ code.aistudio-prose-code-repaired {
       schedule(GENERATION_RECHECK_MS, true);
       return;
     }
+
+    diagScanPassed();
 
     const scanStarted = schedulerNow();
     refreshVisibleInlinePriority();
@@ -8057,6 +8513,7 @@ code.aistudio-prose-code-repaired {
       const stabilityRemaining = wait - (now - state.since);
 
       if (stabilityRemaining > 0) {
+        diagWaitHit(isLastTurn);
         schedule(stabilityRemaining + 16, true);
         /*
          * A priority root that is still settling must not let the round-robin
@@ -8073,10 +8530,12 @@ code.aistudio-prose-code-repaired {
         !inlineCursors.has(root) && state.attempted === text &&
         now - (state.lastAttemptAt || 0) < retryWait
       ) {
+        diagRetrySkip(isLastTurn);
         continue;
       }
 
       state.attempted = text;
+      diagAttempt(isLastTurn, attempts);
 
       if (
         root.setAttribute &&
@@ -8088,6 +8547,7 @@ code.aistudio-prose-code-repaired {
       const repaired = repairRoot(root);
       const after = root.textContent || '';
       rootEligibility.delete(root);
+      diagRepair(isLastTurn, repaired);
 
       if (repaired > 0) {
         mathFitDirty = true;
@@ -9013,6 +9473,8 @@ code.aistudio-prose-code-repaired {
       return;
     }
 
+    diagApplyHash();
+    window.addEventListener('hashchange', diagApplyHash, { passive: true });
     installStyle();
     installObserver();
     const notePromptActivity = (event) => {

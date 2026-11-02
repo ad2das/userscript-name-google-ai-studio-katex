@@ -12,6 +12,15 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.31 repairs an italic quote with a bold clause, as in
+  `*"20×2년도에 인식할 **손상차손(당기비용)**은 얼마인가?"*`: AI Studio cannot
+  close `)**은`, so the closing `*` was taken from the bold run and the raw
+  stars stayed on screen. The existing parenthetical-note repair now also
+  takes `*"…"*` and `*“…”*` notes, notes that end at a line break, and several
+  notes in one paragraph. It also adds an opt-in diagnostic badge for the
+  delay between the end of a generation and the first repair: open AI Studio
+  once with `#aisfix-diag` in the address (`#aisfix-diag-off` turns it off).
+  It is off by default and changes no repair. See `AUDIT-1.13.31.md`.
 - 1.13.30 cuts the script's work after a scroll: when AI Studio re-renders
   the visible turns, every nested element was queued as its own fallback scan
   scope although an ancestor scope was already queued, so the same nodes were

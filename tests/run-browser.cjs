@@ -40,6 +40,10 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('math-wrap-browser.test.js');
     if (process.argv.includes('--rerender-walker')) suites.splice(0, suites.length, 'rerender-walker-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('rerender-walker-browser.test.js');
+    if (process.argv.includes('--italic-quote-note')) suites.splice(0, suites.length, 'italic-quote-note-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('italic-quote-note-browser.test.js');
+    if (process.argv.includes('--diag')) suites.splice(0, suites.length, 'diag-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('diag-browser.test.js');
     for (const suite of suites) {
       const page = await browser.newPage({ viewport: {
         width: process.argv.includes('--mobile') ? 412 : 1280, height: 915
@@ -76,7 +80,7 @@ const run = async () => {
     }
     fs.mkdirSync('output/playwright', { recursive: true });
     const mode = (process.argv.includes('--mobile') ? 'mobile' : 'desktop') +
-      (process.argv.includes('--diagrams') ? '-diagrams' : process.argv.includes('--t-account') ? '-t-account' : process.argv.includes('--live-typing') ? '-live-typing' : process.argv.includes('--live-integration') ? '-live-integration' : process.argv.includes('--live-controller') ? '-live-controller' : process.argv.includes('--live-preview') ? '-live-preview' : '');
+      (process.argv.includes('--diagrams') ? '-diagrams' : process.argv.includes('--t-account') ? '-t-account' : process.argv.includes('--diag') ? '-diag' : process.argv.includes('--live-typing') ? '-live-typing' : process.argv.includes('--live-integration') ? '-live-integration' : process.argv.includes('--live-controller') ? '-live-controller' : process.argv.includes('--live-preview') ? '-live-preview' : '');
     fs.writeFileSync(`output/playwright/results-${mode}.json`, JSON.stringify(results, null, 2));
     console.log(JSON.stringify(Object.fromEntries(Object.entries(results).map(([suite, result]) => [
       suite, suite !== 'firefox-browser.test.js' ? result : {
