@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.32
+// @version      1.13.33
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.32';
+  const VERSION = '1.13.33';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -61,6 +61,8 @@
   const LAST_TURN_WAIT_MS = 300;
   const RETRY_BASE_MS = 2000;
   const RETRY_MAX_MS = 30000;
+  // A bracket or quote that may open a pair the native parser refused.
+  const OPENING_MARK = /[(\[{「『〈《（"“‘]/u;
   const MAX_MATCH_INNER_LENGTH = 2000;
   const MAX_INLINE_REPAIR_LENGTH = 12000;
   const MAX_INLINE_REPAIR_NODES = 4000;
@@ -87,6 +89,32 @@
   const MATH_FIT_CHECKED_ATTR = 'data-aistudio-math-fit-checked';
   const INLINE_MATH_CHECKED_ATTR = 'data-aistudio-inline-math-checked';
   const MOBILE_TABLE_ATTR = 'data-aistudio-mobile-table';
+  // R4 block mirror: inside AI Studio's own Markdown roots never edit its nodes; a leaf block shows a
+  // repaired shallow clone (.aisfix-m) while its native children are hidden by CSS.
+  const ENABLE_R4_MIRROR = true;
+  const R4_ROOT_SELECTOR = 'ms-chat-turn .chat-turn-container.model ms-cmark-node.cmark-node';
+  const R4_LEAF_SELECTOR = 'p,h1,h2,h3,h4,h5,h6,td,th';
+  const R4_MIRROR_CLASS = 'aisfix-m';
+  const R4_HOST_ATTR = 'data-aisfix-host';
+  const R4_LEAF_EXCLUDE_SELECTOR = 'pre,code,ms-code-block,ms-katex,.katex,.aisfix-m';
+  const R4_INTERACTIVE_SELECTOR = 'button,input,select,textarea,iframe,video,audio,' +
+    '[contenteditable]:not([contenteditable="false"]),[role="button"],[role="checkbox"],[role="textbox"],mat-checkbox';
+  const R4_MAX_LEAF_TEXT = 20000;
+  const R4_SYNC_CAP_MS = 50;
+  /*
+   * A paint-flush frame builds the queue's in-view head before paint, so a leaf
+   * that scrolled into view is not raw at that paint. Measured on chat B against
+   * a3ee7d94: a 14 ms cap bought longer frames (over50 28/28 vs control 24/24,
+   * sumOver50 3096/3029 vs 2672, max 345/329 vs 291) - the frame spent its
+   * budget and still missed the paint, which is the regression the brief forbids.
+   * 6 ms - one SCAN_BUDGET_MS - lands on the control's numbers (over50 23/29,
+   * sumOver50 2630/3225, max 287/345) while the read-then-write pass still lifts
+   * several leaves per frame because it measures once instead of per build.
+   */
+  const R4_RAF_CAP_MS = 6;
+  const R4_RAF_SWEEP_MAX = 80;
+  const R4_CSS = '[data-aisfix-host] > :not(.aisfix-m){display:none !important}' +
+    '[data-aisfix-host] > .aisfix-m.aisfix-m.aisfix-m{all:unset !important;display:contents !important}';
 
   const RAW_MATH_ENVIRONMENTS = new Set([
     'array',
@@ -1526,9 +1554,39 @@ code.aistudio-prose-code-repaired {
   const mutationQueue = [];
   let mutationDrainTimer = 0;
   let mathFitIncomplete = false;
+  // Counts real fits (not reused verdicts) so the budget charges only for work
+  // that measured or wrote something.
+  let mathFitRefits = 0;
+  /*
+   * Continuation cursor for a budgeted pass. A slice that stops on the budget keeps
+   * this pointing at the first display it has not settled, so the next slice
+   * resumes there instead of re-testing the head it already handled.
+   */
+  let mathFitResume = 0;
+  let mathFitResumeValid = false;
+  let mathFitResumeForce = false;
+
   let mathFitResizeDirty = true;
   let fallbackDirty = true;
   const mathFitCache = new WeakMap();
+  /*
+   * What a display's last real fit was measured against. A later pass that finds
+   * every input identical re-uses that fit instead of undoing and re-applying it:
+   * an identical re-apply writes class/style inside an R4 mirror, and R4 rebuilds
+   * the leaf for those writes, which hides the display and invalidates math fit
+   * again (measured on chat B: a self-sustaining pass per scroll position).
+   */
+  const mathFitMeasured = new WeakMap();
+  // The same idea for inline hosts: what the last containment pass decided.
+  const inlineMathMeasured = new WeakMap();
+  // Bumped for every font load; a glyph metric change invalidates every reuse.
+  let mathFontEpoch = 0;
+  // True from the first slice of a forced pass until that pass completes, so a
+  // burst of triggers inside one pass yields one pass, not one per event.
+  let mathFitPassActive = false;
+  let mathFitTriggersAbsorbed = 0;
+  // A burst re-arms at most once, so absorbing it can never chain into a third pass.
+  let mathFitRearmed = false;
   const observedMathDisplays = new Set();
   const observedMathWidths = new WeakMap();
   let mathResizeObserver = null;
@@ -1543,6 +1601,25 @@ code.aistudio-prose-code-repaired {
     attributeFilter: ['data-turn-role', 'data-message-author-role', 'data-role',
       'data-author-role', 'data-message-role', 'aria-busy', 'aria-hidden', 'hidden', 'class']
   };
+
+  let r4Enabled = false;
+  let r4Observer = null;
+  let r4Style = null;
+  let r4Port = null;
+  let r4SliceQueued = false;
+  let r4Debug = null;
+  // The body this instance armed for. A page that replaces its document (a fixture
+  // mode, automation) keeps this instance's intervals alive with r4Enabled = true
+  // while every node it knew is detached, so this instance must never claim or
+  // build into a tree it did not arm on.
+  let r4Body = null;
+  const r4Mirrors = new WeakMap(); // leaf -> its mirror
+  const r4Tried = new WeakMap();   // leaf -> native text whose build already returned 0
+  const r4MirrorCache = new WeakMap(); // leaf -> { text, ok } so a clean gate walk stays cheap
+  const r4MissedCache = new WeakMap(); // root -> { missed, fingerprint } so the gate walk runs once per DOM change
+  const r4Pending = [];            // dirty leaves waiting for a slice
+  const r4PendingSet = new Set();
+  let r4PaintFrame = 0;
 
   function elementOf(node) {
     if (!node) {
@@ -1673,13 +1750,30 @@ code.aistudio-prose-code-repaired {
     }
   }
 
+  // A leaf may be repairable on a single-star pair alone (`*…*이` beside a
+  // stolen bold star). The cheap shape test keeps the full matcher off every
+  // ordinary paragraph: prose between two stars, no space right after the
+  // opener and none right before the closer.
+  function hasItalicPair(text) {
+    if (!text || text.length > MAX_INLINE_REPAIR_LENGTH || !text.includes('*')) {
+      return false;
+    }
+
+    if (!/\*["'“‘]?[^\s*][^*]{0,200}[^\s*]\*/.test(text)) {
+      return false;
+    }
+
+    return findMatches(text).some(match => match.marker === '*');
+  }
+
   function hasPair(text) {
     return Boolean(
       text &&
       (
         text.includes('**') ||
         text.includes('__') ||
-        /(?:^|[^*])\*["'“‘][^\n]{1,2000}["'”’]\*(?!\*)/.test(text)
+        /(?:^|[^*])\*["'“‘][^\n]{1,2000}["'”’]\*(?!\*)/.test(text) ||
+        hasItalicPair(text)
       )
     );
   }
@@ -3207,7 +3301,28 @@ code.aistudio-prose-code-repaired {
     return scroller;
   }
 
+  // AI Studio ships its own KaTeX and assigns it to `globalThis.katex` while a
+  // response streams (observed: 0.19.0 replacing the 0.18.1 this script
+  // @requires). Rendering through that engine would emit markup the 0.18.1
+  // stylesheet this script installs does not match, and afterwards
+  // `availableKatex()` would reject it outright and every repair would silently
+  // no-op. Keep the engine that existed when the script started.
+  const KATEX_ENGINE = (() => {
+    const engine =
+      typeof globalThis === 'object'
+        ? globalThis.katex
+        : null;
+
+    return engine && engine.version === KATEX_VERSION && typeof engine.render === 'function'
+      ? engine
+      : null;
+  })();
+
   function availableKatex() {
+    if (KATEX_ENGINE) {
+      return KATEX_ENGINE;
+    }
+
     const engine =
       typeof globalThis === 'object'
         ? globalThis.katex
@@ -3806,6 +3921,219 @@ code.aistudio-prose-code-repaired {
     return repaired;
   }
 
+  // A `$$…$$` display block that AI Studio split at an inner `$…$`: the outer
+  // delimiters vanish, the environment survives as literal text, and each inner
+  // formula arrives as its own inline math atom. Walk that DOM in order and
+  // rebuild one TeX source; `map` turns a source offset back into a DOM point.
+  function splitEnvironmentDom(host) {
+    const segments = [];
+    const atoms = [];
+    let source = '';
+    let nodes = 0;
+    let ok = true;
+    const visit = (node, depth) => {
+      if (!ok) return;
+      if (++nodes > 4000 || depth > 48 || source.length > MAX_FALLBACK_ROOT_LENGTH) { ok = false; return; }
+      if (node.nodeType === 3) {
+        const value = node.nodeValue || '';
+        if (value) {
+          segments.push({ node, start: source.length, end: source.length + value.length });
+          source += value;
+        }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.matches(RENDERED_MATH_SELECTOR)) {
+        // AI Studio leaves an empty `<ms-katex data-tex="">` where the display
+        // delimiters were; it contributes no source.
+        const tex = renderedMathSource(node);
+        if (!tex) return;
+        atoms.push(tex);
+        segments.push({ node, atom: atoms.length - 1, start: source.length, end: source.length + 1 });
+        source += INLINE_MATH_ATOM;
+        return;
+      }
+      if (node.matches('br')) {
+        segments.push({ node, start: source.length, end: source.length + 1 });
+        source += '\n';
+        return;
+      }
+      if (node.matches('pre,code,.inline-code,a,button,input,textarea,select,[contenteditable],[role="textbox"]') ||
+          closest(node, USER_SELECTOR)) { ok = false; return; }
+      for (const child of node.childNodes) visit(child, depth + 1);
+    };
+    visit(host, 0);
+    return ok && atoms.length ? { source, segments, atoms } : null;
+  }
+
+  // True when `index` sits inside a `\text{…}`-style group, where a bare formula
+  // cannot be spliced in: the group has to close and reopen around it.
+  function insideLiteralTextGroup(source, index) {
+    let depth = 0;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const character = source[cursor];
+      if (character !== '}' && character !== '{') continue;
+      if (isEscaped(source, cursor)) continue;
+      if (character === '}') { depth += 1; continue; }
+      if (depth === 0) {
+        return /\\(?:text|textrm|textnormal|textup|textbf|textit|mbox|hbox|mathrm)$/.test(source.slice(Math.max(0, cursor - 12), cursor));
+      }
+      depth -= 1;
+    }
+    return false;
+  }
+
+  // The DOM point for one source offset, or null when it falls on a boundary
+  // that is not a text node (a line break or an atom edge).
+  function splitEnvironmentPoint(dom, offset) {
+    for (const segment of dom.segments) {
+      if (offset < segment.start || offset > segment.end) continue;
+      if (segment.atom !== undefined) continue;
+      if (segment.node.nodeType !== 3) continue;
+      return { node: segment.node, offset: Math.min(offset - segment.start, (segment.node.nodeValue || '').length) };
+    }
+    return null;
+  }
+
+  // The outermost `begin{env}…end{env}` span of a rebuilt split-display source.
+  // Unlike findEnvironmentMathBlocks this does not need the markers to sit alone
+  // on their line: the display delimiters are already gone, so the environment
+  // is the only structure left and its line context is the renderer's, not the
+  // Markdown author's.
+  function findSplitEnvironmentBlock(source, literalRanges) {
+    const stacks = new Map();
+    let best = null;
+    for (const token of source.matchAll(/(?:\\)?(begin|end)\s*\{([A-Za-z][A-Za-z*]*)\}/g)) {
+      const environment = token[2];
+      if (!RAW_MATH_ENVIRONMENTS.has(environment) || isEscaped(source, token.index)) continue;
+      // A marker inside a Markdown literal (fenced block or backtick span) is
+      // example text the reader must see verbatim, not a formula to rebuild.
+      if (literalRanges &&
+          rangeOverlaps(literalRanges, token.index, token.index + token[0].length)) continue;
+      const stack = stacks.get(environment) || [];
+      stacks.set(environment, stack);
+      if (token[1] === 'begin') { stack.push(token.index); continue; }
+      const start = stack.pop();
+      if (start === undefined) continue;
+      const end = token.index + token[0].length;
+      if (!best || end - start > best.end - best.start) {
+        best = { start, end, source: source.slice(start, end) };
+      }
+    }
+    return best;
+  }
+
+  // Renders one split `$$` environment back into a single display formula.
+  // Each inline atom is spliced in as its own TeX; inside a literal-text group
+  // the group is closed and reopened around it, which is the only form KaTeX
+  // accepts (`\text{…$\rightarrow$…}` is a parse error, `\text{…}\rightarrow
+  // \text{…}` renders).
+  function repairSplitEnvironmentMathContainer(container) {
+    if (!container || !container.isConnected || !container.querySelectorAll ||
+        closest(container, USER_SELECTOR) || closest(container, SKIP_SELECTOR) ||
+        // A code block container is literal example text even when the fence
+        // itself is only plain text inside it.
+        closest(container, 'pre,code,ms-code-block') ||
+        !container.querySelector(RENDERED_MATH_SELECTOR)) {
+      return 0;
+    }
+
+    let repaired = 0;
+
+    for (let round = 0; round < 4; round += 1) {
+      const dom = splitEnvironmentDom(container);
+
+      if (!dom) {
+        break;
+      }
+
+      const literalRanges = markdownLiteralRanges(dom.source);
+      const block = findSplitEnvironmentBlock(dom.source, literalRanges);
+
+      if (!block) {
+        break;
+      }
+
+      let tex = '';
+
+      for (let offset = block.start; offset < block.end; offset += 1) {
+        const character = dom.source[offset];
+
+        if (character !== INLINE_MATH_ATOM) {
+          tex += character;
+          continue;
+        }
+
+        const segment = dom.segments.find(entry => entry.atom !== undefined && entry.start === offset);
+
+        if (!segment) {
+          tex = '';
+          break;
+        }
+
+        const atomTex = dom.atoms[segment.atom];
+
+        tex += insideLiteralTextGroup(dom.source, offset)
+          ? '}' + atomTex + '\\text{'
+          : atomTex;
+      }
+
+      const startPoint = tex && splitEnvironmentPoint(dom, block.start);
+      const endPoint = tex && splitEnvironmentPoint(dom, block.end);
+      const replacement = startPoint && endPoint && renderKatexSource(
+        tex,
+        true,
+        'aistudio-raw-math-repaired aistudio-raw-math-display aistudio-split-environment-repaired'
+      );
+
+      if (!replacement) {
+        break;
+      }
+
+      const range = document.createRange();
+      let inserted = false;
+
+      try {
+        range.setStart(startPoint.node, startPoint.offset);
+        range.setEnd(endPoint.node, endPoint.offset);
+        range.deleteContents();
+        range.insertNode(replacement);
+        inserted = true;
+      } catch (_) {
+        inserted = false;
+      } finally {
+        range.detach();
+      }
+
+      if (!inserted) {
+        break;
+      }
+
+      repaired += 1;
+    }
+
+    return repaired;
+  }
+
+  // Cheap structural gate: an inline math atom beside literal `\begin{env}` text
+  // is exactly the split-display signature, so the leaf is repairable even
+  // though `\begin` here does not follow whitespace.
+  function hasSplitEnvironmentMath(root) {
+    if (!root || !root.querySelectorAll ||
+        !root.querySelector(RENDERED_MATH_SELECTOR)) return false;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let nodes = 0;
+    while (walker.nextNode() && ++nodes < 4000) {
+      const text = walker.currentNode.nodeValue || '';
+      const match = /(?:\\)?begin\s*\{([A-Za-z][A-Za-z*]*)\}/.exec(text);
+      if (!match || !RAW_MATH_ENVIRONMENTS.has(match[1])) continue;
+      if (match.index === 0 ? text.trim() : true) {
+        if (text.includes('\\end') || /\\end\s*\{/.test(root.textContent || '')) return true;
+      }
+    }
+    return false;
+  }
+
   function repairRawMathContainer(container) {
     if (
       !container ||
@@ -3945,9 +4273,32 @@ code.aistudio-prose-code-repaired {
       return 0;
     }
 
-    const containers = Array.from(
+    // A display block split at an inner `$…$` keeps its environment as literal
+    // text and each inner formula as an inline atom; rebuild those first, since
+    // the remaining passes only understand whole-text sources.
+    let splitRepaired = 0;
+    // The leaf itself is a container: on the R4 path the mirror is the clone of
+    // the p/li/td, and querySelectorAll never yields the root.
+    const splitContainers = Array.from(
+      root.querySelectorAll(RAW_MATH_CONTAINER_SELECTOR + ', p, li, td, th')
+    ).reverse();
+
+    if (root.matches && root.matches(RAW_MATH_CONTAINER_SELECTOR + ', p, li, td, th')) {
+      splitContainers.push(root);
+    }
+
+    for (const container of splitContainers) {
+      if (!container.isConnected || closest(container, USER_SELECTOR + ',' + SKIP_SELECTOR)) continue;
+      splitRepaired += repairSplitEnvironmentMathContainer(container);
+    }
+
+    let containers = Array.from(
       root.querySelectorAll(RAW_MATH_CONTAINER_SELECTOR)
     ).reverse();
+
+    if (r4Covers(root) && !closest(root, '.' + R4_MIRROR_CLASS)) {
+      containers = containers.filter((container) => !closest(container, '.' + R4_MIRROR_CLASS + ',[' + R4_HOST_ATTR + ']'));
+    }
 
     if (
       root.matches &&
@@ -3966,7 +4317,7 @@ code.aistudio-prose-code-repaired {
       containers.push(root);
     }
 
-    let repaired = 0;
+    let repaired = splitRepaired;
 
     for (const container of containers) {
       repaired += repairRawMathContainer(container);
@@ -3992,6 +4343,79 @@ code.aistudio-prose-code-repaired {
     );
   }
 
+  // A single `*…*` pair is italic only when the native parser could not have
+  // rendered it: stars that survive AI Studio's CommonMark pass are mostly
+  // stars the author escaped or wrote literally (`(*)` footnote marks,
+  // `*참고: …*` inside prose). So the content must be plain prose AND the pair
+  // must sit at a flanking refusal — a closer glued to a following letter or
+  // digit (`*이탤릭(다)*이`, punctuation closer + letter after) or an opener
+  // glued to a preceding letter or digit (`단어*(주석)*이`). Everything else,
+  // including a bracket at the wrong end (`(*) 표시와 (*) 표시`), stays raw.
+  function isConservativeItalic(openBefore, inner, after) {
+    if (!inner || inner.length > 200 || /[\n\r*\\<>{}|`$]/.test(inner)) {
+      return false;
+    }
+
+    if (!/\p{L}/u.test(inner)) {
+      return false;
+    }
+
+    const first = inner[0];
+    const last = inner[inner.length - 1];
+    if (/\s/u.test(first) || /\s/u.test(last)) {
+      return false;
+    }
+
+    if (/[)\]}\u300D\u300F\u3009\u300B\uFF09]/u.test(first)) {
+      return false;
+    }
+
+    if (/[(\[{「『〈《（]/u.test(last)) {
+      return false;
+    }
+
+    if (!bracketsBalanced(inner)) {
+      return false;
+    }
+
+    const closerBlocked = /[\p{P}\p{S}]/u.test(last) && /[\p{L}\p{N}]/u.test(after || '');
+    // Only a bracket or a quote opens a rejected pair glued to a word: `%` in
+    // `25*%`, `+` in `x*+y` and every other symbol is ordinary content.
+    const openerBlocked = OPENING_MARK.test(first) && /[\p{L}\p{N}]/u.test(openBefore || '');
+    return closerBlocked || openerBlocked;
+  }
+
+  // Every bracket pair inside `inner` opens and closes in order, the curly
+  // quotes pair up, and the ASCII double quote count is even. A lone `"` such as
+  // the one in `25*%의 이익을 가산하였다."` is prose punctuation, not a pair.
+  function bracketsBalanced(inner) {
+    const stack = [];
+    const pairs = { ')': '(', ']': '[', '}': '{', '\u300D': '\u300C', '\u300F': '\u300E', '\u3009': '\u3008', '\u300B': '\u300A', '\uFF09': '\uFF08' };
+    let doubleQuotes = 0;
+    let curlyOpen = 0;
+    let curlyClose = 0;
+    for (const character of inner) {
+      if (character === '(' || character === '[' || character === '{' ||
+          character === '\u300C' || character === '\u300E' || character === '\u3008' ||
+          character === '\u300A' || character === '\uFF08') {
+        stack.push(character);
+      } else if (pairs[character]) {
+        if (stack.pop() !== pairs[character]) return false;
+      } else if (character === '\u201C') {
+        curlyOpen += 1;
+      } else if (character === '\u201D') {
+        curlyClose += 1;
+      } else if (character === '\u2018') {
+        curlyOpen += 1;
+      } else if (character === '\u2019') {
+        curlyClose += 1;
+      } else if (character === '"') {
+        doubleQuotes += 1;
+      }
+    }
+    return !stack.length && curlyOpen === curlyClose && doubleQuotes % 2 === 0;
+  }
+
   function findMatches(text) {
     if (!text || text.length > MAX_INLINE_REPAIR_LENGTH) return [];
     const result = [];
@@ -4015,6 +4439,7 @@ code.aistudio-prose-code-repaired {
       const before = text[index - 1] || '';
       const after = text[index + marker.length] || '';
       const start = openers.get(marker);
+      const openBefore = start === undefined ? '' : text[start - 1] || '';
       const sourceInner = start === undefined || index - start > MAX_MATCH_INNER_LENGTH + 5
         ? '' : text.slice(start + marker.length, index);
       const openingTrim = (
@@ -4029,7 +4454,7 @@ code.aistudio-prose-code-repaired {
         /\S/.test(before) && /^\S[\s\S]*\S$|^\S$/.test(inner) &&
         !/\n\s*\n/.test(inner) && !hasMathLikeText(inner) &&
         inner[0] !== marker[0] && inner[inner.length - 1] !== marker[0] &&
-        (marker !== '*' || isQuotedEmphasis(inner)) &&
+        (marker !== '*' || isQuotedEmphasis(inner) || isConservativeItalic(openBefore, inner, after)) &&
         !(marker[0] === '_' && isWordChar(after) && /^[0-9A-Za-z_]+$/.test(inner));
       if (valid) {
         const end = index + marker.length;
@@ -5328,6 +5753,14 @@ code.aistudio-prose-code-repaired {
   }
 
   function hasRepairableRoot(root, text = '') {
+    if (r4Covers(root)) {
+      const rootText = text || (root && root.textContent) || '';
+      return r4StructuralHint(root, rootText) || r4HasMissedLeaf(root, rootText);
+    }
+    return hasRepairableContent(root, text);
+  }
+
+  function hasRepairableContent(root, text = '') {
     const rootText = text || (root && root.textContent) || '';
 
     return Boolean(
@@ -5339,6 +5772,7 @@ code.aistudio-prose-code-repaired {
         /\d{1,5}p\s*\d{1,5}p\s*\([^\n()]{1,240}\)\s*(?:와|과)\s*\d{1,5}p\s*\d{1,5}p/i.test(rootText) ||
         /\d{2,10}번[\s\S]{1,500}(?:이어서|다음)\s*(?:\*\*)?\d{2,10}번/.test(rootText)) && root?.querySelector('s, del')) ||
       hasUnrepairedAsciiBoxTree(root, rootText) ||
+      hasSplitEnvironmentMath(root) ||
       hasUnwrappedMobileTable(root) ||
       // A repaired note wrapper goes stale when its tail is rewritten; only
       // then must the host stay reachable without raw markers left to match.
@@ -6623,44 +7057,172 @@ code.aistudio-prose-code-repaired {
     return repaired;
   }
 
-  // A note ends at a native italic part whose closer marks its shape:
-  // *(※ … ) for a parenthetical note, *" … " or *“ … ” for a quoted one.
-  function noteOpener(tailText) {
-    const trimmed = tailText.trimEnd();
-    if (trimmed.endsWith(')')) return '*(※';
-    if (trimmed.endsWith('"')) return '*"';
-    if (trimmed.endsWith('”')) return '*“';
-    return null;
-  }
-
-  // A native italic part that may carry the closing half of a note.
-  function isItalicNoteTail(node) {
+  // A native italic part that may carry the closing half of a note: AI Studio's
+  // own font-style span, star-free, without an interactive element inside.
+  function isItalicTailNode(node) {
     if (node.nodeType !== 1 ||
         node.classList.contains('aistudio-md-repaired') ||
         node.matches('[role],[tabindex],[contenteditable]')) return false;
     if (!((node.tagName === 'SPAN' && node.style.fontStyle === 'italic') || /^(EM|I)$/.test(node.tagName))) return false;
     const text = node.textContent || '';
-    if (!text || text.includes('*') || text.length > 600 || !noteOpener(text)) return false;
+    if (!text || text.includes('*') || text.length > 600) return false;
     const inner = Array.from(node.querySelectorAll('*'));
     return inner.length <= 64 &&
       inner.every(n => /^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) && !n.matches('[role],[tabindex],[contenteditable]'));
   }
 
+  // A shape nested in a code block, a link or an interactive control is content
+  // the reader must see verbatim, so every part is tested up to its host.
+  function shapePartExcluded(node, host) {
+    for (let current = node; current && current !== host; current = current.parentElement) {
+      if (current.nodeType !== 1) continue;
+      if (current.matches('code,pre,a,' + R4_INTERACTIVE_SELECTOR)) return true;
+    }
+    return false;
+  }
+
+  // The one rule both repairs obey. AI Studio takes one star of an inner `**`
+  // run as the closer of an outer italic, so `*A **B*` stays literal and the
+  // rest of the italic arrives as a native italic tail C. That shape may become
+  // em{A <strong>B</strong>} followed by C only when the literal run holds one
+  // leading `*` glued to a non-space, exactly one `**` run, no other star, a
+  // letter in A, text or one inline atom in B, and a star-free native italic
+  // tail that no code block, link or control contains. Note markers (※), quotes
+  // and parentheses are ordinary text and never conditions.
+  function stolenStarShape(parts, start, tailIndex, host) {
+    if (start < 0 || start >= tailIndex) return null;
+    const slice = parts.slice(start, tailIndex);
+    if (!slice.length) return null;
+    for (const part of slice) if (shapePartExcluded(part, host)) return null;
+    const cells = projectInlineParts(slice);
+    if (!cells || !cells.length || cells.length > 2000) return null;
+    const projected = cells.map(cell => cell.char).join('');
+    const length = projected.length;
+    if (projected[0] !== '*' || /\s/.test(projected[1] || '')) return null;
+    if (projected[length - 1] !== '*' || projected.split('*').length - 1 !== 4) return null;
+    const boldOpen = projected.indexOf('**');
+    if (boldOpen < 2 || projected.indexOf('**', boldOpen + 1) >= 0) return null;
+    const leadText = projected.slice(1, boldOpen);
+    const boldText = projected.slice(boldOpen + 2, length - 1);
+    if (!/\p{L}/u.test(leadText)) return null;
+    if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) return null;
+    const startCell = cells[boldOpen + 2];
+    const endCell = cells[length - 2];
+    if (!startCell || !endCell) return null;
+    const boldHasAtom = /\uFFFC/.test(boldText);
+    if (!/\p{L}/u.test(boldText) && !boldHasAtom) return null;
+    for (const index of [0, boldOpen, boldOpen + 1, length - 1]) {
+      if (cells[index].node.nodeType !== 3) return null;
+    }
+    if (startCell.node === endCell.node && startCell.offset > endCell.offset) return null;
+    return { start, slice, cells, projected, boldOpen, startCell, endCell };
+  }
+
+  // The nearest part whose own text opens the run decides where a shape starts.
+  function shapeLeadChar(part) {
+    if (!part) return '';
+    if (part.nodeType === 3) return (part.nodeValue || '')[0] || '';
+    const leaf = inlineLeafSpan(part);
+    return ((leaf ? leaf.textContent : part.textContent) || '')[0] || '';
+  }
+
+  function findStolenStarShape(parts, tailIndex, host) {
+    if (!isItalicTailNode(parts[tailIndex])) return null;
+    for (let start = tailIndex - 1; start >= 0; start -= 1) {
+      if (shapeLeadChar(parts[start]) !== '*') continue;
+      if (!startsAfterBreak(parts, start)) continue;
+      const shape = stolenStarShape(parts, start, tailIndex, host);
+      if (shape) return shape;
+    }
+    return null;
+  }
+
+  // A note begins a line: either it opens its host or only empty nodes and one
+  // line break stand in front of it.
+  function startsAfterBreak(parts, start) {
+    let index = start - 1;
+    while (index >= 0 && parts[index].nodeType === 1 &&
+           parts[index].tagName === 'MS-CMARK-NODE' && !parts[index].textContent) index -= 1;
+    return index < 0 || parts[index].tagName === 'BR';
+  }
+
+  // One builder for every accepted shape: the stars go, A and B land inside one
+  // em with B as its strong, and the native tail stays where AI Studio put it.
+  function buildNoteShape(host, parts, tailIndex, shape) {
+    const { slice, cells, projected, boldOpen, startCell, endCell } = shape;
+    const length = projected.length;
+    const starIndexes = [0, boldOpen, boldOpen + 1, length - 1];
+    const removals = new Map();
+    for (const index of starIndexes) {
+      const cell = cells[index];
+      const offsets = removals.get(cell.node) || new Set();
+      offsets.add(cell.offset);
+      removals.set(cell.node, offsets);
+    }
+    for (const cell of [startCell, endCell]) {
+      if (removals.get(cell.node)?.has(cell.offset)) return false;
+    }
+    // A boundary is a kept-character index: everything strictly before the
+    // original offset that survived still counts.
+    const shift = (node, offset) => {
+      let removed = 0;
+      for (const other of removals.get(node) || []) if (other < offset) removed += 1;
+      return offset - removed;
+    };
+    for (const [node, offsets] of removals) {
+      const value = node.nodeValue || '';
+      let next = '';
+      for (let index = 0; index < value.length; index += 1) {
+        if (!offsets.has(index)) next += value[index];
+      }
+      node.nodeValue = next;
+    }
+    const tail = parts[tailIndex];
+    const em = createRepairedEmphasis('', '*');
+    const strong = createRepairedEmphasis('', '**');
+    host.insertBefore(em, slice[0]);
+    for (const part of slice) em.append(part);
+    // Boundary points are read after the move so atom cells resolve inside em.
+    const point = (cell, atEnd) => {
+      if (cell.node.nodeType === 3) {
+        return [cell.node, atEnd ? shift(cell.node, cell.offset + 1) : shift(cell.node, cell.offset)];
+      }
+      const parent = cell.node.parentNode;
+      return [parent, Array.prototype.indexOf.call(parent.childNodes, cell.node) + (atEnd ? 1 : 0)];
+    };
+    const [startNode, startOffset] = point(startCell, false);
+    const [endNode, endOffset] = point(endCell, true);
+    const range = document.createRange();
+    try {
+      range.setStart(startNode, startOffset);
+      range.setEnd(endNode, endOffset);
+    } catch (_) {
+      return false;
+    }
+    const fragment = range.extractContents();
+    range.detach();
+    strong.appendChild(fragment);
+    em.appendChild(strong);
+    em.setAttribute('data-aistudio-note-tail', tail.textContent || '');
+    return true;
+  }
+
   function repairMisparsedItalicNotes(root) {
-    // Native Markdown can consume the second closing bold star as the opener
-    // of the outer italic note's tail. Only recover the observed note
-    // (parenthetical or quoted) + bold clause (code atoms included) + native
-    // italic tail, never arbitrary stars.
-    const paragraphs = new Set(root.querySelectorAll('p'));
-    const parent = closest(root, 'p');
-    if (parent) paragraphs.add(parent);
+    // Native Markdown can consume the second closing bold star as the opener of
+    // the outer italic's tail. Only recover the observed `*A **B*` + native
+    // italic tail shape, never arbitrary stars.
+    const leaves = new Set(root.querySelectorAll(R4_LEAF_SELECTOR));
+    const parent = closest(root, R4_LEAF_SELECTOR);
+    if (parent) leaves.add(parent);
+    if (root.matches && root.matches(R4_LEAF_SELECTOR)) leaves.add(root);
     let repaired = 0;
-    for (const p of paragraphs) {
-      if (closest(p, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',pre,code,a')) continue;
-      const host = p.children.length === 1 && p.firstElementChild;
+    for (const leaf of leaves) {
+      if (closest(leaf, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',pre,code,a')) continue;
+      const host = leaf.children.length === 1 && leaf.firstElementChild;
       if (!host || host.tagName !== 'MS-CMARK-NODE') continue;
       // A native rewrite of a repaired tail leaves the wrapper stale; restore
-      // the original order and let a later scan re-evaluate.
+      // the original order and let a later scan re-evaluate. A repaired note
+      // holds no `*`, so this runs before the star gate.
       let stale = false;
       for (const node of Array.from(host.children)) {
         if (!node.matches('em[data-aistudio-note-tail]')) continue;
@@ -6671,6 +7233,7 @@ code.aistudio-prose-code-repaired {
         }
       }
       if (stale) continue;
+      if (!(leaf.textContent || '').includes('*')) continue;
       for (let round = 0; round < 8; round += 1) {
         if (!repairOneItalicNote(host)) break;
         repaired += 1;
@@ -6679,136 +7242,65 @@ code.aistudio-prose-code-repaired {
     return repaired;
   }
 
-  // Repairs at most one note; true when the host changed. A host may hold
-  // several notes separated by line breaks, so every native italic part is a
-  // candidate tail.
+  // Repairs at most one shape; true when the host changed. A host may hold
+  // several shapes separated by line breaks, so every native italic part is a
+  // candidate tail and the shape itself decides whether it may be rebuilt.
   function repairOneItalicNote(host) {
     const parts = Array.from(host.childNodes).filter(n => n.nodeType !== 8 && (n.nodeType !== 3 || n.nodeValue.trim()));
     if (parts.length < 2) return false;
     const filler = node => node.nodeType === 1 && node.tagName === 'MS-CMARK-NODE' && !node.textContent;
-    const tails = [];
-    for (let index = 1; index < parts.length; index += 1) {
-      if (!isItalicNoteTail(parts[index])) continue;
-      // After the tail only fillers may stand before the line break (or the end).
-      let next = index + 1;
-      while (next < parts.length && filler(parts[next])) next += 1;
-      if (next < parts.length && parts[next].tagName !== 'BR') continue;
+    for (let tailIndex = parts.length - 1; tailIndex >= 1; tailIndex -= 1) {
+      if (!isItalicTailNode(parts[tailIndex])) continue;
       // A tail that already sits behind its own wrapper is done.
-      let prev = index - 1;
+      let prev = tailIndex - 1;
       while (prev >= 0 && filler(parts[prev])) prev -= 1;
       if (prev >= 0 && parts[prev].nodeType === 1 && parts[prev].matches('em[data-aistudio-note-tail]')) continue;
-      tails.push(index);
-    }
-    for (let at = tails.length - 1; at >= 0; at -= 1) {
-      if (repairItalicNoteAt(host, parts, tails[at])) return true;
+      const shape = findStolenStarShape(parts, tailIndex, host);
+      if (shape && buildNoteShape(host, parts, tailIndex, shape)) return true;
     }
     return false;
   }
 
-  // Rebuilds the note that ends at the tail part; true when it changed.
-  function repairItalicNoteAt(host, parts, tailIndex) {
-    const tailText = parts[tailIndex].textContent || '';
-    const opener = noteOpener(tailText);
-    if (!opener) return false;
-    // The note starts at the last span before the tail that still carries a
-    // matching opener and a single bold run.
-    const analyze = (startIndex) => {
-      const spans = parts.slice(startIndex, tailIndex);
-      if (!spans.length) return null;
-      const info = [];
-      for (const span of spans) {
-        if (span.nodeType !== 1 || span.tagName !== 'SPAN' ||
-            span.matches('[role],[tabindex],[contenteditable]') ||
-            Array.from(span.childNodes).some(n => n.nodeType !== 3 && n.nodeType !== 8)) return null;
-        const text = span.textContent || '';
-        info.push({ span, code: span.classList.contains('inline-code'), text });
+  // The text-carrying span under an inline wrapper: AI Studio nests its own
+  // `<span>`/`<ms-cmark-node>` one level deeper on some renders, so the opener
+  // and the bold run can live inside a single transparent child element.
+  function inlineLeafSpan(node) {
+    let current = node;
+    for (let depth = 0; depth < 8; depth += 1) {
+      if (current.nodeType !== 1 || current.tagName !== 'SPAN' ||
+          current.matches('[role],[tabindex],[contenteditable],.inline-code')) return null;
+      const elements = Array.from(current.childNodes).filter(n => n.nodeType === 1);
+      if (!elements.length) {
+        return current;
       }
-      const first = spans[0];
-      const last = spans[spans.length - 1];
-      if (info[0].code || !info[0].text.startsWith(opener)) return null;
-      if (info[info.length - 1].code || !info[info.length - 1].text.endsWith('*') ||
-          info[info.length - 1].text.endsWith('**')) return null;
-      let projected = '';
-      const offsets = [];
-      for (const item of info) {
-        offsets.push({ item, start: projected.length, end: projected.length + (item.code ? 1 : item.text.length) });
-        projected += item.code ? '\uFFFC' : item.text;
-      }
-      const boldIndex = projected.indexOf('**');
-      if (boldIndex < 0 || projected.indexOf('**', boldIndex + 1) >= 0) return null;
-      const stars = projected.split('*').length - 1;
-      if (stars !== 4 || !projected.endsWith('*')) return null;
-      const boldText = projected.slice(boldIndex + 2, projected.length - 1);
-      if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) return null;
-      const boldItem = info.find(item => !item.code && boldIndex >= offsets[info.indexOf(item)].start && boldIndex + 2 <= offsets[info.indexOf(item)].end);
-      if (!boldItem) return null;
-      const local = boldIndex - offsets[info.indexOf(boldItem)].start;
-      let boldNode = null;
-      let boldOffset = 0;
-      let consumed = 0;
-      for (const node of boldItem.span.childNodes) {
-        if (node.nodeType !== 3) continue;
-        const value = node.nodeValue || '';
-        if (local >= consumed && local + 2 <= consumed + value.length) {
-          boldNode = node;
-          boldOffset = local - consumed;
-          break;
+      if (elements.length > 1 || !/^(SPAN|MS-CMARK-NODE)$/.test(elements[0].tagName)) return null;
+      current = elements[0];
+    }
+    return null;
+  }
+
+  // The parts between the italic tail and the start of the shape, projected to a
+  // string with one cell per character. Transparent inline spans contribute
+  // their text; any other element (a native <strong>, a code span, a math atom)
+  // is one atom.
+  function projectInlineParts(parts) {
+    const cells = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+      const leaf = part.nodeType === 1 ? inlineLeafSpan(part) : null;
+      if (leaf) {
+        for (const node of leaf.childNodes) {
+          if (node.nodeType !== 3) return null;
+          for (let offset = 0; offset < node.nodeValue.length; offset += 1) {
+            cells.push({ part: index, node, offset, char: node.nodeValue[offset] });
+          }
         }
-        consumed += value.length;
+        continue;
       }
-      if (!boldNode || boldNode.nodeValue.slice(boldOffset, boldOffset + 2) !== '**') return null;
-      const firstText = Array.from(first.childNodes).find(n => n.nodeType === 3);
-      const lastText = Array.from(last.childNodes).reverse().find(n => n.nodeType === 3);
-      if (!firstText || !firstText.nodeValue.startsWith('*') || !lastText || !lastText.nodeValue.endsWith('*')) return null;
-      return { first, last, boldSpan: boldItem.span, boldNode, boldOffset, firstText, lastText };
-    };
-    let candidate = null;
-    let startIndex = -1;
-    for (let index = tailIndex - 1; index >= 0; index -= 1) {
-      if (parts[index].nodeType !== 1 || parts[index].tagName !== 'SPAN' ||
-          parts[index].classList.contains('inline-code')) continue;
-      candidate = analyze(index);
-      if (candidate) { startIndex = index; break; }
+      if (part.nodeType !== 1 || (part.textContent || '').includes('*')) return null;
+      cells.push({ part: index, node: part, offset: 0, char: INLINE_MATH_ATOM });
     }
-    if (!candidate) return false;
-    // A prefix before the note is allowed only after a real line break.
-    if (startIndex > 0) {
-      let prefix = startIndex - 1;
-      while (prefix >= 0 && parts[prefix].nodeType === 1 &&
-             parts[prefix].tagName === 'MS-CMARK-NODE' && !parts[prefix].textContent) prefix -= 1;
-      if (prefix < 0 || parts[prefix].tagName !== 'BR') return false;
-    }
-    const { first, last, boldSpan, boldNode, boldOffset, firstText, lastText } = candidate;
-    const em = createRepairedEmphasis('', '*');
-    const strong = createRepairedEmphasis('', '**');
-    const right = boldNode.splitText(boldOffset);
-    right.nodeValue = right.nodeValue.slice(2);
-    const endNode = lastText === boldNode ? right : lastText;
-    firstText.nodeValue = firstText.nodeValue.slice(1);
-    endNode.nodeValue = endNode.nodeValue.slice(0, -1);
-    const afterBold = boldSpan.nextSibling;
-    host.insertBefore(em, first);
-    let node = first;
-    while (node && node !== boldSpan) {
-      const next = node.nextSibling;
-      em.append(node);
-      node = next;
-    }
-    em.append(boldSpan);
-    if (right.nodeValue) strong.append(right);
-    else right.remove();
-    if (last !== boldSpan) {
-      node = afterBold;
-      while (node) {
-        const next = node.nextSibling;
-        strong.append(node);
-        if (node === last) break;
-        node = next;
-      }
-    }
-    em.append(strong);
-    em.setAttribute('data-aistudio-note-tail', tailText);
-    return true;
+    return cells;
   }
 
   function textOutsideRenderedMath(root, text) {
@@ -6825,6 +7317,578 @@ code.aistudio-prose-code-repaired {
   }
 
   function repairRoot(root) {
+    if (r4Covers(root)) return r4RepairStructural(root);
+    return repairContent(root);
+  }
+
+  function r4Covers(root) {
+    return Boolean(r4Enabled && r4Body && r4Body.contains(root) && root && root.nodeType === 1 &&
+      (closest(root, R4_ROOT_SELECTOR) || root.querySelector(R4_ROOT_SELECTOR)));
+  }
+  function r4StructuralHint(root, rootText) {
+    if (hasUnwrappedMobileTable(root) || hasUnrepairedAsciiBoxTree(root, rootText)) return true;
+    const rawText = textOutsideRenderedMath(root, rootText);
+    return (hasRawMathFallbackHint(rawText) || rawText.includes('\\text')) && hasSplitRawMathEnvironment(root, rawText);
+  }
+  function r4RepairStructural(root) {
+    if (!root || !root.isConnected || !closest(root, MODEL_TURN_SELECTOR) ||
+        closest(root, USER_SELECTOR) || closest(root, '.' + R4_MIRROR_CLASS)) return 0;
+    // Owned leaves R4 never mirrored cannot be repaired in place, so hand them
+    // to the mirror builder here — the only other chance this root gets.
+    const missed = r4MissedLeaves(root);
+    if (missed.length) {
+      for (const leaf of missed) r4Enqueue(leaf);
+      r4QueueSlice();
+    }
+    const rootText = root.textContent || '';
+    if (!r4StructuralHint(root, rootText)) return 0;
+    let repaired = repairMobileTables(root);
+    if (hasAsciiBoxTreeHint(rootText)) repaired += repairAsciiBoxTrees(root);
+    const rawText = textOutsideRenderedMath(root, rootText);
+    if ((hasRawMathFallbackHint(rawText) || rawText.includes('\\text')) && hasSplitRawMathEnvironment(root, rawText)) {
+      repaired += repairRawMath(root, rawText);
+    }
+    return repaired;
+  }
+  function r4NativeText(leaf) {
+    let text = '';
+    for (const child of leaf.childNodes) {
+      if (child.nodeType === 1 && child.classList.contains(R4_MIRROR_CLASS)) continue;
+      if (child.nodeType === 1 || child.nodeType === 3) text += child.textContent || '';
+    }
+    return text;
+  }
+  // AI Studio nests display:contents renderer wrappers inside a paragraph
+  // (`<strong><ms-cmark-node><span>…`). collectInlineText treats every
+  // ms-cmark-node as an emphasis barrier, so a `*…*` pair that spans one is
+  // never matched and the mirror builds 0 repairs. Inside the clone those
+  // wrappers carry no identity, so flattening them restores the inline text.
+  function r4TransparentWrapper(element) {
+    if (!element || element.tagName !== 'MS-CMARK-NODE' || !element.firstElementChild) return false;
+    for (const attribute of element.attributes) {
+      if (/^_(ngcontent|nghost)-/.test(attribute.name)) continue;
+      if (attribute.name === 'class' && String(attribute.value).trim() === 'ng-star-inserted') continue;
+      return false;
+    }
+    if (element.querySelector(R4_LEAF_SELECTOR + ',' + R4_INTERACTIVE_SELECTOR)) return false;
+    return !element.querySelector('div,ul,ol,table,pre,code,blockquote,figure,hr,br,img,svg,math,' +
+      '.katex,ms-katex,ms-code-block,a,[contenteditable],mat-checkbox');
+  }
+  function r4FlattenMirror(mirror) {
+    let flattened = 0;
+    // The clone is still detached here, so walk it directly and iterate a
+    // snapshot: replacing a wrapper detaches the ones it contained.
+    // A wrapper that is the mirror's own child stays: repairMisparsedItalicNotes
+    // and the note-tail passes recognise the leaf's host by that element.
+    for (const wrapper of Array.from(mirror.querySelectorAll('ms-cmark-node'))) {
+      if (wrapper.parentElement === mirror) continue;
+      if (!mirror.contains(wrapper) || !r4TransparentWrapper(wrapper)) continue;
+      wrapper.replaceWith(...wrapper.childNodes);
+      flattened += 1;
+    }
+    return flattened;
+  }
+  // A leaf R4 owns but never mirrored keeps its raw Markdown: the legacy inline
+  // pass cannot run inside an owned root. Hand such leaves back to R4 whenever
+  // the legacy scan reaches its root. A build that already returned 0 for this
+  // exact text is not retried (r4Tried), so a permanently failing leaf cannot
+  // queue itself forever.
+  function r4MissedLeaves(root, firstOnly = false, rootText = null) {
+    const out = [];
+    if (!root || root.nodeType !== 1) return out;
+    // Cost guard: this runs on every root of every scan. A root without a raw
+    // marker cannot hold a leaf R4 would mirror, and reading textContent of a
+    // large root is itself expensive, so the caller's text is reused and only
+    // the marker test gates the walk. Per-leaf eligibility is memoised by text
+    // (r4MirrorCache) so a root holding failing leaves stays cheap too.
+    const text = rootText == null ? (root.textContent || '') : rootText;
+    if (!hasRepairableText(text)) return out;
+    // Both build outcomes invalidate this cache (a kept mirror and a tried
+    // failure), so a leaf in flight needs no separate invalidation.
+    //
+    // The gate runs on every root of every scan, and a walk per root per scan is
+    // measurable: on a 61-host chat it drove 445 scans at one position (frozen
+    // build 6-62, legacy 5-12). The verdict is cached per root against a
+    // fingerprint of its text length and child count, dropped by
+    // r4InvalidateMissed whenever a leaf is queued, kept, or recorded as tried,
+    // so a new missed leaf is seen on the scan that follows its DOM change.
+    const fingerprint = text.length + ':' + root.childElementCount;
+    if (firstOnly) {
+      const cached = r4MissedCache.get(root);
+      if (cached && cached.fingerprint === fingerprint) return cached.missed ? [root] : out;
+    }
+    // Leaves R4 already hosts or has queued cannot be missed, so the CSS filter
+    // drops them before any per-leaf work: on a long chat the walk stays small.
+    const pending = R4_LEAF_SELECTOR + ':not([' + R4_HOST_ATTR + '])';
+    const leaves = root.matches(pending) ? [root] : Array.from(root.querySelectorAll(pending));
+    for (const leaf of leaves) {
+      if (!leaf.isConnected || r4LeafOf(leaf) !== leaf) continue;
+      if (r4Mirrors.has(leaf) || r4PendingSet.has(leaf)) continue;
+      if (r4Tried.get(leaf) === r4NativeText(leaf)) continue;
+      if (!r4MirrorableCached(leaf)) continue;
+      out.push(leaf);
+      if (firstOnly) break;
+    }
+    if (firstOnly) r4MissedCache.set(root, { missed: out.length > 0, fingerprint });
+    return out;
+  }
+  function r4HasMissedLeaf(root, rootText = null) {
+    return r4MissedLeaves(root, true, rootText).length > 0;
+  }
+  function r4LeafOf(node) {
+    const element = elementOf(node);
+    if (!element || closest(element, '.' + R4_MIRROR_CLASS)) return null;
+    const leaf = closest(element, R4_LEAF_SELECTOR);
+    if (!leaf || !closest(leaf, R4_ROOT_SELECTOR)) return null;
+    if (leaf.parentElement && closest(leaf.parentElement, R4_LEAF_EXCLUDE_SELECTOR)) return null;
+    return leaf;
+  }
+  function r4Mirrorable(leaf) {
+    if (!leaf.isConnected) return false;
+    for (const child of leaf.childNodes) if (child.nodeType === 3 && child.nodeValue.trim()) return false;
+    for (const inner of leaf.querySelectorAll(R4_LEAF_SELECTOR + ',' + R4_INTERACTIVE_SELECTOR)) {
+      if (!closest(inner, '.' + R4_MIRROR_CLASS)) return false;
+    }
+    const text = r4NativeText(leaf);
+    return text.length <= R4_MAX_LEAF_TEXT && hasRepairableContent(leaf, text);
+  }
+  function r4InvalidateMissed(leaf) {
+    const root = leaf && leaf.nodeType === 1 ? closest(leaf, R4_ROOT_SELECTOR) : null;
+    if (root) r4MissedCache.delete(root);
+  }
+  function r4MirrorableCached(leaf) {
+    const text = r4NativeText(leaf);
+    const cached = r4MirrorCache.get(leaf);
+    if (cached && cached.text === text) return cached.ok;
+    const ok = r4Mirrorable(leaf);
+    r4MirrorCache.set(leaf, { text, ok });
+    return ok;
+  }
+  // Returns 1 when a repaired mirror is kept. Any failure shows the native content again.
+  function r4Build(leaf) {
+    const old = r4Mirrors.get(leaf);
+    if (old) { old.remove(); r4Mirrors.delete(leaf); }
+    let mirror = null;
+    try {
+      if (!r4Mirrorable(leaf)) { leaf.removeAttribute(R4_HOST_ATTR); return 0; }
+      leaf.setAttribute(R4_HOST_ATTR, '');
+      const nativeChildren = new Set(leaf.childNodes);
+      mirror = leaf.cloneNode(false);
+      mirror.removeAttribute('id');
+      mirror.removeAttribute(R4_HOST_ATTR);
+      mirror.classList.add(R4_MIRROR_CLASS);
+      for (const child of nativeChildren) if (child.nodeType !== 8) mirror.appendChild(child.cloneNode(true));
+      const comments = [];
+      const walker = document.createTreeWalker(mirror, NodeFilter.SHOW_COMMENT);
+      while (walker.nextNode()) comments.push(walker.currentNode);
+      for (const comment of comments) comment.remove();
+      for (const element of mirror.querySelectorAll('[id]')) element.removeAttribute('id');
+      r4FlattenMirror(mirror);
+      leaf.appendChild(mirror);
+      let repaired = 0;
+      for (let pass = 0; pass < 8; pass++) {
+        repaired += repairContent(mirror);
+        if (!inlineCursors.has(mirror)) break;
+      }
+      inlineCursors.delete(mirror);
+      // A pass may insert next to the clone (inside the leaf): that belongs to the mirror.
+      for (const child of Array.from(leaf.childNodes)) {
+        if (child !== mirror && !nativeChildren.has(child)) mirror.appendChild(child);
+      }
+      if (!repaired || !mirror.isConnected) {
+        mirror.remove();
+        leaf.removeAttribute(R4_HOST_ATTR);
+        r4Tried.set(leaf, r4NativeText(leaf));
+        r4InvalidateMissed(leaf);
+        return 0;
+      }
+      r4Tried.delete(leaf);
+      r4InvalidateMissed(leaf);
+      r4Mirrors.set(leaf, mirror);
+      if (r4Debug) r4Debug.kept += 1;
+      return 1;
+    } catch (error) {
+      if (mirror) mirror.remove();
+      leaf.removeAttribute(R4_HOST_ATTR);
+      r4Tried.set(leaf, r4NativeText(leaf));
+      if (r4Debug) r4Debug.errors.push(String((error && error.stack) || error).slice(0, 300));
+      return 0;
+    }
+  }
+  function r4Enqueue(leaf, front = false) {
+    r4MirrorCache.delete(leaf);
+    const old = r4Mirrors.get(leaf);
+    // Never leave a stale mirror while waiting: show the native content until the rebuild.
+    if (old) { old.remove(); r4Mirrors.delete(leaf); leaf.removeAttribute(R4_HOST_ATTR); }
+    if (r4PendingSet.has(leaf)) return;
+    r4PendingSet.add(leaf);
+    if (front) r4Pending.unshift(leaf); else r4Pending.push(leaf);
+  }
+  function r4QueueSlice() {
+    if (r4SliceQueued) return;
+    r4SliceQueued = true;
+    if (!r4Port) {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = r4Slice;
+      r4Port = channel.port2;
+    }
+    r4Port.postMessage(0);
+  }
+  /*
+   * Ask for one animation-frame pass that re-ranks the queue against the current
+   * viewport and builds whatever is now on screen. A rAF callback runs before the
+   * paint it is attached to, so this is the last point where a leaf the user just
+   * scrolled to can be mirrored for that frame. The pass stops at the slice
+   * budget, so it never turns into a general sweep.
+   */
+  function r4RequestPaintFlush() {
+    if (r4PaintFrame || !r4Pending.length) return;
+    r4PaintFrame = window.requestAnimationFrame(() => {
+      r4PaintFrame = 0;
+      r4FlushVisiblePending();
+    });
+  }
+  function r4FlushVisiblePending() {
+    if (!r4Pending.length || document.hidden) return;
+    if (!r4Enabled || !r4Body || !r4Body.isConnected) return;
+    /*
+     * Streaming owns its own repair path; re-ordering the queue there gains
+     * nothing and measurably loses: building a leaf out of enqueue order while
+     * the text is still growing catches half-written emphasis (real corpus
+     * nonTail 85 -> 98). Scrolling after the stream ends is where this pays.
+     */
+    if (generationObserved || generating()) return;
+    const height = window.innerHeight || 800;
+    /*
+     * Read, then write. A build appends a mirror and mutates layout, so reading
+     * the next leaf's rect after a build forces a fresh reflow of the whole
+     * document: the previous shape measured one rect per queue entry between
+     * builds and bought about half a build per frame (0.5 lifts at 8.5 ms per
+     * pass on a 390-entry queue, measured), which is exactly the delay a leaf
+     * that scrolled into view was waiting on. One layout pass here, then build
+     * top-to-bottom without touching geometry.
+     */
+    /*
+     * Bound the rect sweep. The queue reaches ~390 leaves after a re-create
+     * batch, and a rect costs ~0.06 ms in this document once the layout is
+     * already clean, so sweeping the whole queue every frame is a fixed 25 ms of
+     * paint budget spent looking for leaves that are mostly off-screen. 80 leaves
+     * from the queue head covers the in-view neighbourhood measured on chat B
+     * (7-11 in-view per frame at queue lengths 58-390); anything further back is
+     * reached on the following frame because a build removes the leaves it
+     * lifts. Measured against a3ee7d94 on chat B: unbounded sweep over50 26/25/27
+     * sumOver50 2888/2742/3125 max 337/329/366; bounded 23/24, sum 2643/2722,
+     * max 341/333 (control 21/22/23, 2439/2601/2626, 270/291/283).
+     */
+    const visible = [];
+    const sweepLimit = Math.min(r4Pending.length, R4_RAF_SWEEP_MAX);
+    for (let i = 0; i < sweepLimit; i++) {
+      const leaf = r4Pending[i];
+      if (!leaf.isConnected) continue;
+      const rect = leaf.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > height) continue;
+      visible.push({ leaf, top: rect.top });
+    }
+    if (!visible.length) return;
+    visible.sort((a, b) => a.top - b.top);
+    const started = schedulerNow();
+    let lifted = 0;
+    for (const entry of visible) {
+      const leaf = entry.leaf;
+      if (!r4PendingSet.has(leaf) || !leaf.isConnected) continue;
+      r4PendingSet.delete(leaf);
+      const index = r4Pending.indexOf(leaf);
+      if (index >= 0) r4Pending.splice(index, 1);
+      r4Build(leaf);
+      lifted += 1;
+      /*
+       * A frame buys a few builds. The sync path at R4_SYNC_CAP_MS is the only
+       * other place this work can block paint, and it stops after 50 ms; a
+       * paint-flush frame is capped far below that so the frame still paints.
+       */
+      if (schedulerNow() - started >= R4_RAF_CAP_MS) {
+        if (r4Pending.length) r4RequestPaintFlush();
+        break;
+      }
+    }
+    if (lifted) {
+      r4Observer?.takeRecords();
+      mathFitDirty = true;
+      schedule(120);
+    }
+  }
+  function r4Slice() {
+    r4SliceQueued = false;
+    const started = schedulerNow();
+    let kept = 0;
+    while (r4Pending.length && schedulerNow() - started < SCAN_BUDGET_MS) {
+      const leaf = r4Pending.shift();
+      if (!r4PendingSet.delete(leaf) || !leaf.isConnected) continue;
+      kept += r4Build(leaf);
+      if (r4Debug) r4Debug.sliceBuilds += 1;
+    }
+    r4Observer?.takeRecords();
+    // A clone built after the legacy scan's math-fit pass still needs that pass; scrolling never re-arms it.
+    if (kept) { mathFitResumeValid = false; mathFitDirty = true; schedule(120); }
+    if (r4Pending.length) r4QueueSlice();
+  }
+  /*
+   * Leaves inside the viewport are built now, before paint; the rest wait for a
+   * slice. The split is what guarantees a leaf that is on screen at paint time is
+   * already mirrored, so it stays synchronous. The bounded rAF pass below only
+   * re-ranks leaves that were waiting while the page moved.
+   */
+  function r4Process(dirty, started) {
+    if (r4Style && !r4Style.isConnected) (document.head || document.documentElement).appendChild(r4Style);
+    let now = Array.from(dirty).filter((leaf) => leaf.isConnected);
+    /*
+     * The synchronous split is what guarantees "a leaf in view at paint time is
+     * mirrored before that paint", so it stays on the primary path even though it
+     * costs one rect per leaf. Measured 27-40 ms for a 300-leaf batch right after
+     * AI Studio re-created the turns. The alternative - queue everything and let
+     * the IntersectionObserver promote what is visible - measured far worse for
+     * the user: the queue grew to 444 and a visible leaf stayed raw for 550 ms,
+     * because a 6 ms slice drains ~3 leaves.
+     */
+    if (now.length > 8) {
+      const height = window.innerHeight || 800;
+      const near = [];
+      const far = [];
+      for (const leaf of now) {
+        const rect = leaf.getBoundingClientRect();
+        const distance = rect.bottom < 0 ? -rect.bottom
+          : rect.top > height ? rect.top - height : 0;
+        if (distance === 0) near.push(leaf); else far.push([distance, leaf]);
+      }
+      far.sort((a, b) => a[0] - b[0]);
+      for (const [, leaf] of far) r4Enqueue(leaf);
+      now = near;
+    }
+    /*
+     * The cap is measured from the first build, not from the observer callback's
+     * start. `started` includes r4OnMutations' record walk and the rect sweep
+     * above, and on a re-create batch those alone exceed the cap: measured
+     * chat A S0.15 batch records 67809 / dirty 396 / syncMs 168, S0.9 records
+     * 15698 / dirty 59 / syncMs 67. Against a cap of 50 ms from callback start
+     * that stopped the loop after exactly one leaf, so the 19 in-view leaves
+     * went to the queue and the paint that follows the mutation task showed
+     * them raw for its whole duration - the flash this fixes. The budget that
+     * matters for jank is the one this loop spends building, so it is timed
+     * from here, where the first build starts.
+     */
+    const buildStarted = schedulerNow();
+    for (let index = 0; index < now.length; index++) {
+      if (index && schedulerNow() - buildStarted > R4_SYNC_CAP_MS) {
+        for (let rest = now.length - 1; rest >= index; rest--) r4Enqueue(now[rest], true);
+        break;
+      }
+      r4PendingSet.delete(now[index]);
+      r4Build(now[index]);
+    }
+    if (r4Pending.length) { r4QueueSlice(); r4RequestPaintFlush(); }
+    if (r4Debug) {
+      const ms = schedulerNow() - started;
+      r4Debug.batches += 1; r4Debug.syncMsTotal += ms; r4Debug.syncMsMax = Math.max(r4Debug.syncMsMax, ms);
+    }
+  }
+  function r4OnMutations(records) {
+    if (!r4Enabled) return;
+    // Pages without an owned root must cost one query, not per-record work.
+    if (!document.querySelector(R4_ROOT_SELECTOR)) return;
+    const started = schedulerNow();
+    const dirty = new Set();
+    const memo = new Map();
+    const leafOf = (node) => {
+      const element = elementOf(node);
+      if (!element) return null;
+      if (!memo.has(element)) memo.set(element, r4LeafOf(element));
+      return memo.get(element);
+    };
+    const own = (node) => node.nodeType === 1 && node.classList.contains(R4_MIRROR_CLASS);
+    /*
+     * OnlyAllOwn: the same verdict as `[...added, ...removed].every(own)` without
+     * building the concatenated array on every childList record. A large re-create
+     * batch is tens of thousands of records; two extra arrays each is measurable
+     * allocation on the same task that has to stay under the frame budget.
+     */
+    const onlyOwn = (record) => {
+      let seen = 0;
+      for (const node of record.addedNodes) { seen += 1; if (!own(node)) return false; }
+      for (const node of record.removedNodes) { seen += 1; if (!own(node)) return false; }
+      return seen > 0;
+    };
+    for (const record of records) {
+      if (record.type === 'childList') {
+        if (onlyOwn(record)) continue;
+        for (const node of record.addedNodes) {
+          if (node.nodeType !== 1 || own(node)) continue;
+          if (node.matches(R4_LEAF_SELECTOR) && leafOf(node) === node) dirty.add(node);
+          if (node.firstElementChild) {
+            for (const inner of node.querySelectorAll(R4_LEAF_SELECTOR)) if (leafOf(inner) === inner) dirty.add(inner);
+          }
+        }
+      }
+      const leaf = leafOf(record.target);
+      if (leaf) dirty.add(leaf);
+    }
+    if (dirty.size) r4Process(dirty, started);
+    r4Observer.takeRecords(); // our own writes; native nodes cannot change during this callback
+  }
+  function r4OwnRecord(mutation) {
+    const element = elementOf(mutation.target);
+    if (element && closest(element, '.' + R4_MIRROR_CLASS)) return true;
+    if (mutation.type !== 'childList') return false;
+    // Same verdict as concatenating added+removed and testing every node, without
+    // allocating the concatenated array per record.
+    let seen = 0;
+    for (const node of mutation.addedNodes) {
+      seen += 1;
+      if (node.nodeType !== 1 || !node.classList.contains(R4_MIRROR_CLASS)) return false;
+    }
+    for (const node of mutation.removedNodes) {
+      seen += 1;
+      if (node.nodeType !== 1 || !node.classList.contains(R4_MIRROR_CLASS)) return false;
+    }
+    return seen > 0;
+  }
+  function r4Boot() {
+    if (!ENABLE_R4_MIRROR || r4Observer || typeof MutationObserver !== 'function' || typeof MessageChannel !== 'function') return;
+    const html = document.documentElement;
+    let off = html.hasAttribute('data-aisfix-r4-off');
+    try { off = off || localStorage.getItem('aistudio-fix-r4') === 'off'; } catch (_) { /* storage blocked */ }
+    if (off) return;
+    r4Enabled = true;
+    r4Body = document.body || html;
+    if (html.hasAttribute('data-aisfix-r4-debug')) {
+      r4Debug = { batches: 0, kept: 0, sliceBuilds: 0, syncMsTotal: 0, syncMsMax: 0, errors: [] };
+      globalThis.__aisfixR4 = { stats: r4Debug, hosts: () => document.querySelectorAll('[' + R4_HOST_ATTR + ']').length };
+    }
+    r4Style = document.createElement('style');
+    r4Style.setAttribute('data-aisfix-r4', '');
+    r4Style.textContent = R4_CSS;
+    (document.head || html).appendChild(r4Style);
+    r4Observer = new MutationObserver(r4OnMutations);
+    r4Observer.observe(document.body || html, {
+      childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['style', 'class']
+    });
+    const leaves = new Set();
+    for (const root of document.querySelectorAll(R4_ROOT_SELECTOR)) {
+      for (const leaf of root.querySelectorAll(R4_LEAF_SELECTOR)) if (r4LeafOf(leaf) === leaf) leaves.add(leaf);
+    }
+    if (leaves.size) r4Process(leaves, schedulerNow());
+    r4Observer.takeRecords();
+  }
+
+  // The text node that carries the visible edge of an inline wrapper. `side` is
+  // 'first' for the head of the wrapper's text or 'last' for its tail; every
+  // descendant on that side must be only comments, empty fillers or the
+  // transparent spans AI Studio nests around its own text.
+  function inlineEdgeText(node, side) {
+    if (!node) return null;
+    if (node.nodeType === 3) return node.nodeValue ? node : null;
+    if (node.nodeType !== 1) return null;
+    if (!/^(SPAN|MS-CMARK-NODE|STRONG|B|EM|I)$/.test(node.tagName)) return null;
+    if (node.matches('[role],[tabindex],[contenteditable],.inline-code,.aistudio-md-repaired,a')) return null;
+    const children = Array.from(node.childNodes);
+    const ordered = side === 'last' ? children.reverse() : children;
+    for (const child of ordered) {
+      if (child.nodeType === 8) continue;
+      if (child.nodeType === 1 && !child.textContent.trim()) continue;
+      return inlineEdgeText(child, side);
+    }
+    return null;
+  }
+
+  // The edge text node of the nearest meaningful sibling in one direction:
+  // 'previous' walks back for the text that ends right before `node`, 'next'
+  // walks forward for the text that starts right after it.
+  function inlineNeighbourText(node, direction) {
+    const step = direction === 'previous' ? 'previousSibling' : 'nextSibling';
+    const side = direction === 'previous' ? 'last' : 'first';
+    let cursor = node && node[step];
+    for (let guard = 0; cursor && guard < 32; guard += 1, cursor = cursor[step]) {
+      if (cursor.nodeType === 8) continue;
+      if (cursor.nodeType === 1 && !cursor.textContent.trim()) continue;
+      return inlineEdgeText(cursor, side);
+    }
+    return null;
+  }
+
+  // `**[label](href)**를` keeps its pair raw because AI Studio wraps the link in
+  // a barrier element, so the two `**` runs never meet. A pair whose ENTIRE
+  // content is one link can be rebuilt safely; a pair that spans text + link +
+  // text (`**do not <a>cross links</a> here**`) must stay raw. The two edge
+  // texts are re-joined around one inline atom and run through findMatches, so
+  // only a real, complete pair triggers the rewrite.
+  function repairLinkEmphasis(root) {
+    if (!root || !root.querySelectorAll) {
+      return 0;
+    }
+
+    const links = Array.from(root.querySelectorAll('a'));
+
+    if (root.matches && root.matches('a')) {
+      links.unshift(root);
+    }
+
+    let repaired = 0;
+
+    for (const link of links) {
+      if (
+        !link.isConnected ||
+        !(link.textContent || '').trim() ||
+        Array.from(link.querySelectorAll('*')).some(
+          (inner) => !/^(SPAN|MS-CMARK-NODE)$/.test(inner.tagName)
+        ) ||
+        closest(
+          link,
+          USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',' +
+          'pre,code,.inline-code,.aistudio-md-repaired,strong,b,[contenteditable]'
+        )
+      ) {
+        continue;
+      }
+
+      const before = inlineNeighbourText(link, 'previous');
+      const after = inlineNeighbourText(link, 'next');
+
+      if (!before || !after) {
+        continue;
+      }
+
+      const beforeValue = before.nodeValue || '';
+      const afterValue = after.nodeValue || '';
+
+      if (!beforeValue.endsWith('**') || !afterValue.startsWith('**')) {
+        continue;
+      }
+
+      const joined = beforeValue + INLINE_MATH_ATOM + afterValue;
+      const opening = beforeValue.length - 2;
+      const match = findMatches(joined).find(
+        (candidate) => candidate.start === opening &&
+          candidate.end === opening + 5 &&
+          candidate.inner === INLINE_MATH_ATOM
+      );
+
+      if (!match) {
+        continue;
+      }
+
+      before.nodeValue = beforeValue.slice(0, -2);
+      after.nodeValue = afterValue.slice(2);
+
+      const strong = createRepairedEmphasis('', '**');
+
+      link.replaceWith(strong);
+      strong.append(link);
+      repaired += 1;
+    }
+
+    return repaired;
+  }
+
+  function repairContent(root) {
     if (
       !root ||
       !root.isConnected ||
@@ -6836,7 +7900,7 @@ code.aistudio-prose-code-repaired {
 
     const rootText = root.textContent || '';
 
-    if (!hasRepairableRoot(root, rootText)) {
+    if (!hasRepairableContent(root, rootText)) {
       return 0;
     }
 
@@ -6853,6 +7917,7 @@ code.aistudio-prose-code-repaired {
     if (hasAsciiBoxTreeHint(rootText)) repaired += repairAsciiBoxTrees(root);
     repaired += repairProseCodeBold(root);
     repaired += repairMisparsedItalicNotes(root);
+    repaired += repairLinkEmphasis(root);
     repaired += repairInlineEmphasis(root);
     if (/\d원/.test(rootText)) repaired += repairAmountTokens(root);
     if (/\\\d/.test(rawText)) repaired += repairWonSymbols(root);
@@ -6973,6 +8038,31 @@ code.aistudio-prose-code-repaired {
     return repaired;
   }
 
+  /*
+   * True when an attribute record is one of the markers this code writes on math
+   * nodes. `class` is shared with AI Studio, so only the two fit classes count,
+   * and only on a display or a KaTeX root; every other class write still
+   * invalidates normally.
+   */
+  function isOwnMathFitWrite(element, attributeName) {
+    if (!element || element.nodeType !== 1) return false;
+    const isDisplay = element.classList.contains('katex-display') ||
+      Boolean(element.matches?.('ms-katex.display'));
+    const isKatexRoot = element.classList.contains('katex');
+    if (!isDisplay && !isKatexRoot) return false;
+    /*
+     * Recognise the write by the marker it leaves, never by the node alone: AI
+     * Studio also toggles classes on these nodes, and swallowing those would hide a
+     * real render. A fit sets the scale attribute on the KaTeX root and, with it,
+     * either a font-size style or the wrap class on the display.
+     */
+    const fitted = isKatexRoot &&
+      element.hasAttribute('data-aistudio-math-fit-scale');
+    if (attributeName === 'style') return fitted;
+    if (attributeName !== 'class') return false;
+    return fitted || (isDisplay && element.classList.contains('aistudio-math-wrap'));
+  }
+
   function restoreOriginalMathFontSize(katexRoot) {
     const original = mathFitOriginalStyles.get(katexRoot);
 
@@ -6995,6 +8085,125 @@ code.aistudio-prose-code-repaired {
     }
   }
 
+  /*
+   * The fit a display already carries. A force pass used to re-apply it blindly:
+   * every re-apply wrote class/style inside a leaf fixture, R4 rebuilt that leaf,
+   * the display's width flipped 322 -> 0 -> 322, and the ResizeObserver turned
+   * that flip back into mathFitDirty. Measured on chat B: one fit per scroll
+   * position became 161-168 fits and 1.5-1.6 s of scan time, with zero triggers.
+   *
+   * Reuse therefore proves every input is unchanged before it skips the writes:
+   * the font epoch (any font load re-measures), the container width, and the
+   * natural width implied by the applied scale. The verdict is a pure function of
+   * those widths, so an unchanged display is left with exactly the fit a fresh
+   * full pass would compute - the W-R4Q invariant holds without the writes.
+   */
+  /*
+   * The base font size of the math on this page, sampled once per pass. Every
+   * display inherits the same KaTeX font size, so a stylesheet change moves all of
+   * them together and one probe covers the whole document. Doing it per display
+   * cost a style resolution per display per pass (measured on chat B: 18.0 ms per
+   * scan with the probe against 14.2 ms without).
+   */
+  let mathBaseFontProbe = null;
+
+  function mathBaseFontSize() {
+    if (mathBaseFontProbe !== null) return mathBaseFontProbe;
+    for (const display of document.querySelectorAll('.katex-display, ms-katex.display')) {
+      if (closest(display, USER_SELECTOR)) continue;
+      const katexRoot =
+        display.querySelector(':scope > .katex') || display.querySelector('.katex');
+      if (!katexRoot) continue;
+      const size = Number.parseFloat(getComputedStyle(katexRoot).fontSize);
+      if (!Number.isFinite(size)) continue;
+      const applied = Number.parseFloat(
+        katexRoot.getAttribute('data-aistudio-math-fit-scale') || ''
+      );
+      mathBaseFontProbe = size / (Number.isFinite(applied) ? applied : 1);
+      break;
+    }
+    return mathBaseFontProbe;
+  }
+
+  function reuseDisplayMathFit(display, verifyLayout) {
+    const measured = mathFitMeasured.get(display);
+
+    if (!measured || measured.fontEpoch !== mathFontEpoch) return null;
+    /*
+     * The KaTeX root the record was measured on. Re-querying it here would cost one
+     * or two selector queries per display per pass across the whole document; a
+     * re-render replaces that element, so a stale record is detected by identity
+     * and falls through to a real fit.
+     */
+    const katexRoot = measured.katexRoot;
+    if (!katexRoot || !katexRoot.isConnected || katexRoot.parentElement !== display) return null;
+    /*
+     * Container width. A metrics trigger (resize, orientation, visibility, font
+     * load) can change a display's available width without any DOM change, so a
+     * forced pass re-checks it; a pass armed by a mutation needs no check, because
+     * a mutation that changes the width also changes the recorded verdict markers.
+     * The value comes from the ResizeObserver's own record, which the observer
+     * maintains without forcing layout.
+     */
+    const liveWidth = verifyLayout
+      ? Math.floor(observedMathWidths.get(display) ?? display.clientWidth ?? 0)
+      : measured.availableWidth;
+    if (verifyLayout && measured.availableWidth !== liveWidth) return null;
+    if (display.classList.contains('aistudio-math-wrap') !== measured.wrapped) return null;
+    if ((display.parentElement?.classList.contains('aistudio-math-scroll') === true) !==
+        measured.scrolled) return null;
+
+    const appliedScale = Number.parseFloat(
+      katexRoot.getAttribute('data-aistudio-math-fit-scale') || ''
+    );
+    const scale = Number.isFinite(appliedScale) ? appliedScale : 1;
+
+    // measured.scale is stored as the same 4-decimal number the attribute holds.
+    if (scale !== measured.scale) return null;
+    /*
+     * Every input to the verdict is checked without forcing layout:
+     *   - container width: the ResizeObserver's record (see verifyLayout);
+     *   - glyph metrics: the base font size, recovered by dividing the computed
+     *     font size by the applied scale. A stylesheet that raises the KaTeX font
+     *     size changes this without changing any width and without a font load,
+     *     so it is the only signal that catches a metrics-only change.
+     *     getComputedStyle forces style resolution, not layout;
+     *   - the applied verdict: the fit-mode marker and the scale attribute;
+     *   - the DOM shape the verdict depends on: wrap class and scroller presence.
+     * Reading scrollWidth here instead would force a layout per display per pass,
+     * which on a long chat cost more than the writes it was meant to save
+     * (measured on chat B S0.40: 18.6 ms per scan against the control's 14.4 ms).
+     * A re-render by AI Studio replaces the .katex child, so the marker and the
+     * scale attribute disappear with it and the display refits.
+     */
+    if (katexRoot.getAttribute('data-aistudio-math-fit-mode') !== measured.fitMode) return null;
+    /*
+     * Glyph metrics: one probe covers the document, and the per-display check is a
+     * comparison against it. The probe is re-sampled per pass, so a stylesheet that
+     * raises the KaTeX font size is caught even when no font load fires.
+     */
+    if (verifyLayout) {
+      const liveBaseFontSize = mathBaseFontSize();
+      if (liveBaseFontSize !== null &&
+          Math.abs(liveBaseFontSize - measured.baseFontSize) >
+            Math.max(0.05, measured.baseFontSize * 0.002)) {
+        return null;
+      }
+    }
+
+    // Attribute-only re-arm, and only when it is actually missing: a steady display
+    // must produce no write at all.
+    if (display.getAttribute(MATH_FIT_CHECKED_ATTR) !== '1') {
+      display.setAttribute(MATH_FIT_CHECKED_ATTR, '1');
+    }
+    mathFitCache.set(display, {
+      availableWidth: measured.availableWidth,
+      naturalWidth: measured.naturalWidth
+    });
+
+    return measured.fitted;
+  }
+
   function fitDisplayMath(display, force = false) {
     if (
       !display ||
@@ -7008,6 +8217,13 @@ code.aistudio-prose-code-repaired {
     if (!force && mathFitCache.has(display)) {
       return false;
     }
+
+    /*
+     * Unchanged input, unchanged verdict: skip the reset, the measurement and
+     * every write. This covers the forced pass too, which is where the cost was.
+     */
+    const reused = reuseDisplayMathFit(display, force);
+    if (reused !== null) return reused;
 
     const katexRoot =
       display.querySelector(':scope > .katex') ||
@@ -7043,9 +8259,36 @@ code.aistudio-prose-code-repaired {
       !Number.isFinite(baseFontSize)
     ) {
       mathFitCache.delete(display);
+      mathFitMeasured.delete(display);
       display.removeAttribute(MATH_FIT_CHECKED_ATTR);
       return false;
     }
+
+    /*
+     * Every exit below records what the fit was measured against, so the next
+     * pass can reuse it. `record` is applied once, at the end of the function.
+     */
+    const measured = {
+      availableWidth,
+      naturalWidth,
+      katexRoot,
+      fontEpoch: mathFontEpoch,
+      scale: 1,
+      // scale is 1 when no font-size is applied; the attribute then reads 1.0000.
+      fitMode: null,
+      baseFontSize,
+      wrapped: false,
+      scrolled: false,
+      fitted: false
+    };
+    const record = () => {
+      measured.wrapped = display.classList.contains('aistudio-math-wrap');
+      measured.scrolled =
+        display.parentElement?.classList.contains('aistudio-math-scroll') === true;
+      measured.fitMode = katexRoot.getAttribute('data-aistudio-math-fit-mode');
+      mathFitMeasured.set(display, measured);
+    };
+
 
     if (mathResizeObserver && !observedMathDisplays.has(display)) {
       observedMathDisplays.add(display);
@@ -7055,6 +8298,8 @@ code.aistudio-prose-code-repaired {
     display.setAttribute(MATH_FIT_CHECKED_ATTR, '1');
 
     if (naturalWidth <= availableWidth + 1) {
+      record();
+      mathFitRefits += 1;
       return false;
     }
 
@@ -7075,6 +8320,8 @@ code.aistudio-prose-code-repaired {
         String(naturalWidth)
       );
       katexRoot.setAttribute('data-aistudio-math-fit-mode', mode);
+      // Round like the attribute so the reuse comparison is exact.
+      measured.scale = Number(scale.toFixed(4));
       return true;
     };
 
@@ -7091,7 +8338,11 @@ code.aistudio-prose-code-repaired {
       widest = Math.ceil(widest);
 
       if (widest <= availableWidth + 1) {
-        return finish(1, 'wrap');
+        const fitted = finish(1, 'wrap');
+        measured.fitted = fitted;
+        record();
+        mathFitRefits += 1;
+        return fitted;
       }
 
       const scale = Math.max(
@@ -7105,6 +8356,9 @@ code.aistudio-prose-code-repaired {
         createDisplayMathScroller(display);
       }
 
+      measured.fitted = true;
+      record();
+      mathFitRefits += 1;
       return true;
     }
 
@@ -7120,6 +8374,9 @@ code.aistudio-prose-code-repaired {
       createDisplayMathScroller(display);
     }
 
+    measured.fitted = true;
+    record();
+    mathFitRefits += 1;
     return true;
   }
 
@@ -7133,6 +8390,25 @@ code.aistudio-prose-code-repaired {
     scroller.appendChild(display);
   }
 
+  /*
+   * One refit per burst, not one per event. Several triggers routinely arrive
+   * inside a single budgeted pass (a pageshow, a visibilitychange and a font
+   * load can all land in the same 150 ms window); each one used to set the dirty
+   * flag again, so a pass that had already finished its last display re-armed and
+   * walked the whole document once more for nothing. Absorbing the repeats while a
+   * pass is in flight keeps the trigger's guarantee - every display is measured
+   * again after it - while collapsing the burst into one pass.
+   */
+  function requestMathFitRefit() {
+    if (mathFitPassActive) {
+      mathFitTriggersAbsorbed += 1;
+      return;
+    }
+    // A forced pass re-measures every display, so it starts at the head.
+    mathFitResumeValid = false;
+    mathFitResizeDirty = true;
+  }
+
   function fitWideDisplayMath(force = false) {
     for (const display of observedMathDisplays) {
       if (!display.isConnected) {
@@ -7141,18 +8417,71 @@ code.aistudio-prose-code-repaired {
         observedMathWidths.delete(display);
       }
     }
+    // A fresh metrics sample per pass: a stylesheet can change the math font size
+    // without a font load, and one probe per pass is cheap.
+    mathBaseFontProbe = null;
+    /*
+     * A forced pass needs no invalidation step: it selects every display directly,
+     * ignores the checked marker, and rewrites the cache and the marker for each
+     * display it measures. Clearing them first was a full-document query per slice
+     * that produced a state the pass overwrote immediately.
+     */
     const uncheckedSelector = `[${MATH_FIT_CHECKED_ATTR}="1"]`;
+    /*
+     * A forced pass measures every display, so it selects them all and leaves the
+     * markers alone; an ordinary pass picks up the displays that are new or
+     * invalidated. Either way each slice fits a budget's worth and the rest are
+     * left for the next slice, which is what keeps a continuation going to the
+     * last display.
+     */
     const selector = force
       ? '.katex-display, ms-katex.display'
       : [
           `.katex-display:not(${uncheckedSelector})`,
           `ms-katex.display:not(${uncheckedSelector})`
         ].join(',');
-    const displays = Array.from(document.querySelectorAll(
-      selector
-    )).filter((display) => {
+    let fitted = 0;
+    const started = schedulerNow();
+    /*
+     * Eligibility is decided inside the budgeted loop, not in one unbudgeted
+     * filter pass. Each test is two `closest` calls against long selector lists;
+     * an invalidated chat has every display unchecked, so a filter over the whole
+     * document costs 9-15 ms per slice by itself while the budget only counted the
+     * fit calls (measured: 188 cached candidates, 0.3 ms per fit, 9 ms per pass).
+     * Stopping mid-list leaves the rest unchecked for the next slice, which is the
+     * same continuation the fit loop already relies on.
+     */
+    const candidates = document.querySelectorAll(selector);
+    /*
+     * Where the previous slice of this same pass stopped. A budget stop leaves the
+     * tail unfitted, and re-testing the head on every continuation was the pass
+     * paying for its own progress twice: on chat B a forced pass over 60 displays
+     * spent 12-19 ms per slice re-walking displays it had already settled. The
+     * cursor is per pass; any new pass (a new trigger, or a fresh dirty flag after
+     * a completed one) starts at the head.
+     */
+    if (!mathFitResumeValid || mathFitResumeForce !== force) {
+      mathFitResume = 0;
+      mathFitResumeValid = true;
+      mathFitResumeForce = force;
+    }
+    for (let index = mathFitResume; index < candidates.length; index += 1) {
+      mathFitResume = index + 1;
+      const display = candidates[index];
       if (closest(display, USER_SELECTOR)) {
-        return false;
+        continue;
+      }
+
+      /*
+       * R4 hides every native child of a mirrored leaf with CSS. Such a display
+       * has no measurable width, so fitDisplayMath cannot fit it and clears its
+       * checked marker again on every scan - an endless math-fit loop. A display
+       * inside the mirror is fitted normally; only the hidden native copy is
+       * skipped.
+       */
+      if (!closest(display, '.' + R4_MIRROR_CLASS) &&
+          closest(display, '[' + R4_HOST_ATTR + ']')) {
+        continue;
       }
 
       const nestedDisplay =
@@ -7161,21 +8490,33 @@ code.aistudio-prose-code-repaired {
 
       if (nestedDisplay) {
         display.setAttribute(MATH_FIT_CHECKED_ATTR, '1');
-        return false;
+        continue;
       }
 
-      return true;
-    });
-    let fitted = 0;
-    const started = schedulerNow();
-
-    for (const display of displays) {
+      const before = mathFitRefits;
       if (fitDisplayMath(display, force)) {
         fitted += 1;
       }
-      if (!force && schedulerNow() - started >= SCAN_BUDGET_MS) {
-        mathFitIncomplete = true;
-        return fitted;
+      /*
+       * The budget applies to a forced pass too. A resize or a fresh mirror set
+       * invalidates every display: on a long saved chat that is 60+ displays at
+       * ~6 ms each, one 375 ms task the browser cannot paint across. Stopping
+       * early sets mathFitIncomplete and the caller re-arms continueScan; the
+       * displays not reached keep their checked marker cleared, so the next slice
+       * picks them up and the whole set is still re-measured - only the task
+       * boundaries move.
+       *
+       * A display whose fit is reused writes nothing and measures nothing, so it
+       * cannot overrun a frame and is not charged to the budget: charging it made
+       * a pass over a long chat with nothing to change slice itself into a dozen
+       * scans, each re-walking the document, which is exactly the cost this fix
+       * exists to remove. The wall-clock test stays for real fits.
+       */
+      if (mathFitRefits !== before) {
+        if (schedulerNow() - started >= SCAN_BUDGET_MS) {
+          mathFitIncomplete = true;
+          return fitted;
+        }
       }
     }
 
@@ -7185,11 +8526,10 @@ code.aistudio-prose-code-repaired {
   }
 
   function containWideInlineMath(force = false) {
+    const unchecked = `:not([${INLINE_MATH_CHECKED_ATTR}="1"])`;
     const candidates = Array.from(document.querySelectorAll(
-      force
-        ? 'ms-katex:not(.display), mjx-container:not([display="true"])'
-        : `ms-katex:not(.display):not([${INLINE_MATH_CHECKED_ATTR}="1"]), ` +
-          `mjx-container:not([display="true"]):not([${INLINE_MATH_CHECKED_ATTR}="1"])`
+      `ms-katex:not(.display)${unchecked}, ` +
+      `mjx-container:not([display="true"])${unchecked}`
     ));
     let contained = 0;
     const eligible = (host) => (
@@ -7199,16 +8539,49 @@ code.aistudio-prose-code-repaired {
       !closest(host, '.katex-display, ms-katex.display')
     );
 
-    // Phase A: writes only. Undo previous wrapping before measuring again.
-    if (force) {
-      for (const host of candidates) {
-        if (!eligible(host)) continue;
-        const wrapper = host.parentElement;
-        if (wrapper?.classList.contains('aistudio-inline-math-scroll')) {
-          wrapper.replaceWith(host);
-        }
-        host.classList.remove('aistudio-inline-math-wrap');
+    /*
+     * Phase A: writes only, and only where a write can change the answer. The
+     * unwrap and the class removal exist so the measurement below sees the host's
+     * natural width; a host whose last verdict is unchanged still overflows (or
+     * still fits), so re-undoing its wrapping every pass was pure churn: each
+     * write is a class/childList mutation inside an R4 leaf, R4 rebuilt the leaf,
+     * and that rebuild invalidated math fit again.
+     */
+    const undo = [];
+    const reused = new Set();
+    for (const host of candidates) {
+      if (!eligible(host)) continue;
+      const wrapper = host.parentElement;
+      const wrapped = wrapper?.classList.contains('aistudio-inline-math-scroll') === true;
+      const brokeAtRelation = host.classList.contains('aistudio-inline-math-wrap');
+      /*
+       * Only a host that is currently wrapped or broken has anything to undo, and
+       * that is the only case where reuse saves work. Checking the container width
+       * (a layout read) for every candidate would cost more than the writes it
+       * avoids, so the reuse test is confined to the hosts that would be undone.
+       */
+      if (!wrapped && !brokeAtRelation) continue;
+      const last = inlineMathMeasured.get(host);
+      if (last && last.fontEpoch === mathFontEpoch &&
+          last.scrolled === wrapped &&
+          last.brokeAtRelation === brokeAtRelation &&
+          last.availableWidth === inlineAvailableWidth(host)) {
+        host.setAttribute(INLINE_MATH_CHECKED_ATTR, '1');
+        reused.add(host);
+        continue;
       }
+      undo.push({ host, wrapped, brokeAtRelation });
+    }
+    for (const entry of undo) {
+      if (entry.wrapped) entry.host.parentElement?.replaceWith(entry.host);
+      if (entry.brokeAtRelation) entry.host.classList.remove('aistudio-inline-math-wrap');
+      inlineMathMeasured.delete(entry.host);
+      /*
+       * Undo means the remembered inputs no longer hold, so this host must be
+       * measured again: without clearing the marker, Phase B would skip it and
+       * the pass would leave it unwrapped with a stale "checked" verdict.
+       */
+      entry.host.removeAttribute(INLINE_MATH_CHECKED_ATTR);
     }
 
     // Phase B: reads only. Measuring after writes avoids layout thrash.
@@ -7216,22 +8589,11 @@ code.aistudio-prose-code-repaired {
     const started = schedulerNow();
     for (const host of candidates) {
       if (!eligible(host)) continue;
+      if (reused.has(host)) continue;
       if (!force && host.getAttribute(INLINE_MATH_CHECKED_ATTR) === '1') continue;
       if (!force && host.parentElement?.classList.contains('aistudio-inline-math-scroll')) continue;
 
-      let container = host.parentElement;
-      let remainingAscents = 6;
-      while (
-        container &&
-        container !== document.body &&
-        !container.clientWidth &&
-        remainingAscents > 0
-      ) {
-        container = container.parentElement;
-        remainingAscents -= 1;
-      }
-
-      const availableWidth = Math.floor(container?.clientWidth || 0);
+      const availableWidth = inlineAvailableWidth(host);
       const naturalWidth = Math.ceil(Math.max(
         host.scrollWidth || 0,
         host.getBoundingClientRect().width || 0
@@ -7303,7 +8665,43 @@ code.aistudio-prose-code-repaired {
       contained += 1;
     }
 
+    /*
+     * Record every decision this pass made, so the next pass over the same host
+     * with the same container width can return without a single write.
+     */
+    for (const entry of measured) {
+      inlineMathMeasured.set(entry.host, {
+        availableWidth: entry.availableWidth,
+        fontEpoch: mathFontEpoch,
+        scrolled: entry.host.parentElement?.classList.contains(
+          'aistudio-inline-math-scroll'
+        ) === true,
+        brokeAtRelation: entry.host.classList.contains('aistudio-inline-math-wrap')
+      });
+    }
+
     return contained;
+  }
+
+  /*
+   * The width an inline host is measured against: the nearest ancestor with a
+   * layout width, walking up past the collapsed wrappers AI Studio leaves around
+   * freshly rendered math. Shared by the measurement and the reuse test so both
+   * compare the same number.
+   */
+  function inlineAvailableWidth(host) {
+    let container = host.parentElement;
+    let remainingAscents = 6;
+    while (
+      container &&
+      container !== document.body &&
+      !container.clientWidth &&
+      remainingAscents > 0
+    ) {
+      container = container.parentElement;
+      remainingAscents -= 1;
+    }
+    return Math.floor(container?.clientWidth || 0);
   }
 
   function nearViewport(element) {
@@ -7409,6 +8807,8 @@ code.aistudio-prose-code-repaired {
       return asciiCode;
     }
 
+    if (r4Enabled && closest(parent, R4_ROOT_SELECTOR)) return null;
+
     if (
       !parent ||
       !hasFallbackRepairHint(value) ||
@@ -7499,7 +8899,7 @@ code.aistudio-prose-code-repaired {
             // Reject native math and editor subtrees before reading their text.
             if (node.nodeType === 1 && node.matches(
               USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR +
-              ', .katex, ms-katex, mjx-container, math, script, style, nav, [role="dialog"]'
+              ', .katex, ms-katex, mjx-container, math, script, style, nav, [role="dialog"], .aisfix-m'
             )) return NodeFilter.FILTER_REJECT;
             return NodeFilter.FILTER_ACCEPT;
           }
@@ -7572,7 +8972,8 @@ code.aistudio-prose-code-repaired {
       ])).filter((root) => (
         root.isConnected &&
         closest(root, MODEL_TURN_SELECTOR) &&
-        !closest(root, USER_SELECTOR)
+        !closest(root, USER_SELECTOR) &&
+        !closest(root, '.' + R4_MIRROR_CLASS)
       ));
 
       /*
@@ -8236,7 +9637,17 @@ code.aistudio-prose-code-repaired {
         return false;
       }
 
-      const indicators = document.querySelectorAll(MODEL_ACTIVITY_SELECTOR);
+      /*
+       * Every member of MODEL_ACTIVITY_SELECTOR and FALLBACK_ACTIVITY_SELECTOR
+       * needs one of these four elements to match, so their absence proves both
+       * lists empty without running two ~60-selector document scans. On a long
+       * saved chat those scans cost ~18 ms each and ran on every recheck.
+       */
+      const activityPresent = document.querySelector(MODEL_ACTIVITY_INDICATORS.join(','));
+
+      const indicators = activityPresent
+        ? document.querySelectorAll(MODEL_ACTIVITY_SELECTOR)
+        : [];
       const activeIndicator = Array.from(indicators).find(visible);
 
       if (activeIndicator) {
@@ -8244,9 +9655,9 @@ code.aistudio-prose-code-repaired {
         return true;
       }
 
-      const fallbackIndicators = document.querySelectorAll(
-        FALLBACK_ACTIVITY_SELECTOR
-      );
+      const fallbackIndicators = activityPresent
+        ? document.querySelectorAll(FALLBACK_ACTIVITY_SELECTOR)
+        : [];
 
       const fallbackIndicator = Array.from(fallbackIndicators).find((indicator) => (
         visible(indicator) &&
@@ -8395,11 +9806,36 @@ code.aistudio-prose-code-repaired {
     }
     const now = Date.now();
     mathFitIncomplete = false;
+    /*
+     * The pass owns the trigger window: every forced trigger that arrives while
+     * this slice and its continuations run is absorbed (see requestMathFitRefit),
+     * so a burst costs one pass. `mathFitResizeDirty` stays set while the pass is
+     * incomplete, because the continuation slices must keep running as forced.
+     */
+    const mathFitWasForced = mathFitResizeDirty;
+    const mathFitWasRearm = mathFitRearmed;
+    mathFitRearmed = false;
     const fittedMathCount = (mathFitDirty || mathFitResizeDirty)
       ? fitWideDisplayMath(mathFitResizeDirty) : 0;
     mathFitDirty = mathFitIncomplete;
     mathFitIncomplete = false;
-    mathFitResizeDirty = false;
+    if (!mathFitDirty) mathFitResumeValid = false;
+    mathFitPassActive = mathFitDirty;
+    if (mathFitDirty) {
+      // Continuation slices stay forced so the pass finishes the document.
+      mathFitResizeDirty = mathFitWasForced;
+    } else {
+      /*
+       * A trigger that arrived while this pass ran is owed one follow-up forced
+       * pass, unless this pass was itself that follow-up: then the burst is over
+       * and chaining would defeat the point. That bounds a burst to two fits per
+       * display no matter how many events land in it.
+       */
+      const owed = mathFitTriggersAbsorbed > 0 && !mathFitWasRearm;
+      mathFitResizeDirty = owed;
+      mathFitRearmed = owed;
+      mathFitTriggersAbsorbed = 0;
+    }
 
     if (html) {
       html.setAttribute(
@@ -8567,6 +10003,7 @@ code.aistudio-prose-code-repaired {
       diagRepair(isLastTurn, repaired);
 
       if (repaired > 0) {
+        mathFitResumeValid = false;
         mathFitDirty = true;
         repairedThisScan += repaired;
         repairedTotal += repaired;
@@ -8859,6 +10296,18 @@ code.aistudio-prose-code-repaired {
     const groups = new Map();
     const ordered = [];
     for (const mutation of mutations) {
+      if (r4Enabled && r4OwnRecord(mutation)) continue;
+      /*
+       * Our own math-fit writes arrive here because `class` and `style` are observed.
+       * They are not content changes, and letting them through re-armed math fit from
+       * the pass that had just finished it - the loop that turned one font load into
+       * 169 self-armed scans per run on chat B. A real AI Studio re-render arrives as
+       * a childList record on the display, which still runs.
+       */
+      if (mutation.type === 'attributes' &&
+          isOwnMathFitWrite(elementOf(mutation.target), mutation.attributeName)) {
+        continue;
+      }
       if (mutation.type === 'attributes') {
         ordered.push(mutation);
         continue;
@@ -8927,8 +10376,14 @@ code.aistudio-prose-code-repaired {
         displayMemo.set(element, closest(element, '.katex-display, ms-katex.display'));
       }
       const display = displayMemo.get(element);
+      /*
+       * Own math-fit writes never reach this loop: the record was dropped where the
+       * batch was grouped, so a refit cannot invalidate itself.
+       */
       if (display) {
         mathFitCache.delete(display);
+        // A content change inside the display can change its natural width without replacing the KaTeX root.
+        if (mutation.type !== 'attributes') mathFitMeasured.delete(display);
         pendingMathInvalidation.add(display);
       }
       if (knownRoot) {
@@ -8981,6 +10436,8 @@ code.aistudio-prose-code-repaired {
     if (controlChanged) generatingDirty = true;
     if (changed) {
       rootsGeneration += 1;
+      // New content means the candidate list moved: restart at the head.
+      mathFitResumeValid = false;
       mathFitDirty = true;
       scrollViewportDirty = true;
       // Stop -> Run should not wait behind an idle callback. Keep token-stream
@@ -9493,6 +10950,7 @@ code.aistudio-prose-code-repaired {
     diagApplyHash();
     window.addEventListener('hashchange', diagApplyHash, { passive: true });
     installStyle();
+    r4Boot();
     installObserver();
     const notePromptActivity = (event) => {
       if (!promptEditorFor(event.target)) return;
@@ -9509,8 +10967,11 @@ code.aistudio-prose-code-repaired {
     if (promptEditorFor(document.activeElement)) lastPromptActivity = Date.now();
     if (ENABLE_SAFE_OUTPUT_REPAIR && ENABLE_LIVE_EMPHASIS && !liveEmphasisController) {
       liveEmphasisController = createLiveEmphasisController({
-        getRoot: () => Array.from(document.querySelectorAll(MODEL_TURN_SELECTOR)).reverse()
-          .find(root => !closest(root, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',.thought-activity-host')) || null,
+        getRoot: () => {
+          const root = Array.from(document.querySelectorAll(MODEL_TURN_SELECTOR)).reverse()
+            .find(root => !closest(root, USER_SELECTOR + ',' + PROMPT_EDITOR_SELECTOR + ',.thought-activity-host')) || null;
+          return root && r4Covers(root) ? null : root;
+        },
         parse: findMatches,
         active: generating,
         typing: promptEditorActive
@@ -9528,11 +10989,14 @@ code.aistudio-prose-code-repaired {
             continue;
           }
           const width = Math.round(entry.contentRect.width);
+          // A collapsed display (R4 hides the native children of a mirrored leaf) reports 0:
+          // keep the last real width, so 322 -> 0 -> 322 is no change and 322 -> 0 -> 280 is one.
+          if (!width) continue;
           const previous = observedMathWidths.get(display);
           observedMathWidths.set(display, width);
-          // Height changes caused by fitting must not create resize loops.
           if (previous === undefined || previous === width) continue;
           mathFitCache.delete(display);
+          mathFitMeasured.delete(display);
           pendingMathInvalidation.add(display);
           changed = true;
         }
@@ -9545,7 +11009,13 @@ code.aistudio-prose-code-repaired {
     schedule(250);
 
     document.fonts?.addEventListener('loadingdone', () => {
-      mathFitResizeDirty = true;
+      /*
+       * A font load can change glyph metrics, so it invalidates every recorded
+       * measurement, not only the checked markers: the reuse path compares the
+       * epoch, which is what lets a repeated pass skip its writes.
+       */
+      mathFontEpoch += 1;
+      requestMathFitRefit();
       if (!promptEditorActive()) schedule(150);
     });
 
@@ -9559,7 +11029,7 @@ code.aistudio-prose-code-repaired {
       'pageshow',
       () => {
         installStyle();
-        mathFitResizeDirty = true;
+        requestMathFitRefit();
         scrollViewportDirty = true;
         schedule(150);
       },
@@ -9571,7 +11041,7 @@ code.aistudio-prose-code-repaired {
       () => {
         window.setTimeout(() => {
           installStyle();
-          mathFitResizeDirty = true;
+          requestMathFitRefit();
           schedule(150);
         }, 150);
       },
@@ -9599,6 +11069,9 @@ code.aistudio-prose-code-repaired {
       const now = schedulerNow();
       lastScrollAt = now;
       userScrollUntil = now + USER_SCROLL_HOLD_MS;
+      // Scrolling does not create mutations for leaves already waiting in the
+      // queue, so nothing else would re-check them against the new viewport.
+      r4RequestPaintFlush();
     };
     const noteIntent = (event) => {
       if (event.type === 'touchstart' || event.type === 'pointerdown') pointerHeld = true;
@@ -9606,8 +11079,10 @@ code.aistudio-prose-code-repaired {
       userScrollUntil = schedulerNow() + USER_SCROLL_HOLD_MS;
     };
     document.addEventListener('scroll', () => {
-      if (pointerHeld || schedulerNow() < userScrollUntil) lastScrollAt = schedulerNow();
-      else diagScrollIgnored();
+      if (pointerHeld || schedulerNow() < userScrollUntil) {
+        lastScrollAt = schedulerNow();
+        r4RequestPaintFlush();
+      } else diagScrollIgnored();
     }, { capture: true, passive: true });
     document.addEventListener('wheel', noteScroll, { capture: true, passive: true });
     document.addEventListener('touchmove', noteScroll, { capture: true, passive: true });
@@ -9618,7 +11093,7 @@ code.aistudio-prose-code-repaired {
     window.addEventListener(
       'resize',
       () => {
-        mathFitResizeDirty = true;
+        requestMathFitRefit();
         scrollViewportDirty = true;
 
         if (!promptEditorActive()) {
@@ -9631,7 +11106,7 @@ code.aistudio-prose-code-repaired {
     window.addEventListener(
       'orientationchange',
       () => {
-        mathFitResizeDirty = true;
+        requestMathFitRefit();
         scrollViewportDirty = true;
 
         if (!promptEditorActive()) {
@@ -9646,7 +11121,7 @@ code.aistudio-prose-code-repaired {
       () => {
         if (!document.hidden) {
           installStyle();
-          mathFitResizeDirty = true;
+          requestMathFitRefit();
           scrollViewportDirty = true;
           schedule(150);
         }

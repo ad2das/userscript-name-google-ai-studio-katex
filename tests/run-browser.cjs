@@ -44,6 +44,16 @@ const run = async () => {
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('italic-quote-note-browser.test.js');
     if (process.argv.includes('--scroll-intent')) suites.splice(0, suites.length, 'scroll-intent-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('scroll-intent-browser.test.js');
+    if (process.argv.includes('--math-fit-force')) suites.splice(0, suites.length, 'math-fit-force-browser.test.js');
+    else if (process.argv.includes('--r4-flash')) suites.splice(0, suites.length, 'r4-flash-browser.test.js');
+    else if (process.argv.includes('--r4-mirror')) suites.splice(0, suites.length, 'r4-mirror-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('r4-mirror-browser.test.js');
+    if (!process.argv.includes('--r4-mirror') && !process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) {
+      suites.push('math-fit-force-browser.test.js');
+      suites.push('r4-flash-browser.test.js');
+    }
+    if (process.argv.includes('--r4-residual')) suites.splice(0, suites.length, 'r4-residual-browser.test.js');
+    else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('r4-residual-browser.test.js');
     if (process.argv.includes('--diag')) suites.splice(0, suites.length, 'diag-browser.test.js');
     else if (!process.argv.some(arg => arg.startsWith('--') && arg !== '--mobile')) suites.push('diag-browser.test.js');
     for (const suite of suites) {

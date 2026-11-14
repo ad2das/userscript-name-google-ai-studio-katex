@@ -73,11 +73,34 @@ async (page) => {
       p4.textContent === '(※ 원문 수치 대신, "원가에 25%의 이익을 가산하였다."라고 가정한 추가 비교입니다.)다음 줄.';
 
     // 5. Shapes that must stay untouched.
-    const invalid = {
+    // W-R4C4: quotes are ordinary text, so their variants repair; text that
+    // follows the native tail stays outside the em instead of blocking it.
+    const repairedVariants = {
       noQuote: q1.replace('*"20×2', '*20×2'),
       unclosedQuote: q1.replace('은 얼마인가?"', '은 얼마인가?'),
       mismatchedQuote: q1.replace('*"20×2', '*“20×2'),
-      trailingText: '<ms-cmark-node>' + A + span('*"20×2년도에 인식할 **손상차손(당기비용)*') + A + tailOf('은 얼마인가?"') + A + span(' 라고 물었다.') + A + '</ms-cmark-node>',
+      trailingText: '<ms-cmark-node>' + A + span('*"20×2년도에 인식할 **손상차손(당기비용)*') + A + tailOf('은 얼마인가?"') + A + span(' 라고 물었다.') + A + '</ms-cmark-node>'
+    };
+    checks.variantsRepaired = Object.entries(repairedVariants).every(([id, html]) => {
+      const node = make('ok-' + id, html);
+      const tailNode = node.querySelector('span[style]');
+      __note.repairRoot(node);
+      const em = node.querySelector('em[data-aistudio-note-tail]');
+      const once = node.innerHTML;
+      __note.repairRoot(node);
+      return !!em?.querySelector('strong') &&
+        em.querySelector('strong').textContent === '손상차손(당기비용)' &&
+        em.nextElementSibling === tailNode &&
+        !node.textContent.includes('*') &&
+        once === node.innerHTML;
+    });
+    checks.trailingTextOutside = (() => {
+      const node = document.getElementById('ok-trailingText');
+      const tailNode = node.querySelector('span[style]');
+      const em = node.querySelector('em[data-aistudio-note-tail]');
+      return !!em && em.nextElementSibling === tailNode && tailNode.nextElementSibling?.textContent === ' 라고 물었다.';
+    })();
+    const invalid = {
       starInTail: q1.replace('은 얼마인가?"', '은 *얼마인가?"'),
       twoBoldRuns: q1.replace('인식할 **손상차손', '인식할 **기말** **손상차손'),
       notItalicTail: q1.replace('style="font-style: italic;" ', ''),

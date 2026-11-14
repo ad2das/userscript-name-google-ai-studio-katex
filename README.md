@@ -12,6 +12,15 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.33 stops raw `**`, `*` and `$` from flashing while you scroll. AI Studio
+  re-creates the turns on screen as you scroll, and the script used to repair
+  them after they were painted. Now AI Studio's own nodes stay untouched and
+  hidden, and a repaired copy of each paragraph, heading and table cell is
+  shown. Leaves in view are built before the next paint. On two long
+  conversations at phone size, frames showing a raw marker during scrolling
+  dropped from 19-53 per run to 0 in every run. Scan CPU is about half of
+  1.13.32's, and no leaf looks worse than in 1.13.32. Known limit: one frame on
+  one conversation is about 80 ms longer. See `AUDIT-1.13.33.md`.
 - 1.13.32 stops repairs from stalling after a generation. Repairs pause for
   140 ms after every scroll so they never fight a user's scroll, but scroll
   events nobody made (scroll anchoring after the script's own repairs,

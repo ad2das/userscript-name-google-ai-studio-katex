@@ -22,7 +22,22 @@ async (page) => {
       identity: nodes.every(n => n.isConnected) && p.querySelector('em').nextElementSibling === tail && clicks === 1,
       idempotent: p.innerHTML === before
     };
-    const invalid = [markup.replace('※', '일반'), markup.replace('font-style:italic', ''), markup.replace('비교입니다.)','비교입니다.'), markup.replace('<span>라고', '<span role="button">라고'), markup.replace('<span>*(', '<span tabindex="0">*('), markup.replace('25%', '25*%'), '<code>' + markup + '</code>', '<a>' + markup + '</a>'];
+    // W-R4C4: the shape (one `*` run, one `**` run, native italic tail, no
+    // control/code/link) is the condition; the note marker and the closing
+    // parenthesis are ordinary text, so those two variants repair too.
+    const repairedVariants = { noMarker: markup.replace('※', '일반'), noCloseParen: markup.replace('비교입니다.)', '비교입니다.') };
+    checks.variantsRepaired = Object.entries(repairedVariants).every(([id, html]) => {
+      const node = make('ok-' + id, html);
+      __note.repairRoot(node);
+      const em = node.querySelector('em[data-aistudio-note-tail]');
+      const once = node.innerHTML;
+      __note.repairRoot(node);
+      return !!em?.querySelector('strong') &&
+        em.querySelector('strong').textContent === '"원가에 25%의 이익을 가산하였다."' &&
+        !node.textContent.includes('*') &&
+        once === node.innerHTML;
+    });
+    const invalid = [markup.replace('font-style:italic', ''), markup.replace('<span>라고', '<span role="button">라고'), markup.replace('<span>*(', '<span tabindex="0">*('), markup.replace('25%', '25*%'), '<code>' + markup + '</code>', '<a>' + markup + '</a>'];
     checks.excluded = invalid.every((html, i) => { const bad = make('bad' + i, html); const before = bad.innerHTML; __note.repairRoot(bad); return bad.innerHTML === before; });
     const user = make('user-note', markup, document.getElementById('user')); const userBefore = user.innerHTML; __note.repairRoot(user); checks.user = user.innerHTML === userBefore;
     const live = {
@@ -101,10 +116,22 @@ async (page) => {
     const noBreakBefore = noBreak.innerHTML;
     __note.repairRoot(noBreak);
     checks.hNoBreakRejected = noBreak.innerHTML === noBreakBefore && !noBreak.querySelector('em');
+    // W-R4C4 decision 2: text after the native tail stays outside the em; it no
+    // longer blocks the shape.
     const trailing = hostFor('h-trailing', prefixH + noteH + '<span>끝.</span>');
-    const trailingBefore = trailing.innerHTML;
+    const trailingHost = trailing.firstElementChild;
+    const trailingTail = trailingHost.lastElementChild.previousElementSibling;
     __note.repairRoot(trailing);
-    checks.hTrailingRejected = trailing.innerHTML === trailingBefore && !trailing.querySelector('em');
+    const trailingOnce = trailing.innerHTML;
+    __note.repairRoot(trailing);
+    checks.hTrailingRepaired = (() => {
+      const em = trailingHost.querySelector('em[data-aistudio-note-tail]');
+      return !!em && em.querySelector('strong')?.textContent === '₩420,427' &&
+        em.nextElementSibling === trailingTail &&
+        trailingTail.nextElementSibling?.textContent === '끝.' &&
+        !trailing.textContent.includes('*') &&
+        trailingOnce === trailing.innerHTML;
+    })();
     globalThis.__noteMarkup = markup;
     return { checks };
   });

@@ -190,6 +190,11 @@ const context = {
     },
     documentElement: { setAttribute() {} },
     getElementById() { return null; },
+    // The script queries single elements as well; without this every call into
+    // generating() / fitDisplayMath threw instead of exercising the code.
+    querySelector(selector) {
+      return this.querySelectorAll(selector)[0] || null;
+    },
     querySelectorAll() {
       return [];
     }
@@ -217,6 +222,15 @@ vm.runInNewContext(instrumented, context, { filename: scriptPath });
 const api = context.__userscriptTest;
 assert.ok(api);
 assert.equal(api.availableKatex().version, '0.18.1');
+// AI Studio assigns its own KaTeX to globalThis.katex mid-stream (0.19.0 observed live on
+// 2026-11-13). The engine captured at load must survive that, or every repair silently no-ops.
+const pinned = api.availableKatex();
+context.katex = { version: '0.19.0', render() {} };
+assert.equal(api.availableKatex(), pinned, 'the loaded engine must stay pinned');
+assert.equal(api.availableKatex().version, '0.18.1');
+context.katex = pinned;
+// Same engine object, not a copy: rendering after the override must still be 0.18.1's.
+assert.equal(context.katex, pinned, 'engine must be restored to the captured object');
 const builtCss = api.getCssText();
 assert.ok(builtCss.includes(':where('), 'compact :where() scope must remain');
 assert.ok(builtCss.includes(':not([data-aistudio-island])'), 'island marker guard must remain in the built sheet');
@@ -312,7 +326,33 @@ assert.deepEqual(
   ]
 );
 assert.equal(api.findMatches('2 * 3 * 4와 *.js 파일').length, 0);
+// W-R4C2: a single `*…*` pair is repaired only when the native parser was
+// blocked by CommonMark flanking, i.e. the closer is glued to a following
+// letter/digit (`*이탤릭(다)*이`) or the opener is glued to a preceding one
+// (`단어*(주석)*이`). Stars that survive AI Studio's parser are stars the
+// author escaped or wrote literally (`(*)`, `*참고: …*`), so a pair the native
+// parser already renders as italic must stay raw.
 assert.equal(api.findMatches('일반 *기울임*은 보수적으로 유지').length, 0);
+assert.equal(api.findMatches('(*) 표시와 (*) 표시').length, 0);
+assert.equal(api.findMatches('별표(*)는 곱하기, 별표(*)는').length, 0);
+assert.equal(api.findMatches('*참고: 아래 표는 예시입니다*').length, 0);
+assert.equal(api.findMatches('A *B* C').length, 0);
+assert.equal(api.findMatches('*주의* 문구').length, 0);
+assert.equal(api.findMatches('주석*은 여기*').length, 0);
+assert.equal(api.findMatches('가격 * 수량 * 단가').length, 0);
+assert.equal(api.findMatches('*이탤릭(다)*이').length, 1);
+assert.equal(api.findMatches('*이탤릭(다)*이')[0].inner, '이탤릭(다)');
+assert.equal(api.findMatches('단어*(주석)*이').length, 1);
+assert.equal(api.findMatches('단어*(주석)*이')[0].inner, '(주석)');
+assert.equal(api.findMatches('a*b*c').length, 0);
+assert.equal(api.findMatches('곱셈은 * 3 * 4 입니다').length, 0);
+// W-R4C4: only an opening bracket or quote glued to a word opens a pair
+// (`*이탤릭(다)*이`, `단어*(주석)*이`); `%` in `25*%`, `+` in `x*+y` and every
+// other symbol are ordinary content, and an unbalanced bracket or quote inside
+// the inner is prose punctuation, not a pair boundary.
+assert.equal(api.findMatches('원가에 25*%의 이익을 가산하였다."*라고').length, 0);
+assert.equal(api.findMatches('x*+y*z').length, 0);
+assert.equal(api.findMatches('절반*%로*표시').length, 0);
 
 const reportedProseCode =
   '이미 자산으로 잡혀있는 브랜드라도 **"취득 후의 지출(후속지출)"은 ' +
