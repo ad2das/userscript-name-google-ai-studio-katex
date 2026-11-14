@@ -127,6 +127,90 @@ async (page) => {
     tail1.querySelector('span').textContent = '새 일반 문장';
     __note.repairRoot(p1);
     checks.q1Cleanup = !host1.querySelector('em[data-aistudio-note-tail]') && p1.textContent.includes('새 일반 문장');
+
+    // 8. W-R4L: the two live chat A shapes the stolen-star rule declined.
+    //    (a) the lead is only the opening quote: `*"**B*` + italic tail;
+    //    (b) the native italic tail carries its own native bold.
+    const boldTailOf = (text, bold) => '<span style="font-style: italic;" class="ng-star-inserted"><ms-cmark-node>' + A +
+      '<span class="ng-star-inserted">' + text + '</span>' +
+      '<strong class="ng-star-inserted"><ms-cmark-node>' + bold + '</ms-cmark-node></strong>' +
+      '</ms-cmark-node></span>';
+    // (a) quote-only lead, made-up accounting-style text, inline-code inside B.
+    const qLeadQuote = '<ms-cmark-node>' + A + span('*"**가나다(구매자)*') + A +
+      boldTailOf('은 개설 비용 ', '₩12,000') + A + '</ms-cmark-node>';
+    const qLeadQuoteNode = make('l1', qLeadQuote);
+    const l1Tail = qLeadQuoteNode.querySelector('span[style]');
+    __note.repairRoot(qLeadQuoteNode);
+    const l1Em = qLeadQuoteNode.querySelector('em[data-aistudio-note-tail]');
+    checks.l1Text = qLeadQuoteNode.textContent === '"가나다(구매자)은 개설 비용 ₩12,000';
+    checks.l1NoStars = !qLeadQuoteNode.textContent.includes('*');
+    checks.l1Em = l1Em?.textContent === '"가나다(구매자)';
+    checks.l1Bold = l1Em?.querySelector('strong')?.textContent === '가나다(구매자)';
+    checks.l1TailKept = !!l1Em && l1Em.nextElementSibling === l1Tail &&
+      l1Tail.querySelector('strong')?.textContent === '₩12,000';
+    checks.l1Italic = !!l1Em && getComputedStyle(l1Em).fontStyle === 'italic';
+
+    // (b) lead carries text, one inline-code atom sits inside B, the tail holds a
+    //     native strong that spans an inline-code atom too.
+    const qBoldTail = '<ms-cmark-node>' + A + span('*"기말 현재의 **예상 금액은 ') + A +
+      '<span class="inline-code ng-star-inserted">₩180,000</span>' + A + span('*') + A +
+      '<span style="font-style: italic;" class="ng-star-inserted"><ms-cmark-node>' + A +
+      '<span class="ng-star-inserted">이고, 이 중 </span>' +
+      '<strong class="ng-star-inserted"><ms-cmark-node><span class="ng-star-inserted">60%(</span>' +
+      '<span class="inline-code ng-star-inserted">= ₩108,000</span>' +
+      '<span class="ng-star-inserted">)를 보증</span></ms-cmark-node></strong>' +
+      '<span class="ng-star-inserted">한다."</span></ms-cmark-node></span>' + A + '</ms-cmark-node>';
+    const qBoldTailNode = make('l2', qBoldTail);
+    const l2Tail = qBoldTailNode.querySelectorAll('span[style]')[0];
+    __note.repairRoot(qBoldTailNode);
+    const l2Em = qBoldTailNode.querySelector('em[data-aistudio-note-tail]');
+    checks.l2Text = qBoldTailNode.textContent === '"기말 현재의 예상 금액은 ₩180,000이고, 이 중 60%(= ₩108,000)를 보증한다."';
+    checks.l2NoStars = !qBoldTailNode.textContent.includes('*');
+    checks.l2Bold = l2Em?.querySelector('strong')?.textContent === '예상 금액은 ₩180,000';
+    checks.l2Em = l2Em?.textContent === '"기말 현재의 예상 금액은 ₩180,000';
+    checks.l2TailKept = !!l2Em && l2Em.nextElementSibling === l2Tail &&
+      l2Tail.querySelector('strong')?.textContent === '60%(= ₩108,000)를 보증';
+
+    // MUST-stay for (a): the quote lead may only be one or two opening quotes.
+    const leadMisfires = {
+      // an ASCII apostrophe is never a quote for this rule
+      apostropheLead: qLeadQuote.replace('*"**', "*'**"),
+      // three opening marks are not a quote lead
+      tripleLead: qLeadQuote.replace('*"**', '*"“‘**'),
+      // the quote lead with a non-italic tail is unchanged
+      quoteNoItalic: qLeadQuote.replace('style="font-style: italic;" ', '')
+    };
+    checks.leadMisfires = Object.entries(leadMisfires).filter(([mid, html]) => {
+      const node = make('lm-' + mid, html);
+      const before = node.innerHTML;
+      __note.repairRoot(node);
+      return node.innerHTML !== before;
+    }).map(([mid]) => mid);
+    checks.leadMisfiresOk = checks.leadMisfires.length === 0;
+
+    // MUST-stay for (b): a tail whose bold contains a control or a link, and a tail
+    // that is not italic at all.
+    const tailMisfires = {
+      strongWithControl: qBoldTail.replace('<strong class="ng-star-inserted"><ms-cmark-node>',
+        '<strong class="ng-star-inserted" role="button"><ms-cmark-node>'),
+      linkInTail: qBoldTail.replace('<span class="ng-star-inserted">한다."</span>',
+        '<a href="https://example.com/"><span class="ng-star-inserted">한다."</span></a>'),
+      boldTailNoItalic: qBoldTail.replace('style="font-style: italic;" ', '')
+    };
+    checks.tailMisfires = Object.entries(tailMisfires).filter(([mid, html]) => {
+      const node = make('tm-' + mid, html);
+      const before = node.innerHTML;
+      __note.repairRoot(node);
+      return node.innerHTML !== before;
+    }).map(([mid]) => mid);
+    checks.tailMisfiresOk = checks.tailMisfires.length === 0;
+
+    // Both repairs are idempotent: a second pass changes nothing.
+    const l1Once = qLeadQuoteNode.innerHTML, l2Once = qBoldTailNode.innerHTML;
+    __note.repairRoot(qLeadQuoteNode);
+    __note.repairRoot(qBoldTailNode);
+    checks.l1Idempotent = l1Once === qLeadQuoteNode.innerHTML;
+    checks.l2Idempotent = l2Once === qBoldTailNode.innerHTML;
     return { checks };
   });
 

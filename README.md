@@ -12,6 +12,14 @@ Violentmonkey should detect the `.user.js` file and show an install screen.
 
 ## What It Fixes
 
+- 1.13.34 renders a markdown table that was written right after a line of
+  prose. AI Studio drops that paragraph's line breaks, so the table showed as
+  one line of raw `|` text. It also repairs quoted notes that open with the quote
+  mark, as in `*"**갑(구매자)**은 … 없다."*`. Large re-renders now cost less inside
+  the frame: on a fixture re-render of 40,962 records, the mirror driver's callback
+  went from 82 ms to 13 ms and the live-preview observer's from 65 ms to 10 ms.
+  Validated on fixtures and a saved conversation, not live. See
+  `AUDIT-1.13.34.md`.
 - 1.13.33 stops raw `**`, `*` and `$` from flashing while you scroll. AI Studio
   re-creates the turns on screen as you scroll, and the script used to repair
   them after they were painted. Now AI Studio's own nodes stay untouched and

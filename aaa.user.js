@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio KaTeX/Markdown Display Fix Mobile (Hybrid Safe)
 // @namespace    https://aistudio.google.com/
-// @version      1.13.33
+// @version      1.13.34
 // @description  Isolated, generation-safe KaTeX and Markdown display repairs for Google AI Studio.
 // @author       Codex
 // @match        https://aistudio.google.com/*
@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.13.33';
+  const VERSION = '1.13.34';
   const STYLE_ID = 'aistudio-mobile-safe-11313-style';
   const VERSION_ATTR = 'data-aistudio-mobile-safe-11313';
   const KATEX_VERSION = '0.18.1';
@@ -1011,6 +1011,7 @@ code.aistudio-ascii-tree-repaired {
 }
 @SCOPE@ .aistudio-raw-table-visual { display: block !important; max-width: 100% !important; }
 @SCOPE@ .aistudio-raw-table-caption { display: block !important; margin-bottom: 12px !important; }
+@SCOPE@ .aistudio-raw-table-foot { display: block !important; margin-top: 12px !important; }
 @SCOPE@ .aistudio-raw-table-scroll { display: block !important; max-width: 100% !important; overflow-x: auto !important; }
 @SCOPE@ .aistudio-raw-table-grid { display: table !important; width: max-content !important; min-width: 100% !important; border-collapse: collapse !important; }
 @SCOPE@ .aistudio-raw-table-row { display: table-row !important; }
@@ -5767,7 +5768,10 @@ code.aistudio-prose-code-repaired {
       hasRepairableText(rootText) ||
       /\\\d/.test(rootText) ||
       (/\d원/.test(rootText) && Array.from(root?.querySelectorAll('strong:not(.aistudio-amount-token), b:not(.aistudio-amount-token)') || []).some(isAmountToken)) ||
-      (/\|\s*:?-{3,}:?\s*\|/.test(rootText) && !!root?.querySelector('br')) ||
+      // A raw table keeps its row breaks only while the renderer keeps the paragraph's newlines. A
+      // table glued to prose loses them and arrives as one text run: prose, header, delimiter and
+      // every row in a single line. The delimiter row is still there, so the pass must be reached.
+      /\|\s*:?-{3,}:?\s*\|/.test(rootText) ||
       ((/p\.\s*\d{2,10}(?:\s*\/\s*PDF\s*(?:p\.\s*)?\d{2,10}|:[^\n]{1,240}(?:\bp\.|\bLevel)\s*\d{1,10})/i.test(rootText) ||
         /\d{1,5}p\s*\d{1,5}p\s*\([^\n()]{1,240}\)\s*(?:와|과)\s*\d{1,5}p\s*\d{1,5}p/i.test(rootText) ||
         /\d{2,10}번[\s\S]{1,500}(?:이어서|다음)\s*(?:\*\*)?\d{2,10}번/.test(rootText)) && root?.querySelector('s, del')) ||
@@ -5779,6 +5783,91 @@ code.aistudio-prose-code-repaired {
       Array.from(root?.querySelectorAll?.('em[data-aistudio-note-tail]') || []).some(em =>
         (em.nextElementSibling?.textContent || '') !== em.getAttribute('data-aistudio-note-tail'))
     );
+  }
+
+  // A table that the renderer glued to the end of its paragraph loses every row break: the prose,
+  // the header, the delimiter row and all body rows arrive as one text run inside a single
+  // ms-cmark-node. No line then starts with a pipe, so the line-based reader above cannot find a
+  // table start. Recover it from the pipe runs instead, keeping the prose ahead of the header (and
+  // any prose after the last row) as prose around the grid.
+  function projectGluedRawTable(lines, texts) {
+    if (!lines.length) return null;
+    const last = lines.length - 1;
+    const tokens = [];
+    let current = [];
+    for (const item of lines[last]) {
+      // A pipe inside inline code is literal text, not a cell boundary.
+      if (item.char === '|' && !item.code) { tokens.push(current); current = []; }
+      else current.push(item);
+    }
+    tokens.push(current);
+    const read = token => token.map(item => item.char).join('').trim();
+    const blank = token => !token.some(item => !/\s/.test(item.char));
+    const delimiter = token => !token.some(item => item.code) && /^:?-{3,}:?$/.test(read(token));
+    const first = tokens.findIndex(delimiter);
+    if (first < 1) return null;
+    let columns = 0;
+    while (first + columns < tokens.length && delimiter(tokens[first + columns])) columns += 1;
+    if (columns < 2 || columns > 16) return null;
+    // `| h | h | | :-- | :-- |` leaves one empty run between the header and the delimiter row.
+    const headerEnd = first - 1;
+    const headerStart = headerEnd - columns;
+    if (headerStart < 0 || !blank(tokens[headerEnd])) return null;
+    // An empty header cell is a cell with no text, not the end of the header run; only a header
+    // with no text anywhere is unusable.
+    const header = tokens.slice(headerStart, headerEnd);
+    if (header.length !== columns || header.every(blank)) return null;
+    const trim = token => {
+      let start = 0, end = token.length;
+      while (start < end && /\s/.test(token[start].char)) start += 1;
+      while (end > start && /\s/.test(token[end - 1].char)) end -= 1;
+      return token.slice(start, end);
+    };
+    const rows = [header.map(trim)];
+    let index = first + columns;
+    if (index < tokens.length) {
+      if (!blank(tokens[index])) return null;
+      index += 1;
+    }
+    while (index < tokens.length) {
+      // A row is exactly `columns` runs. A blank run inside the row is an empty cell; only a row
+      // whose cells are all blank ends the grid, and the rest of the runs become the foot.
+      const row = tokens.slice(index, index + columns);
+      if (row.length !== columns || row.every(blank)) break;
+      rows.push(row.map(trim));
+      index += columns;
+      if (index >= tokens.length) break;
+      if (!blank(tokens[index])) break;
+      index += 1;
+    }
+    if (rows.length < 2) return null;
+    const caption = [];
+    const literal = text => { for (const char of text) caption.push({ char, bold: false, italic: false, code: false }); };
+    for (let line = 0; line < last; line += 1) {
+      if (caption.length) literal('\n');
+      caption.push(...lines[line]);
+    }
+    const prose = tokens.slice(0, headerStart);
+    prose.forEach((token, position) => {
+      if (!token.length) return;
+      if (caption.length && position) literal(' | ');
+      else if (caption.length) literal(' ');
+      caption.push(...token);
+    });
+    while (caption.length && /\s/.test(caption[0].char)) caption.shift();
+    while (caption.length && /\s/.test(caption[caption.length - 1].char)) caption.pop();
+    if (!caption.length || caption.length > 1200) return null;
+    const foot = [];
+    for (const token of tokens.slice(index)) {
+      if (blank(token)) continue;
+      if (foot.length) foot.push({ char: ' ', bold: false, italic: false, code: false }, { char: '|', bold: false, italic: false, code: false }, { char: ' ', bold: false, italic: false, code: false });
+      foot.push(...token);
+    }
+    while (foot.length && /\s/.test(foot[0].char)) foot.shift();
+    const separators = tokens.slice(first, first + columns).map(read);
+    return { caption, rows, foot: foot.length ? foot : null,
+      align: separators.map(cell => cell.endsWith(':') ? (cell.startsWith(':') ? 'center' : 'right') : 'left'),
+      text: texts.join('\n') };
   }
 
   function projectRawTable(source) {
@@ -5815,7 +5904,8 @@ code.aistudio-prose-code-repaired {
     if (!visit(source)) return null;
     const texts = lines.map(line => line.map(item => item.char).join(''));
     const start = texts.findIndex(line => /^\s*\|/.test(line));
-    if (start < 0 || start > 1 || (start && texts[0].length > 240)) return null;
+    if (start < 0) return projectGluedRawTable(lines, texts);
+    if (start > 1 || (start && texts[0].length > 240)) return null;
     while (texts.length && !texts[texts.length - 1].trim()) { texts.pop(); lines.pop(); }
     if (texts.length - start < 3 || texts.length - start > 52) return null;
     const merged = [];
@@ -5919,6 +6009,12 @@ code.aistudio-prose-code-repaired {
         }); grid.append(row);
       });
       scroller.append(grid); visual.append(scroller);
+      if (projection.foot) {
+        const foot = document.createElement('span');
+        foot.className = 'aistudio-raw-table-foot';
+        foot.setAttribute('aria-hidden', 'true');
+        appendRuns(foot, projection.foot); visual.append(foot);
+      }
       source.classList.add('aistudio-raw-table-source');
       paragraph.classList.add('aistudio-raw-table-host');
       paragraph.append(visual);
@@ -7058,7 +7154,10 @@ code.aistudio-prose-code-repaired {
   }
 
   // A native italic part that may carry the closing half of a note: AI Studio's
-  // own font-style span, star-free, without an interactive element inside.
+  // own font-style span, star-free, without an interactive element inside. A
+  // native <strong>/<b> inside it is part of the note's own text (`*"A **B*` may
+  // be followed by an italic run that carries its own bold), so it is allowed;
+  // the tail is never moved into the repaired em.
   function isItalicTailNode(node) {
     if (node.nodeType !== 1 ||
         node.classList.contains('aistudio-md-repaired') ||
@@ -7068,7 +7167,7 @@ code.aistudio-prose-code-repaired {
     if (!text || text.includes('*') || text.length > 600) return false;
     const inner = Array.from(node.querySelectorAll('*'));
     return inner.length <= 64 &&
-      inner.every(n => /^(SPAN|MS-CMARK-NODE)$/.test(n.tagName) && !n.matches('[role],[tabindex],[contenteditable]'));
+      inner.every(n => /^(SPAN|MS-CMARK-NODE|STRONG|B)$/.test(n.tagName) && !n.matches('[role],[tabindex],[contenteditable]'));
   }
 
   // A shape nested in a code block, a link or an interactive control is content
@@ -7104,7 +7203,11 @@ code.aistudio-prose-code-repaired {
     if (boldOpen < 2 || projected.indexOf('**', boldOpen + 1) >= 0) return null;
     const leadText = projected.slice(1, boldOpen);
     const boldText = projected.slice(boldOpen + 2, length - 1);
-    if (!/\p{L}/u.test(leadText)) return null;
+    // A quoted note opens with its quote mark: `*"**B*` carries no letter in A, but
+    // the quote is prose punctuation in front of the bold, not a markdown
+    // construct, so up to two opening quotes are accepted as the whole lead. The
+    // ASCII apostrophe is never counted (W-R4C4 decision).
+    if (!/\p{L}/u.test(leadText) && !/^["\u201C\u2018]{1,2}$/u.test(leadText)) return null;
     if (!boldText || boldText.length > 240 || /^\s|\s$/.test(boldText)) return null;
     const startCell = cells[boldOpen + 2];
     const endCell = cells[length - 2];
@@ -7691,11 +7794,69 @@ code.aistudio-prose-code-repaired {
       r4Debug.batches += 1; r4Debug.syncMsTotal += ms; r4Debug.syncMsMax = Math.max(r4Debug.syncMsMax, ms);
     }
   }
-  function r4OnMutations(records) {
-    if (!r4Enabled) return;
-    // Pages without an owned root must cost one query, not per-record work.
-    if (!document.querySelector(R4_ROOT_SELECTOR)) return;
-    const started = schedulerNow();
+  /*
+   * BULK-AWARE WALK (W-R4J). A re-create batch is one observer callback carrying 43k-68k records
+   * (measured chat A: childList 45129 / characterData 776 / attributes 1748 in a single callback).
+   * Walking that record list costs 120 ms of the task that also has to paint (attribution: final1
+   * r4OnMutations 122-123 ms inside the 583-608 ms max gap, 1.13.32 has none of it).
+   *
+   * Two facts make the per-record walk unnecessary for such a batch:
+   *   1. `leafOf(record.target)` can only return a leaf that already lives under an owned root,
+   *      and `leafOf` itself returns null for anything inside a mirror.
+   *   2. The added nodes of a childList record are either inside a leaf that #1 already reaches
+   *      through the record's own target (the parent), or they arrive as a whole new subtree.
+   *
+   * So for a bulk batch the work is collected from the leaves instead of from the records: the
+   * un-hosted leaves of the subtrees the batch added, split once by one rect each into in-view
+   * (built synchronously below) and off-screen (queued). That is O(leaves of the added subtree),
+   * not O(records). Below the threshold the exact per-record walk runs unchanged, which keeps small
+   * batches - the common case - byte-identical in behaviour and cost.
+   *
+   * The paint guarantee is unchanged: every in-view leaf is resolved and built before this callback
+   * returns, so it is mirrored in the paint that follows the mutation task.
+   */
+  const R4_BULK_RECORDS = 2000;
+  /*
+   * The bulk sweep's query. `[data-aisfix-host]` marks a leaf that already carries a mirror, so the
+   * query drops every already-built leaf in CSS and the JS gate below only sees leaves that can
+   * actually need work. The rest of `r4LeafOf`'s verdict (not inside a mirror, under an owned root,
+   * not inside an excluded container) stays in JS: `r4LeafOf` tests the leaf's PARENT against
+   * R4_LEAF_EXCLUDE_SELECTOR, which no leaf-level `:not()` reproduces exactly, and the fixture suite
+   * compares the two directly.
+   */
+  const R4_BULK_SELECTOR = R4_LEAF_SELECTOR + ':not([' + R4_HOST_ATTR + '])';
+  /*
+   * The subtrees a bulk batch added. A re-create is one subtree, so every record of the batch
+   * resolves into the same few added nodes, and the added nodes are what the sweep below can see:
+   * on chat B the batch is tens of records over a turn holding ~470 leaves, and sweeping the whole
+   * root re-queried and re-rected all of them on every batch (measured 32 over50 against the
+   * baseline's 23).
+   *
+   * The empty answer is meaningful and is no longer a guess. W-R4J sampled 24 spread-out records
+   * to name a common root when nothing was added, which is how a batch that only edited text in
+   * ANOTHER root lost that root entirely and left its mirror showing the old text (invariant I2).
+   * A batch with no added element is now walked exactly, synchronously, by the caller - the same
+   * per-record walk final1 ran, which cannot miss a record.
+   */
+  function r4BulkScopes(records) {
+    const scopes = new Set();
+    for (const record of records) {
+      if (record.type !== 'childList') continue;
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        const scope = closest(node, R4_ROOT_SELECTOR) || node;
+        if (scope.isConnected) scopes.add(scope);
+      }
+    }
+    return Array.from(scopes);
+  }
+  /*
+   * The exact per-record verdict. Unchanged from the pre-W-R4J walk; the bulk path above uses the
+   * leaf sweep for speed and then feeds these same records through this function in bounded slices,
+   * so a content edit on an already-mirrored leaf is still caught - just after the paint instead of
+   * inside the mutation task.
+   */
+  function r4WalkRecords(records) {
     const dirty = new Set();
     const memo = new Map();
     const leafOf = (node) => {
@@ -7731,6 +7892,138 @@ code.aistudio-prose-code-repaired {
       const leaf = leafOf(record.target);
       if (leaf) dirty.add(leaf);
     }
+    return dirty;
+  }
+  /*
+   * The deferred half of the bulk path.
+   *
+   * The sweep handles everything that arrives as a new subtree. What it cannot see is a record
+   * whose TARGET is an already-mirrored leaf and whose content changed in place (characterData, or
+   * an attribute write on a descendant): such a leaf keeps its `data-aisfix-host`, so the sweep's
+   * `:not([data-aisfix-host])` query never returns it, and without this pass its mirror would keep
+   * showing the old content until an unrelated scroll re-armed the scan.
+   *
+   * W-R4J re-checked only the already-mirrored leaves of the sweep's own scopes, which is exactly
+   * the set W-R4J's sampling could get wrong: a bulk callback that re-creates turn A and also edits
+   * a mirrored leaf in turn B never looked at B, so B's mirror stayed stale (invariant I2). This
+   * pass walks the batch's RECORDS instead - final1's per-record verdict, run after the paint in
+   * SCAN_BUDGET_MS slices - so no record is missed regardless of which root it points into.
+   *
+   * Two gates keep that from becoming the regression W-R4J rejected (deferring the full record walk
+   * re-processed leaves the sweep had already queued: 192 slice passes and 1695 ms of slice time,
+   * over50 21-24 -> 27-29):
+   *   - a leaf the sweep resolved for this same batch is already exact - built from the current DOM
+   *     for in-view leaves, or in `r4PendingSet` for the ones it queued - so it is skipped by
+   *     `covered` / `r4PendingSet` before any text is read;
+   *   - a leaf that does reach the check is only re-queued when its mirror is missing, its cached
+   *     verdict is missing or not ok, or the mirror was built from text that no longer matches
+   *     `r4NativeText(leaf)`.
+   * The added-subtree `querySelectorAll` that `r4WalkRecords` performs is deliberately absent: the
+   * sweep covered every added node, and those leaves are in `covered`.
+   */
+  const r4BulkBatches = [];
+  let r4BulkTimer = 0;
+  function r4QueueBulkStale(records, covered) {
+    if (!r4Enabled || !records.length) return;
+    // One batch is drained before the next; a batch that arrives mid-drain is appended, never
+    // merged, so its own records keep their own memo and coverage.
+    r4BulkBatches.push({ records, index: 0, memo: new Map(), covered: covered || null });
+    if (!r4BulkTimer) r4BulkTimer = window.setTimeout(r4DrainBulkStale, 0);
+  }
+  function r4DrainBulkStale() {
+    r4BulkTimer = 0;
+    if (!r4Enabled) { r4BulkBatches.length = 0; return; }
+    const started = schedulerNow();
+    const dirty = new Set();
+    while (r4BulkBatches.length && schedulerNow() - started < SCAN_BUDGET_MS) {
+      const batch = r4BulkBatches[0];
+      const records = batch.records;
+      const memo = batch.memo;
+      const covered = batch.covered;
+      while (batch.index < records.length) {
+        if (schedulerNow() - started >= SCAN_BUDGET_MS) break;
+        const element = elementOf(records[batch.index++].target);
+        if (!element) continue;
+        // Same memo as r4WalkRecords: one r4LeafOf verdict per distinct target element.
+        let leaf = memo.get(element);
+        if (leaf === undefined) { leaf = r4LeafOf(element); memo.set(element, leaf); }
+        if (!leaf || !leaf.isConnected) continue;
+        if (covered && covered.has(leaf)) continue;
+        if (r4PendingSet.has(leaf)) continue;
+        if (!r4Mirrors.has(leaf)) { dirty.add(leaf); continue; }
+        const cached = r4MirrorCache.get(leaf);
+        if (!cached || !cached.ok || cached.text !== r4NativeText(leaf)) dirty.add(leaf);
+      }
+      if (batch.index >= records.length) r4BulkBatches.shift();
+    }
+    if (dirty.size) r4Process(dirty, started);
+    if (r4BulkBatches.length) r4BulkTimer = window.setTimeout(r4DrainBulkStale, 0);
+  }
+  function r4OnMutations(records) {
+    if (!r4Enabled) return;
+    // Pages without an owned root must cost one query, not per-record work.
+    if (!document.querySelector(R4_ROOT_SELECTOR)) return;
+    const started = schedulerNow();
+    if (records.length >= R4_BULK_RECORDS) {
+      const scopes = r4BulkScopes(records);
+      if (!scopes.length) {
+        /*
+         * A bulk batch that added no element (characterData / attribute writes, possibly across
+         * several roots) has nothing to sweep. W-R4J sampled 24 records here and named one root,
+         * which silently dropped every other root the batch touched - a mirrored leaf in the
+         * dropped root kept showing its old text (I2). There is no cheap superset in this shape, so
+         * it runs final1's exact per-record walk, synchronously, exactly as it did before W-R4J.
+         */
+        const stale = r4WalkRecords(records);
+        if (stale.size) r4Process(stale, started);
+        r4Observer.takeRecords();
+        return;
+      }
+      /*
+       * Only the leaves that are in view need to exist before this task paints; everything else
+       * the batch un-hid is pre-existing debt that the queue and the scan's missed-leaf pass
+       * already own. Handing r4Process the in-view set alone is what keeps a bulk batch from
+       * queueing every off-screen leaf of the turn it just re-created: on chat A that queue grew
+       * to 681 entries and cost over50 4 -> 10 with the same max frame.
+       */
+      const height = window.innerHeight || 800;
+      const dirty = new Set();
+      const far = [];
+      /*
+       * Every leaf the sweep resolves is exact for this batch: the in-view ones are built from the
+       * current DOM here, and the off-screen ones are queued (`r4Enqueue` drops the old mirror, so
+       * they cannot show stale text either). The deferred record pass below therefore skips them -
+       * that is the gate that keeps it from re-processing the batch's own work, which is what made
+       * W-R4J reject a deferred walk (192 slice passes, 1695 ms).
+       */
+      const covered = new Set();
+      for (const scope of scopes) {
+        const leaves = scope.matches(R4_BULK_SELECTOR) ? [scope] : scope.querySelectorAll(R4_BULK_SELECTOR);
+        for (const leaf of leaves) {
+          if (r4LeafOf(leaf) !== leaf) continue;
+          covered.add(leaf);
+          const rect = leaf.getBoundingClientRect();
+          if (rect.bottom < 0 || rect.top > height) { far.push(leaf); continue; }
+          dirty.add(leaf);
+        }
+      }
+      /*
+       * Leaves outside the viewport still need a mirror - they are reached by the queue, not
+       * dropped. Queueing them here (instead of letting r4Process split them) is what keeps the
+       * batch from paying a second rect sweep over the same leaves, and it is the same set the
+       * record walk produced before W-R4J.
+       */
+      for (const leaf of far) r4Enqueue(leaf);
+      if (dirty.size) r4Process(dirty, started);
+      r4Observer.takeRecords();
+      /*
+       * ... and the records this batch carried outside those scopes - a mirrored leaf edited in
+       * place in ANOTHER root - are walked after the paint, in slices, by r4DrainBulkStale.
+       */
+      r4QueueBulkStale(records, covered);
+      return;
+    }
+    const dirty = r4WalkRecords(records);
     if (dirty.size) r4Process(dirty, started);
     r4Observer.takeRecords(); // our own writes; native nodes cannot change during this callback
   }
@@ -10892,6 +11185,32 @@ code.aistudio-prose-code-repaired {
       // Prompt activity must gate the whole batch, not just the later scan.
       // Native editor updates can enqueue thousands of mutation records.
       if (typing() || document.hidden) { finishDrain(); return; }
+      /*
+       * NO-ROOT FAST PATH (W-R4M). With no current root every per-record branch of the loop below
+       * collapses:
+       *   - `currentRoot?.contains(...)` is false for every element, so `queue(block)` can never
+       *     run, and `responseChanged` can never be set (so `extendDrain()` can never be called);
+       *   - `dirty` and `projectors` are already empty, because `clear()` empties them in the same
+       *     breath as `currentRoot = null`, and nothing repopulates either without a root;
+       *   - the only surviving outputs are `relevant` and `discover` (true unless every record was
+       *     inside the layer, one of our own nodes, or inside a button), and `scheduleSync(discover)`
+       *     collapses them into `syncDiscover = syncDiscover || discover`.
+       * `synchronize` then overrides that flag anyway: with `currentRoot === null` any non-null
+       * root it resolves IS a new root, and that branch sets `discover = true` itself. So the loop
+       * buys nothing here but the per-record work that costs 150-162 ms of a bulk re-create task
+       * even when the layer has nothing to show.
+       *
+       * A batch that arrives while the phase cannot run (`!wasActive && !draining && !active()`)
+       * would have ended in `scheduleSync` -> `synchronize` -> `finishDrain` -> `clear()`, and
+       * `clear()` on this state is a no-op (no projectors, empty dirty, host already out). Return
+       * without touching anything. Any other batch may put a root in place, so ask for exactly one
+       * sync WITH discovery - the call the loop would have made, collapsed to its superset.
+       */
+      if (currentRoot === null) {
+        if (!wasActive && !draining && !active()) return;
+        scheduleSync(true);
+        return;
+      }
       let discover = false;
       let relevant = false;
       let responseChanged = false;
